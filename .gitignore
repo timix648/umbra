@@ -3,3 +3,4 @@
 *.local.txt
 backend/.env
 backend/node_modules/
+backend/public/*.bak
