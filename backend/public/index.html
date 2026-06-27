@@ -40,7 +40,7 @@
 
   /* ============ TOP BAR ============ */
   .top{display:flex;align-items:center;gap:18px;height:48px;padding:0 16px;border-bottom:1px solid var(--line);background:var(--bg);position:sticky;top:0;z-index:40}
-  .brand{display:flex;align-items:center;gap:9px}
+  .brand{display:flex;align-items:center;gap:9px;text-decoration:none;color:inherit}
   .brand .mark{width:22px;height:22px;display:block}
   .brand b{font:650 15px/1 inherit;letter-spacing:.34em;text-indent:.34em}
   .brand .sub{font:600 9px/1 ui-monospace,monospace;letter-spacing:.18em;color:var(--dim);text-transform:uppercase;border-left:1px solid var(--line2);padding-left:9px}
@@ -823,8 +823,10 @@ function App() {
   const maxP = prices.length ? Math.max(...prices) : 1;
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "top"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "brand"
+  }, /*#__PURE__*/React.createElement("a", {
+    className: "brand",
+    href: "/",
+    style: { cursor: "pointer" }
   }, /*#__PURE__*/React.createElement(Umbrella, null), /*#__PURE__*/React.createElement("b", null, "UMBRA"), /*#__PURE__*/React.createElement("span", {
     className: "sub"
   }, "dark otc venue")), /*#__PURE__*/React.createElement("div", {

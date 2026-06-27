@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>UMBRA — Dark OTC Venue on Canton</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0B0E13; --bg2:#141923; --bg3:#1A2030; --hover:#1F2738;
+    --line:#222B3B; --line2:#2E3950;
+    --text:#E8EBF0; --mute:#7C8AA0; --dim:#4E5A6E;
+    --accent:#9D74FF; --accent2:#C2A6FF; --accentbg:rgba(157,116,255,.12); --accentline:rgba(157,116,255,.45);
+    --amber:#E0A33B; --amberbg:rgba(224,163,59,.12); --amberline:rgba(224,163,59,.45);
+    --green:#4FD18B; --red:#F0616D;
+    --redact:rgba(157,116,255,.22);
+    --rad:2px;
+    --disp:"Space Grotesk",ui-sans-serif,system-ui,sans-serif;
+    --mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  html,body{margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font:15px/1.6 var(--disp);-webkit-font-smoothing:antialiased;overflow-x:hidden}
+  .m{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .eb{font:600 10px/1 var(--mono);letter-spacing:.22em;text-transform:uppercase;color:var(--dim)}
+  a{color:inherit;text-decoration:none}
+  ::selection{background:var(--accentbg)}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+  .mark{width:24px;height:24px;display:block;flex:none}
+
+  .nav{position:fixed;top:0;left:0;right:0;z-index:50;display:flex;align-items:center;gap:18px;height:58px;
+    padding:0 28px;border-bottom:1px solid transparent;background:linear-gradient(180deg,rgba(11,14,19,.92),rgba(11,14,19,0));
+    backdrop-filter:blur(10px);transition:border-color .3s,background .3s}
+  .nav.stuck{border-bottom-color:var(--line);background:rgba(11,14,19,.94)}
+  .nav .brand{display:flex;align-items:center;gap:11px}
+  .nav .brand b{font:600 16px/1 var(--mono);letter-spacing:.34em;text-indent:.34em}
+  .nav .brand .sub{font:600 9px/1 var(--mono);letter-spacing:.18em;color:var(--dim);text-transform:uppercase;border-left:1px solid var(--line2);padding-left:11px;margin-left:2px}
+  .nav .grow{flex:1}
+  .nav .lk{font:600 11px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--mute);padding:8px 4px;transition:color .2s}
+  .nav .lk:hover{color:var(--text)}
+  .enter{display:inline-flex;align-items:center;gap:8px;font:600 11px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;
+    color:var(--accent);border:1px solid var(--accentline);background:var(--accentbg);padding:9px 16px;border-radius:var(--rad);transition:.15s;cursor:pointer}
+  .enter:hover{background:var(--accent);color:#0c0618}
+  .enter svg{width:13px;height:13px}
+
+  .hero{position:relative;min-height:100vh;display:grid;grid-template-columns:1.05fr .95fr;gap:40px;align-items:center;padding:96px 28px 60px;max-width:1280px;margin:0 auto}
+  .hero .left{max-width:560px}
+  .hero .kicker{font:600 11px/1 var(--mono);letter-spacing:.2em;text-transform:uppercase;color:var(--accent);margin-bottom:22px;display:flex;align-items:center;gap:11px}
+  .hero .kicker .ln{height:1px;width:30px;background:var(--accentline)}
+  .hero h1{margin:0 0 22px;font:600 clamp(36px,5.2vw,64px)/1.03 var(--disp);letter-spacing:-.025em}
+  .hero h1 b{color:var(--accent);font-weight:600}
+  .hero p.lede{margin:0 0 32px;font-size:17px;line-height:1.65;color:var(--mute);max-width:500px;font-weight:400}
+  .hero p.lede b{color:var(--text);font-weight:500}
+  .hero .cta{display:flex;gap:13px;flex-wrap:wrap;align-items:center}
+  .btn-primary{display:inline-flex;align-items:center;gap:9px;font:600 12px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;
+    color:#0c0618;background:var(--accent);border:1px solid var(--accent);padding:14px 22px;border-radius:var(--rad);transition:.15s;cursor:pointer}
+  .btn-primary:hover{background:var(--accent2);border-color:var(--accent2);transform:translateY(-1px)}
+  .btn-primary svg{width:14px;height:14px}
+  .btn-ghost{display:inline-flex;align-items:center;gap:8px;font:600 12px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;
+    color:var(--mute);border:1px solid var(--line2);padding:14px 20px;border-radius:var(--rad);transition:.15s;cursor:pointer}
+  .btn-ghost:hover{color:var(--text);border-color:var(--accentline)}
+  .hero .proof{margin-top:36px;display:flex;gap:28px;flex-wrap:wrap}
+  .hero .proof div{display:flex;flex-direction:column;gap:6px}
+  .hero .proof .k{font:600 18px/1 var(--mono);color:var(--text)}
+  .hero .proof .k.ac{color:var(--accent)}
+  .hero .proof .l{font:600 9px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+
+  .book{border:1px solid var(--line);border-radius:6px;background:var(--bg2);overflow:hidden;
+    box-shadow:0 40px 90px -50px rgba(0,0,0,.85);transform:perspective(1400px) rotateY(-6deg) rotateX(2deg);
+    transition:transform .5s cubic-bezier(.2,.7,.2,1)}
+  .book:hover{transform:perspective(1400px) rotateY(-2deg) rotateX(1deg)}
+  .book .bh{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--bg3)}
+  .book .bh .t{font:600 10px/1 var(--mono);letter-spacing:.13em;text-transform:uppercase;color:var(--mute)}
+  .book .bh .who{font:600 9px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;padding:4px 9px;border-radius:var(--rad)}
+  .who.you{color:var(--accent);background:var(--accentbg);border:1px solid var(--accentline)}
+  .book table{width:100%;border-collapse:collapse}
+  .book th{font:600 8.5px/1 var(--mono);letter-spacing:.13em;text-transform:uppercase;color:var(--dim);text-align:right;padding:10px 16px;border-bottom:1px solid var(--line)}
+  .book th:first-child{text-align:left}
+  .book td{padding:0 16px;height:40px;border-bottom:1px solid var(--line);font:500 13px/1 var(--mono);text-align:right}
+  .book td:first-child{text-align:left;color:var(--mute)}
+  .book tr:last-child td{border-bottom:0}
+  .book .px{color:var(--accent);font-weight:600}
+  .book .you-row td{background:var(--accentbg)}
+  .book .dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:8px;vertical-align:middle}
+  .book .dot.g{background:var(--green)} .book .dot.a{background:var(--amber)}
+  .rd{display:inline-flex;gap:3px;justify-content:flex-end}
+  .rd i{display:block;height:11px;width:var(--w,30px);border-radius:1px;background:repeating-linear-gradient(90deg,var(--redact) 0 5px,transparent 5px 7px);animation:flick 3.4s steps(1) infinite}
+  .rd i:nth-child(2){animation-delay:.7s}
+  @keyframes flick{0%,92%{opacity:1}93%,96%{opacity:.45}97%,100%{opacity:1}}
+  .book .bf{padding:12px 16px;border-top:1px solid var(--line);background:var(--bg3);font:500 11px/1.5 var(--mono);color:var(--mute)}
+  .book .bf b{color:var(--accent);font-weight:600}
+
+  .hero-canvas{position:absolute;inset:0;z-index:-1;width:100%;height:100%;pointer-events:none;
+    mask:radial-gradient(ellipse 95% 90% at 60% 40%,#000 40%,transparent 88%)}
+
+  section{max-width:1180px;margin:0 auto;padding:84px 28px}
+  .sec-eyebrow{display:flex;align-items:center;gap:12px;margin-bottom:18px}
+  .sec-eyebrow .ln{height:1px;width:34px;background:var(--accentline)}
+  .sec-eyebrow span{font:600 10px/1 var(--mono);letter-spacing:.2em;text-transform:uppercase;color:var(--accent)}
+  .sec-h{font:600 clamp(27px,3.5vw,40px)/1.1 var(--disp);letter-spacing:-.02em;margin:0 0 18px;max-width:780px}
+  .sec-sub{font-size:16px;line-height:1.65;color:var(--mute);max-width:660px;margin:0;font-weight:400}
+  .sec-sub b{color:var(--text);font-weight:500}
+
+  .vs{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:44px}
+  @media(max-width:780px){.vs{grid-template-columns:1fr}}
+  .card{border:1px solid var(--line);border-radius:6px;background:var(--bg2);padding:24px;position:relative;overflow:hidden;
+    transition:transform .35s cubic-bezier(.2,.7,.2,1),border-color .35s,box-shadow .35s}
+  .card:hover{transform:translateY(-4px);box-shadow:0 24px 50px -30px rgba(0,0,0,.7)}
+  .card .ct{display:flex;align-items:center;gap:9px;font:600 10px/1 var(--mono);letter-spacing:.13em;text-transform:uppercase;margin-bottom:14px}
+  .card.old .ct{color:var(--mute)} .card.new .ct{color:var(--accent)}
+  .card .ct i{width:7px;height:7px;border-radius:50%}
+  .card.old .ct i{background:var(--mute)} .card.new .ct i{background:var(--accent)}
+  .card h4{margin:0 0 10px;font:600 19px/1.3 var(--disp)}
+  .card p{margin:0;font-size:14px;line-height:1.62;color:var(--mute);font-weight:400}
+  .card.new{border-color:var(--accentline)}
+  .card.new:hover{box-shadow:0 24px 50px -28px rgba(157,116,255,.35)}
+  .card .seal{position:absolute;top:18px;right:20px;font:600 8.5px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+
+  .props{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:44px}
+  @media(max-width:780px){.props{grid-template-columns:1fr}}
+  .prop{border:1px solid var(--line);border-radius:6px;background:var(--bg2);padding:26px;transition:transform .35s cubic-bezier(.2,.7,.2,1),box-shadow .35s}
+  .prop:hover{transform:translateY(-4px);box-shadow:0 24px 50px -30px rgba(0,0,0,.7)}
+  .prop .pid{font:600 11px/1 var(--mono);letter-spacing:.14em;color:var(--accent);border:1px solid var(--accentline);background:var(--accentbg);border-radius:var(--rad);padding:5px 9px;display:inline-block;margin-bottom:15px}
+  .prop h4{margin:0 0 9px;font:600 20px/1.25 var(--disp)}
+  .prop p{margin:0 0 17px;font-size:14px;line-height:1.62;color:var(--mute);font-weight:400}
+  .prop .ev{display:flex;align-items:center;gap:8px;font:500 11px/1.4 var(--mono);color:var(--green)}
+  .prop .ev svg{width:13px;height:13px;flex:none}
+
+  .trust{border:1px solid var(--line);border-radius:6px;background:var(--bg2);margin-top:44px;overflow:hidden}
+  .trust .th{display:flex;align-items:center;justify-content:space-between;padding:15px 22px;border-bottom:1px solid var(--line);background:var(--bg3)}
+  .trust .th .t{font:600 11px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--mute)}
+  .trust .modes{display:grid;grid-template-columns:1fr 1fr}
+  @media(max-width:680px){.trust .modes{grid-template-columns:1fr}}
+  .trust .mode{padding:24px 22px;border-right:1px solid var(--line);transition:background .3s}
+  .trust .mode:last-child{border-right:0}
+  .trust .mode:hover{background:var(--bg3)}
+  .trust .mode .badge{font:600 9px/1 var(--mono);letter-spacing:.13em;text-transform:uppercase;padding:4px 9px;border-radius:var(--rad);display:inline-block;margin-bottom:13px}
+  .badge.op{color:var(--amber);background:var(--amberbg);border:1px solid var(--amberline)}
+  .badge.sg{color:var(--accent);background:var(--accentbg);border:1px solid var(--accentline)}
+  .trust .mode h5{margin:0 0 8px;font:600 16px/1.3 var(--disp)}
+  .trust .mode p{margin:0;font-size:13.5px;line-height:1.6;color:var(--mute);font-weight:400}
+  .trust .mode p b{color:var(--text);font-weight:500}
+
+  .stack{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:44px}
+  @media(max-width:900px){.stack{grid-template-columns:1fr 1fr}}
+  @media(max-width:480px){.stack{grid-template-columns:1fr}}
+  .layer{border:1px solid var(--line);border-radius:6px;background:var(--bg2);padding:20px;transition:transform .35s cubic-bezier(.2,.7,.2,1),border-color .35s}
+  .layer:hover{transform:translateY(-3px);border-color:var(--accentline)}
+  .layer .n{font:600 9px/1 var(--mono);letter-spacing:.14em;color:var(--dim);margin-bottom:13px}
+  .layer h5{margin:0 0 7px;font:600 15px/1.3 var(--disp)}
+  .layer p{margin:0;font-size:12.5px;line-height:1.55;color:var(--mute);font-weight:400}
+
+  .close{text-align:center;padding:100px 28px 84px;border-top:1px solid var(--line);margin-top:44px;position:relative}
+  .close h2{font:600 clamp(30px,4.2vw,46px)/1.08 var(--disp);letter-spacing:-.025em;margin:0 0 18px}
+  .close p{font-size:16px;color:var(--mute);max-width:520px;margin:0 auto 30px;font-weight:400}
+  .close .cta{display:flex;gap:13px;justify-content:center;flex-wrap:wrap}
+
+  footer{border-top:1px solid var(--line);padding:28px;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;max-width:1180px;margin:0 auto}
+  footer .l{font:500 11px/1.5 var(--mono);color:var(--dim)}
+  footer .r{display:flex;gap:18px}
+  footer .r a{font:600 10px/1 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--mute);cursor:pointer}
+  footer .r a:hover{color:var(--accent)}
+
+  .reveal{opacity:0;transform:translateY(20px);transition:opacity .75s ease,transform .75s ease}
+  .reveal.in{opacity:1;transform:none}
+
+  .curtain{position:fixed;inset:0;z-index:200;display:grid;place-items:center;pointer-events:none;opacity:0;visibility:hidden}
+  .curtain.go{pointer-events:all;visibility:visible;opacity:1}
+  .curtain .panel{position:absolute;left:0;right:0;background:#07090D;transform:scaleY(0);transition:transform .55s cubic-bezier(.7,0,.3,1)}
+  .curtain .panel.top{top:0;height:50%;transform-origin:top}
+  .curtain .panel.bot{bottom:0;height:50%;transform-origin:bottom}
+  .curtain.go .panel{transform:scaleY(1)}
+  .curtain .core{position:relative;z-index:2;display:flex;flex-direction:column;align-items:center;gap:18px;opacity:0;transform:translateY(8px) scale(.96);transition:opacity .4s ease .35s,transform .5s ease .35s}
+  .curtain.go .core{opacity:1;transform:none}
+  .curtain .core .mk{width:60px;height:60px;filter:drop-shadow(0 0 22px rgba(157,116,255,.5))}
+  .curtain .core .wm{font:600 15px/1 var(--mono);letter-spacing:.5em;text-indent:.5em;color:var(--accent2)}
+  .curtain .core .st{font:600 9px/1 var(--mono);letter-spacing:.3em;text-transform:uppercase;color:var(--dim);overflow:hidden;white-space:nowrap;width:0}
+  .curtain.go .core .st{animation:type 1s steps(22) .55s forwards}
+  @keyframes type{to{width:15em}}
+  .curtain .core .bar{width:160px;height:2px;background:var(--bg3);border-radius:2px;overflow:hidden;margin-top:4px}
+  .curtain .core .bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2))}
+  .curtain.go .core .bar i{animation:load 1.1s ease .5s forwards}
+  @keyframes load{to{width:100%}}
+
+  @media(prefers-reduced-motion:reduce){
+    .reveal{opacity:1;transform:none;transition:none}
+    .book{transform:none}.rd i{animation:none}
+    .curtain .panel{transition:none}.curtain .core,.curtain .core *{animation:none;opacity:1;width:auto}
+  }
+  @media(max-width:920px){.hero{grid-template-columns:1fr;gap:48px}.hero .right{order:2}.book{transform:none}}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <g id="umb">
+    <path d="M12 3 C6.2 3 2 7.4 2 12.4 L12 12.4 Z" fill="var(--accent)"/>
+    <path d="M12 3 C17.8 3 22 7.4 22 12.4 L12 12.4 Z" fill="var(--accent2)"/>
+    <path d="M7 12.4 C7 9 9 4 12 3 C15 4 17 9 17 12.4" stroke="var(--bg)" stroke-width="1" opacity=".5"/>
+    <path d="M12 12.4 L12 19 C12 20.4 11 21.2 9.6 21" stroke="var(--accent)" stroke-width="1.6" stroke-linecap="round"/>
+    <circle cx="12" cy="2.4" r="1" fill="var(--accent2)"/>
+  </g>
+</defs></svg>
+
+<nav class="nav" id="nav">
+  <a class="brand" href="#top">
+    <svg class="mark" viewBox="0 0 24 24" fill="none"><use href="#umb"/></svg>
+    <b>UMBRA</b><span class="sub">Dark OTC Venue</span>
+  </a>
+  <div class="grow"></div>
+  <a class="lk" href="#why">Why</a>
+  <a class="lk" href="#properties">Guarantees</a>
+  <a class="lk" href="#trust">Trust model</a>
+  <a class="enter" data-enter>Enter terminal
+    <svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14m-6-6 6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </a>
+</nav>
+
+<div id="top"></div>
+<header class="hero">
+  <canvas class="hero-canvas" id="heroCanvas" aria-hidden="true"></canvas>
+  <div class="left">
+    <div class="kicker"><span class="ln"></span> A dark venue on Canton</div>
+    <h1>Block trades where <b>no one sees</b> the other side.</h1>
+    <p class="lede">Umbra is a request-for-quote venue for institutional block trades. Competing dealers price the same trade and stay <b>mutually blind</b>, and every settlement is <b>atomic</b> — asset and cash move together or not at all. Guaranteed by the ledger, not by trust.</p>
+    <div class="cta">
+      <a class="btn-primary" data-enter>Open the live venue
+        <svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14m-6-6 6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </a>
+      <a class="btn-ghost" href="#why">See how it works</a>
+    </div>
+    <div class="proof">
+      <div><span class="k ac m">1 / 1 / 2</span><span class="l">Quote visibility, by party</span></div>
+      <div><span class="k m">Atomic</span><span class="l">Delivery-vs-payment</span></div>
+      <div><span class="k m">Zero-key</span><span class="l">Operator can't forge</span></div>
+    </div>
+  </div>
+
+  <div class="right">
+    <div class="book">
+      <div class="bh"><span class="t">Quote book · RFQ-LIVE-1</span><span class="who you">Your view · Dealer 1</span></div>
+      <table>
+        <thead><tr><th>Dealer</th><th>Instrument</th><th>Qty</th><th>Price</th></tr></thead>
+        <tbody>
+          <tr class="you-row"><td><span class="dot g"></span>You · D1</td><td>UST-2030</td><td>100</td><td class="px">98.50</td></tr>
+          <tr><td><span class="dot a"></span>Dealer 2</td><td>UST-2030</td><td>100</td><td><span class="rd"><i style="--w:34px"></i></span></td></tr>
+          <tr><td><span class="dot a"></span>Dealer 3</td><td>UST-2030</td><td>100</td><td><span class="rd"><i style="--w:26px"></i></span></td></tr>
+        </tbody>
+      </table>
+      <div class="bf">You see <b>your own quote</b>. Rival prices aren't hidden by this screen — they were <b>never disclosed to you</b> at the protocol level.</div>
+    </div>
+  </div>
+</header>
+
+<section id="why" class="reveal">
+  <div class="sec-eyebrow"><span class="ln"></span><span>The problem</span></div>
+  <h2 class="sec-h">On a transparent chain, a private trade is a contradiction.</h2>
+  <p class="sec-sub">Multi-dealer RFQ already works — but it runs on infrastructure where someone always sees everything. On a public chain, every quote sits in a shared mempool for rivals to read and front-run. On a centralized venue, the operator is a trusted party who <b>could</b> peek, leak, or be compelled to. The privacy is a promise. Umbra makes it a property of the ledger.</p>
+  <div class="vs">
+    <div class="card old">
+      <span class="seal">Today</span>
+      <div class="ct"><i></i> Transparent / centralized RFQ</div>
+      <h4>Privacy is a promise</h4>
+      <p>Every dealer's quote is visible to the venue operator, and on a public chain, to anyone watching the mempool. You trust the operator not to leak or front-run. At settlement there's a window where one leg has moved and the other hasn't.</p>
+    </div>
+    <div class="card new">
+      <span class="seal">Umbra</span>
+      <div class="ct"><i></i> Dark venue on Canton</div>
+      <h4>Privacy is a property</h4>
+      <p>Canton has no public mempool and enforces visibility per contract: a dealer is a stakeholder only on its own quote, so rival quotes are never disclosed to it. Settlement is one indivisible transaction — both legs move, or neither does. No trusted operator in the loop.</p>
+    </div>
+  </div>
+</section>
+
+<section id="properties" class="reveal">
+  <div class="sec-eyebrow"><span class="ln"></span><span>What we prove, live</span></div>
+  <h2 class="sec-h">Two guarantees, demonstrable with raw API calls.</h2>
+  <p class="sec-sub">Not claims on a slide. Each is reproducible against the live ledger on Canton DevNet — the kind of thing you can run in front of a skeptic.</p>
+  <div class="props">
+    <div class="prop">
+      <span class="pid">P1 · No information leakage</span>
+      <h4>Dealers are mutually blind</h4>
+      <p>Invite two dealers to the same RFQ; both quote. Query the ledger as each: Dealer 1 sees one quote, Dealer 2 sees one, the requester sees both. The contrast is enforced by Canton signatory rules — not by application code filtering results.</p>
+      <div class="ev"><svg viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg> Proven live · 1 / 1 / 2 visibility</div>
+    </div>
+    <div class="prop">
+      <span class="pid">P2 · Atomic settlement</span>
+      <h4>Delivery-versus-payment, or nothing</h4>
+      <p>Accepting a quote locks the requester's cash; settlement swaps instrument for cash in a single transaction. There is no moment where one side holds both. Underfund it and the whole trade is rejected — no partial state left behind.</p>
+      <div class="ev"><svg viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg> Proven live · atomic swap + clean abort</div>
+    </div>
+  </div>
+</section>
+
+<section id="trust" class="reveal">
+  <div class="sec-eyebrow"><span class="ln"></span><span>The trust model</span></div>
+  <h2 class="sec-h">Two modes off one engine. Trust the operator — or trust no one.</h2>
+  <p class="sec-sub">The same trade lifecycle runs two ways. The toggle isn't a setting; it's the whole argument about what a private venue should require of its participants.</p>
+  <div class="trust">
+    <div class="th"><span class="t">Authority model</span><span class="eb">Live toggle in the terminal</span></div>
+    <div class="modes">
+      <div class="mode">
+        <span class="badge op">Operator mode</span>
+        <h5>The venue acts for you</h5>
+        <p>Fast path: the operator holds the rights to submit on each party's behalf. Convenient for onboarding and demos — but the operator is technically able to act as any participant.</p>
+      </div>
+      <div class="mode">
+        <span class="badge sg">Signed mode · trust no operator</span>
+        <h5>You sign with your own key</h5>
+        <p>Each party is an external Canton party holding its own signing key. Every quote, acceptance, and settlement is signed client-side. The operator relays transactions but <b>cannot forge, impersonate, or act</b> for any participant — it never holds the keys.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="reveal">
+  <div class="sec-eyebrow"><span class="ln"></span><span>Under the hood</span></div>
+  <h2 class="sec-h">Built on Canton's native primitives.</h2>
+  <p class="sec-sub">No bolted-on privacy layer, no mixers, no zero-knowledge overhead. The guarantees fall out of how Canton works.</p>
+  <div class="stack">
+    <div class="layer"><div class="n">Ledger</div><h5>Per-contract visibility</h5><p>Signatory and observer rules decide who sees a contract. A dealer is a stakeholder only on its own quote — rivals are structurally excluded.</p></div>
+    <div class="layer"><div class="n">Settlement</div><h5>Atomic DvP</h5><p>One Daml transaction archives the cash and creates the instrument holding together. Indivisible by construction.</p></div>
+    <div class="layer"><div class="n">Identity</div><h5>External-party keys</h5><p>Participants onboard as external parties whose identity is their own keypair, signing via Canton's interactive submission.</p></div>
+    <div class="layer"><div class="n">Assets</div><h5>Token-standard ready</h5><p>Holdings model any asset pair today; the roadmap settles real ecosystem assets via the CIP-56 token standard and Canton Coin.</p></div>
+  </div>
+</section>
+
+<div class="close reveal">
+  <h2>See the blindness for yourself.</h2>
+  <p>Open the live terminal, run a two-dealer RFQ, and watch each dealer's view withhold what the protocol never disclosed.</p>
+  <div class="cta">
+    <a class="btn-primary" data-enter>Enter the terminal
+      <svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14m-6-6 6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </a>
+    <a class="btn-ghost" href="https://github.com/timix648/umbra" target="_blank" rel="noopener">View source</a>
+  </div>
+</div>
+
+<footer>
+  <span class="l">UMBRA · Dark OTC RFQ venue · Build on Canton</span>
+  <span class="r">
+    <a data-enter>Terminal</a>
+    <a href="https://github.com/timix648/umbra" target="_blank" rel="noopener">GitHub</a>
+    <a href="#top">Top</a>
+  </span>
+</footer>
+
+<div class="curtain" id="curtain" aria-hidden="true">
+  <div class="panel top"></div>
+  <div class="panel bot"></div>
+  <div class="core">
+    <svg class="mk" viewBox="0 0 24 24" fill="none"><use href="#umb"/></svg>
+    <div class="wm">UMBRA</div>
+    <div class="st">Entering dark venue</div>
+    <div class="bar"><i></i></div>
+  </div>
+</div>
+
+<script>
+  // ===== bespoke hero background: canopy arcs + drifting redaction glyphs =====
+  (function(){
+    var cv = document.getElementById('heroCanvas');
+    if(!cv) return;
+    var ctx = cv.getContext('2d');
+    var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var W,H,DPR, cx,cy, bars=[];
+    function size(){
+      DPR = Math.min(window.devicePixelRatio||1, 2);
+      W = cv.clientWidth; H = cv.clientHeight;
+      cv.width = W*DPR; cv.height = H*DPR;
+      ctx.setTransform(DPR,0,0,DPR,0,0);
+      cx = W*0.80; cy = H*0.16;           // canopy origin: upper-right
+    }
+    // sparse redaction bars drifting slowly leftward
+    function seed(){
+      bars = [];
+      var n = Math.max(7, Math.floor(W/180));
+      for(var i=0;i<n;i++){
+        bars.push({
+          x: Math.random()*W, y: 60+Math.random()*(H-120),
+          w: 26+Math.random()*46, seg: 4+Math.floor(Math.random()*4),
+          v: 0.05+Math.random()*0.12, a: 0.05+Math.random()*0.10,
+          ph: Math.random()*Math.PI*2
+        });
+      }
+    }
+    function drawArcs(){
+      // faint concentric umbrella-canopy arcs from the origin
+      var rings = 9;
+      for(var i=1;i<=rings;i++){
+        var r = i*64;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, Math.PI*0.55, Math.PI*1.15);  // partial sweep = canopy
+        ctx.strokeStyle = 'rgba(157,116,255,'+(0.05 - i*0.0035)+')';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    }
+    function drawBars(t){
+      for(var i=0;i<bars.length;i++){
+        var b = bars[i];
+        if(!reduce){ b.x -= b.v; if(b.x < -b.w-20) b.x = W+20; }
+        var flick = (Math.sin(t*0.0011 + b.ph) > 0.985) ? 0.35 : 1; // rare flicker
+        var segW = b.w / b.seg;
+        for(var k=0;k<b.seg;k++){
+          if(k%2) continue; // dashed
+          ctx.fillStyle = 'rgba(157,116,255,'+(b.a*flick)+')';
+          ctx.fillRect(b.x + k*segW, b.y, segW-2, 8);
+        }
+      }
+    }
+    var raf;
+    function frame(t){
+      ctx.clearRect(0,0,W,H);
+      drawArcs();
+      drawBars(t||0);
+      if(!reduce) raf = requestAnimationFrame(frame);
+    }
+    function start(){ size(); seed(); if(raf) cancelAnimationFrame(raf); frame(0); }
+    window.addEventListener('resize', function(){ start(); }, {passive:true});
+    start();
+  })();
+
+  var nav = document.getElementById('nav');
+  function onScroll(){ nav.classList.toggle('stuck', window.scrollY > 20); }
+  onScroll(); window.addEventListener('scroll', onScroll, {passive:true});
+
+  var io = new IntersectionObserver(function(es){
+    es.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); } });
+  }, {threshold:.12});
+  document.querySelectorAll('.reveal').forEach(function(el){ io.observe(el); });
+
+  var curtain = document.getElementById('curtain');
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function enter(e){
+    if(e) e.preventDefault();
+    if(reduce){ window.location.href = '/app'; return; }
+    curtain.classList.add('go');
+    setTimeout(function(){ window.location.href = '/app'; }, 1500);
+  }
+  document.querySelectorAll('[data-enter]').forEach(function(el){ el.addEventListener('click', enter); });
+</script>
+</body>
+</html>

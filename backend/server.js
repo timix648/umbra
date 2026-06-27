@@ -14,7 +14,10 @@ app.use((req, res, next) => {
   if (req.method === "OPTIONS") return res.sendStatus(200);
   next();
 });
-app.use(express.static(path.join(__dirname, "public")));
+// serve landing at "/" and the terminal at "/app"
+app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "landing.html")));
+app.get("/app", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
+app.use(express.static(path.join(__dirname, "public"), { index: false }));
 
 const PKG = process.env.PACKAGE_ID;
 const PKGN = process.env.PACKAGE_NAME;
