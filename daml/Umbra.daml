@@ -1,0 +1,198 @@
+module Umbra where
+
+import DA.Action (when)
+
+data Side = Buy | Sell
+  deriving (Eq, Show)
+
+template CashHolding
+  with
+    owner    : Party
+    issuer   : Party
+    currency : Text
+    amount   : Decimal
+  where
+    signatory owner
+    observer issuer
+    ensure amount > 0.0
+
+template InstrumentHolding
+  with
+    owner      : Party
+    registry   : Party
+    instrument : Text
+    quantity   : Decimal
+  where
+    signatory owner
+    observer registry
+    ensure quantity > 0.0
+
+template Rfq
+  with
+    requester  : Party
+    rfqId      : Text
+    instrument : Text
+    quantity   : Decimal
+    side       : Side
+    currency   : Text
+    expiresAt  : Time
+  where
+    signatory requester
+
+    nonconsuming choice Invite : ContractId RfqInvitation
+      with
+        dealer : Party
+      controller requester
+      do
+        create RfqInvitation with
+          requester
+          dealer
+          rfqId
+          instrument
+          quantity
+          side
+          currency
+          expiresAt
+
+    choice CancelRfq : ()
+      controller requester
+      do pure ()
+
+template RfqInvitation
+  with
+    requester  : Party
+    dealer     : Party
+    rfqId      : Text
+    instrument : Text
+    quantity   : Decimal
+    side       : Side
+    currency   : Text
+    expiresAt  : Time
+  where
+    signatory requester
+    observer dealer
+
+    choice SubmitQuote : ContractId Quote
+      with
+        price : Decimal
+      controller dealer
+      do
+        assertMsg "price must be positive" (price > 0.0)
+        now <- getTime
+        assertMsg "RFQ has expired" (now <= expiresAt)
+        create Quote with
+          requester
+          dealer
+          rfqId
+          instrument
+          quantity
+          side
+          currency
+          price
+
+    choice DeclineInvitation : ()
+      controller dealer
+      do pure ()
+
+template Quote
+  with
+    requester  : Party
+    dealer     : Party
+    rfqId      : Text
+    instrument : Text
+    quantity   : Decimal
+    side       : Side
+    currency   : Text
+    price      : Decimal
+  where
+    signatory requester, dealer
+
+    -- Step 1: requester awards the trade. They consume their OWN cash here
+    -- (they can see and archive it), locking the funds, and record what the
+    -- dealer is owed + any change due back. No cross-visibility fetch needed.
+    choice AcceptQuote : ContractId SettlementInstruction
+      with
+        requesterCashCid : ContractId CashHolding
+      controller requester
+      do
+        assertMsg "MVP handles the Buy side only" (side == Buy)
+        let totalCost = price * quantity
+        cash <- fetch requesterCashCid
+        assertMsg "requester is not the owner of that cash" (cash.owner == requester)
+        assertMsg "currency mismatch" (cash.currency == currency)
+        assertMsg "insufficient cash" (cash.amount >= totalCost)
+        -- Lock the funds: archive the requester's cash now.
+        archive requesterCashCid
+        create SettlementInstruction with
+          requester
+          dealer
+          instrument
+          quantity
+          currency
+          totalCost
+          cashIssuer = cash.issuer
+          changeDue  = cash.amount - totalCost
+
+    choice Reject : ()
+      controller requester
+      do pure ()
+
+-- Carries both authorities and is visible to both parties. The funds are
+-- already locked (cash archived in AcceptQuote); the dealer now delivers the
+-- instrument and the payout happens atomically.
+template SettlementInstruction
+  with
+    requester  : Party
+    dealer     : Party
+    instrument : Text
+    quantity   : Decimal
+    currency   : Text
+    totalCost  : Decimal
+    cashIssuer : Party
+    changeDue  : Decimal
+  where
+    signatory requester, dealer
+
+    -- Step 2: dealer delivers their (visible) instrument. ATOMIC DvP:
+    -- instrument to requester + cash to dealer + change to requester, one tx.
+    choice Settle : (ContractId InstrumentHolding, ContractId CashHolding)
+      with
+        dealerInstrumentCid : ContractId InstrumentHolding
+      controller dealer
+      do
+        inst <- fetch dealerInstrumentCid
+        assertMsg "dealer is not the owner of that instrument" (inst.owner == dealer)
+        assertMsg "instrument mismatch" (inst.instrument == instrument)
+        assertMsg "insufficient instrument qty" (inst.quantity >= quantity)
+
+        archive dealerInstrumentCid
+
+        buyerInstrument <- create InstrumentHolding with
+          owner      = requester
+          registry   = inst.registry
+          instrument = inst.instrument
+          quantity   = quantity
+
+        when (inst.quantity > quantity) do
+          _ <- create InstrumentHolding with
+            owner      = dealer
+            registry   = inst.registry
+            instrument = inst.instrument
+            quantity   = inst.quantity - quantity
+          pure ()
+
+        sellerCash <- create CashHolding with
+          owner    = dealer
+          issuer   = cashIssuer
+          currency = currency
+          amount   = totalCost
+
+        when (changeDue > 0.0) do
+          _ <- create CashHolding with
+            owner    = requester
+            issuer   = cashIssuer
+            currency = currency
+            amount   = changeDue
+          pure ()
+
+        pure (buyerInstrument, sellerCash)

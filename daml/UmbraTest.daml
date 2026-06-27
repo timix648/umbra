@@ -1,0 +1,96 @@
+module UmbraTest where
+
+import Umbra
+import Daml.Script
+import DA.Time (addRelTime, hours)
+import DA.Assert ((===))
+
+umbraDemo : Script ()
+umbraDemo = do
+  requester  <- allocateParty "Requester"
+  dealerA    <- allocateParty "DealerA"
+  dealerB    <- allocateParty "DealerB"
+  registry   <- allocateParty "BondRegistry"
+  cashIssuer <- allocateParty "CashIssuer"
+
+  now <- getTime
+  let expiry = addRelTime now (hours 1)
+
+  rfq <- submit requester do
+    createCmd Rfq with
+      requester
+      rfqId      = "RFQ-1"
+      instrument = "UST-2030"
+      quantity   = 100.0
+      side       = Buy
+      currency   = "USD"
+      expiresAt  = expiry
+
+  invA <- submit requester do exerciseCmd rfq Invite with dealer = dealerA
+  invB <- submit requester do exerciseCmd rfq Invite with dealer = dealerB
+
+  quoteA <- submit dealerA do exerciseCmd invA SubmitQuote with price = 98.50
+  quoteB <- submit dealerB do exerciseCmd invB SubmitQuote with price = 98.75
+
+  -- PRIVACY: each dealer sees only its own quote; requester sees both.
+  aSees <- query @Quote dealerA
+  assertMsg "Dealer A must see exactly 1 quote (its own)" (length aSees == 1)
+  bSees <- query @Quote dealerB
+  assertMsg "Dealer B must see exactly 1 quote (its own)" (length bSees == 1)
+  reqSees <- query @Quote requester
+  assertMsg "Requester must see both quotes" (length reqSees == 2)
+
+  -- Fund the legs.
+  dealerBond <- submit dealerA do
+    createCmd InstrumentHolding with
+      owner = dealerA; registry; instrument = "UST-2030"; quantity = 100.0
+  requesterCash <- submit requester do
+    createCmd CashHolding with
+      owner = requester; issuer = cashIssuer; currency = "USD"; amount = 10000.0
+
+  -- Step 1: requester awards Dealer A's quote.
+  instr <- submit requester do
+    exerciseCmd quoteA AcceptQuote with requesterCashCid = requesterCash
+
+  -- Step 2: dealer settles atomically with their own bond.
+  (buyerBond, sellerCash) <- submit dealerA do
+    exerciseCmd instr Settle with dealerInstrumentCid = dealerBond
+
+  Some bond <- queryContractId requester buyerBond
+  bond.owner    === requester
+  bond.quantity === 100.0
+
+  Some paid <- queryContractId dealerA sellerCash
+  paid.owner  === dealerA
+  paid.amount === 9850.0
+
+  pure ()
+
+umbraInsufficientCashAborts : Script ()
+umbraInsufficientCashAborts = do
+  requester  <- allocateParty "Requester2"
+  dealerA    <- allocateParty "DealerA2"
+  registry   <- allocateParty "BondRegistry2"
+  cashIssuer <- allocateParty "CashIssuer2"
+  now <- getTime
+  let expiry = addRelTime now (hours 1)
+
+  rfq <- submit requester do
+    createCmd Rfq with
+      requester; rfqId = "RFQ-2"; instrument = "UST-2030"
+      quantity = 100.0; side = Buy; currency = "USD"; expiresAt = expiry
+  inv <- submit requester do exerciseCmd rfq Invite with dealer = dealerA
+  q   <- submit dealerA do exerciseCmd inv SubmitQuote with price = 98.50
+
+  bond <- submit dealerA do
+    createCmd InstrumentHolding with
+      owner = dealerA; registry; instrument = "UST-2030"; quantity = 100.0
+  -- Only 5,000 cash; trade costs 9,850 -> AcceptQuote must reject it.
+  cash <- submit requester do
+    createCmd CashHolding with
+      owner = requester; issuer = cashIssuer; currency = "USD"; amount = 5000.0
+
+  submitMustFail requester do
+    exerciseCmd q AcceptQuote with requesterCashCid = cash
+
+  pure ()
