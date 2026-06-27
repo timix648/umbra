@@ -1,17 +1,81 @@
 const express = require("express");
 const { ledgerFetch } = require("./token");
+const { onboardExternalParty, prepareSignExecute } = require("./external");
 require("dotenv").config();
 
 const app = express();
 app.use(express.json());
 
+const path = require("path");
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+  res.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  if (req.method === "OPTIONS") return res.sendStatus(200);
+  next();
+});
+app.use(express.static(path.join(__dirname, "public")));
+
 const PKG = process.env.PACKAGE_ID;
 const PKGN = process.env.PACKAGE_NAME;
+
+// Operator-controlled parties (demo mode). The backend holds CanActAs on these.
 const PARTIES = {
   requester: process.env.REQUESTER,
   dealer1: process.env.DEALER1,
   dealer2: process.env.DEALER2,
+  public: process.env.OBSERVER,
 };
+
+// ---------------------------------------------------------------------------
+// SIGNED MODE  -- the "trust no operator" path.
+// When on, the three trading roles are EXTERNAL parties that sign their own
+// choices via prepare->sign->execute. The operator can read (display) but
+// cannot forge. `public` (Observer) stays operator-namespaced in both modes:
+// it is a read-only outsider that is never a stakeholder, so it sees nothing.
+// ---------------------------------------------------------------------------
+let SIGNED_MODE = String(process.env.SIGNED_MODE || "false").toLowerCase() === "true";
+const SIGNING_ROLES = ["requester", "dealer1", "dealer2"];
+const roleRec = {}; // role -> { partyId, fingerprint, privDer } (in-memory cache)
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Onboard-or-load the external keypair for a signing role (cached + persisted).
+async function recFor(role) {
+  const r = String(role || "").toLowerCase();
+  if (roleRec[r]) return roleRec[r];
+  const rec = await onboardExternalParty(r);
+  roleRec[r] = rec;
+  return rec;
+}
+
+// Resolve a role name to the party id that is ACTIVE for the current mode.
+async function partyIdFor(role) {
+  const r = String(role || "").toLowerCase();
+  if (r === "public") return PARTIES.public;
+  if (SIGNED_MODE && SIGNING_ROLES.includes(r)) return (await recFor(r)).partyId;
+  const p = PARTIES[r];
+  if (!p) throw new Error(`unknown role '${role}'. use requester|dealer1|dealer2|public`);
+  return p;
+}
+
+// Reverse lookup: given a party id, which role is it (in the current mode)?
+async function roleOfParty(pid) {
+  for (const r of SIGNING_ROLES) if ((await partyIdFor(r)) === pid) return r;
+  return null;
+}
+
+// THE branch point. Same command set, two authorities:
+//  - signed mode  -> the party signs it with its own key (operator can't forge)
+//  - demo mode    -> operator submits via CanActAs (submit-and-wait)
+async function act(role, tag, commands) {
+  const r = String(role || "").toLowerCase();
+  if (SIGNED_MODE && SIGNING_ROLES.includes(r)) {
+    const rec = await recFor(r);
+    return prepareSignExecute(rec, commands, tag); // async-accepted ({} on success)
+  }
+  return submit(tag, PARTIES[r], commands); // synchronous commit
+}
 
 app.get("/health", (req, res) => res.json({ ok: true }));
 
@@ -53,7 +117,6 @@ async function queryActive(party, templateModuleEntity) {
   });
   const text = await r.text();
   if (!r.ok) throw new Error(`${r.status} ${text}`);
-  // response is a stream of JSON objects (one per line) or an array; handle both
   let items;
   try {
     items = JSON.parse(text);
@@ -61,7 +124,6 @@ async function queryActive(party, templateModuleEntity) {
     items = text.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
   }
   const arr = Array.isArray(items) ? items : [items];
-  // pull out the created-event payload + contractId where present
   return arr
     .map((x) => {
       const ce =
@@ -74,142 +136,20 @@ async function queryActive(party, templateModuleEntity) {
     .filter(Boolean);
 }
 
-// Resolve a role name (requester/dealer1/dealer2) to a party id.
-function partyOf(role) {
-  const p = PARTIES[String(role || "").toLowerCase()];
-  if (!p) throw new Error(`unknown role '${role}'. use requester|dealer1|dealer2`);
-  return p;
+// --- helper: poll until a NEW contract id (not in `beforeSet`) appears.
+// In demo mode submit-and-wait commits synchronously so this hits on try 0;
+// in signed mode execute is async-accepted, so we wait for the commit. ---
+async function pollNewCid(party, templateModuleEntity, beforeSet, tries = 12) {
+  for (let i = 0; i < tries; i++) {
+    const ids = (await queryActive(party, templateModuleEntity)).map((c) => c.contractId);
+    const fresh = ids.find((id) => !beforeSet.has(id));
+    if (fresh) return fresh;
+    await sleep(1200);
+  }
+  throw new Error(`timed out waiting for new ${templateModuleEntity} for ${party.slice(0, 24)}…`);
 }
 
-// --- create an RFQ as the requester ---
-app.post("/api/rfqs", async (req, res) => {
-  try {
-    const { rfqId, instrument, quantity, currency, expiresAt } = req.body;
-    const command = {
-      commandId: `rfq-${Date.now()}`,
-      actAs: [PARTIES.requester],
-      commands: [
-        {
-          CreateCommand: {
-            templateId: `#${PKGN}:Umbra:Rfq`,
-            createArguments: {
-              requester: PARTIES.requester,
-              rfqId, instrument, quantity: String(quantity),
-              side: "Buy", currency, expiresAt,
-            },
-          },
-        },
-      ],
-    };
-    const r = await ledgerFetch("/v2/commands/submit-and-wait", {
-      method: "POST", body: JSON.stringify(command),
-    });
-    const text = await r.text();
-    if (!r.ok) return res.status(r.status).json({ error: text });
-    res.json({ ok: true, result: JSON.parse(text) });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// --- list active RFQs as the requester (gives us contract IDs) ---
-app.get("/api/rfqs", async (req, res) => {
-  try {
-    const rfqs = await queryActive(PARTIES.requester, "Umbra:Rfq");
-    res.json({ ok: true, count: rfqs.length, rfqs });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// --- list quotes, scoped to whichever role asks (this is P1 in action) ---
-// e.g. GET /api/quotes?role=dealer1  vs  ?role=requester
-app.get("/api/quotes", async (req, res) => {
-  try {
-    const party = partyOf(req.query.role || "requester");
-    const quotes = await queryActive(party, "Umbra:Quote");
-    res.json({ ok: true, role: req.query.role || "requester", count: quotes.length, quotes });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-
-// --- invite a dealer to an RFQ (exercise Invite as the requester) ---
-// body: { rfqContractId, dealer: "dealer1" | "dealer2" }
-app.post("/api/rfqs/:cid/invite", async (req, res) => {
-  try {
-    const cid = req.params.cid;
-    const dealer = partyOf(req.body.dealer);
-    const command = {
-      commandId: `invite-${Date.now()}`,
-      actAs: [PARTIES.requester],
-      commands: [
-        {
-          ExerciseCommand: {
-            templateId: `#${PKGN}:Umbra:Rfq`,
-            contractId: cid,
-            choice: "Invite",
-            choiceArgument: { dealer },
-          },
-        },
-      ],
-    };
-    const r = await ledgerFetch("/v2/commands/submit-and-wait", {
-      method: "POST", body: JSON.stringify(command),
-    });
-    const text = await r.text();
-    if (!r.ok) return res.status(r.status).json({ error: text });
-    res.json({ ok: true, result: JSON.parse(text) });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// --- list a dealer's invitations (scoped to that dealer) ---
-app.get("/api/invitations", async (req, res) => {
-  try {
-    const party = partyOf(req.query.role || "dealer1");
-    const invs = await queryActive(party, "Umbra:RfqInvitation");
-    res.json({ ok: true, role: req.query.role || "dealer1", count: invs.length, invitations: invs });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// --- submit a quote (exercise SubmitQuote as the dealer) ---
-// body: { dealer: "dealer1"|"dealer2", price: number }
-app.post("/api/invitations/:cid/quote", async (req, res) => {
-  try {
-    const cid = req.params.cid;
-    const dealer = partyOf(req.body.dealer);
-    const command = {
-      commandId: `quote-${Date.now()}`,
-      actAs: [dealer],
-      commands: [
-        {
-          ExerciseCommand: {
-            templateId: `#${PKGN}:Umbra:RfqInvitation`,
-            contractId: cid,
-            choice: "SubmitQuote",
-            choiceArgument: { price: String(req.body.price) },
-          },
-        },
-      ],
-    };
-    const r = await ledgerFetch("/v2/commands/submit-and-wait", {
-      method: "POST", body: JSON.stringify(command),
-    });
-    const text = await r.text();
-    if (!r.ok) return res.status(r.status).json({ error: text });
-    res.json({ ok: true, result: JSON.parse(text) });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-
-// ---- helper: submit a command set as a given party ----
+// ---- existing operator submit (demo-mode path, synchronous commit) ----
 async function submit(commandId, actAsParty, commands) {
   const body = { commandId: `${commandId}-${Date.now()}`, actAs: [actAsParty], commands };
   const r = await ledgerFetch("/v2/commands/submit-and-wait", {
@@ -220,70 +160,193 @@ async function submit(commandId, actAsParty, commands) {
   return JSON.parse(text);
 }
 
-// --- fund the requester with cash (creates a CashHolding) ---
-// body: { issuer?: party, currency, amount }
-app.post("/api/fund/cash", async (req, res) => {
+// ===========================================================================
+// MODE TOGGLE  -- the showmanship. Flip live, side-by-side, on stage.
+// ===========================================================================
+async function activePartyMap() {
+  const out = { public: PARTIES.public };
+  for (const r of SIGNING_ROLES) out[r] = await partyIdFor(r).catch(() => null);
+  return out;
+}
+
+app.get("/api/mode", async (req, res) => {
+  res.json({ signedMode: SIGNED_MODE, parties: await activePartyMap() });
+});
+
+// body: { signed: true|false }. Turning ON pre-onboards the 3 roles so the
+// first signed trade isn't slow.
+app.post("/api/mode", async (req, res) => {
   try {
-    const { currency = "USD", amount } = req.body;
-    const issuer = req.body.issuer || PARTIES.requester; // self-issued placeholder cash
-    const result = await submit("fund-cash", PARTIES.requester, [
+    SIGNED_MODE = req.body.signed === true || String(req.body.signed).toLowerCase() === "true";
+    if (SIGNED_MODE) for (const r of SIGNING_ROLES) await recFor(r);
+    res.json({ ok: true, signedMode: SIGNED_MODE, parties: await activePartyMap() });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Handy for the UI: which identities are live right now.
+app.get("/api/parties", async (req, res) => {
+  try {
+    res.json({ ok: true, signedMode: SIGNED_MODE, parties: await activePartyMap() });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// --- create an RFQ as the requester ---
+app.post("/api/rfqs", async (req, res) => {
+  try {
+    const { rfqId, instrument, quantity, currency, expiresAt } = req.body;
+    const requester = await partyIdFor("requester");
+    const commands = [
       {
         CreateCommand: {
-          templateId: `#${PKGN}:Umbra:CashHolding`,
+          templateId: `#${PKGN}:Umbra:Rfq`,
           createArguments: {
-            owner: PARTIES.requester,
-            issuer,
-            currency,
-            amount: String(amount),
+            requester,
+            rfqId, instrument, quantity: String(quantity),
+            side: "Buy", currency, expiresAt,
           },
         },
       },
+    ];
+    const result = await act("requester", "rfq", commands);
+    res.json({ ok: true, signed: SIGNED_MODE, result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --- list active RFQs as the requester (gives us contract IDs) ---
+app.get("/api/rfqs", async (req, res) => {
+  try {
+    const rfqs = await queryActive(await partyIdFor("requester"), "Umbra:Rfq");
+    res.json({ ok: true, count: rfqs.length, rfqs });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --- list quotes, scoped to whichever role asks (this is P1 in action) ---
+app.get("/api/quotes", async (req, res) => {
+  try {
+    const role = req.query.role || "requester";
+    const quotes = await queryActive(await partyIdFor(role), "Umbra:Quote");
+    res.json({ ok: true, role, count: quotes.length, quotes });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --- invite a dealer to an RFQ (exercise Invite as the requester) ---
+app.post("/api/rfqs/:cid/invite", async (req, res) => {
+  try {
+    const cid = req.params.cid;
+    const dealer = await partyIdFor(req.body.dealer);
+    const commands = [
+      {
+        ExerciseCommand: {
+          templateId: `#${PKGN}:Umbra:Rfq`,
+          contractId: cid,
+          choice: "Invite",
+          choiceArgument: { dealer },
+        },
+      },
+    ];
+    const result = await act("requester", "invite", commands);
+    res.json({ ok: true, signed: SIGNED_MODE, result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --- list a dealer's invitations (scoped to that dealer) ---
+app.get("/api/invitations", async (req, res) => {
+  try {
+    const role = req.query.role || "dealer1";
+    const invs = await queryActive(await partyIdFor(role), "Umbra:RfqInvitation");
+    res.json({ ok: true, role, count: invs.length, invitations: invs });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --- submit a quote (exercise SubmitQuote as the dealer) ---
+app.post("/api/invitations/:cid/quote", async (req, res) => {
+  try {
+    const cid = req.params.cid;
+    const dealerRole = String(req.body.dealer || "").toLowerCase();
+    await partyIdFor(dealerRole); // validates role
+    const commands = [
+      {
+        ExerciseCommand: {
+          templateId: `#${PKGN}:Umbra:RfqInvitation`,
+          contractId: cid,
+          choice: "SubmitQuote",
+          choiceArgument: { price: String(req.body.price) },
+        },
+      },
+    ];
+    const result = await act(dealerRole, "quote", commands);
+    res.json({ ok: true, signed: SIGNED_MODE, result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --- fund the requester with cash (creates a CashHolding) ---
+app.post("/api/fund/cash", async (req, res) => {
+  try {
+    const { currency = "USD", amount } = req.body;
+    const requester = await partyIdFor("requester");
+    const issuer = req.body.issuer || requester; // self-issued placeholder cash
+    const result = await act("requester", "fund-cash", [
+      {
+        CreateCommand: {
+          templateId: `#${PKGN}:Umbra:CashHolding`,
+          createArguments: { owner: requester, issuer, currency, amount: String(amount) },
+        },
+      },
     ]);
-    res.json({ ok: true, result });
+    res.json({ ok: true, signed: SIGNED_MODE, result });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // --- fund a dealer with an instrument (creates an InstrumentHolding) ---
-// body: { dealer: "dealer1"|"dealer2", registry?: party, instrument, quantity }
 app.post("/api/fund/instrument", async (req, res) => {
   try {
-    const dealer = partyOf(req.body.dealer);
+    const dealerRole = String(req.body.dealer || "").toLowerCase();
+    const dealer = await partyIdFor(dealerRole);
     const { instrument = "UST-2030", quantity } = req.body;
     const registry = req.body.registry || dealer; // self-registered placeholder
-    const result = await submit("fund-inst", dealer, [
+    const result = await act(dealerRole, "fund-inst", [
       {
         CreateCommand: {
           templateId: `#${PKGN}:Umbra:InstrumentHolding`,
-          createArguments: {
-            owner: dealer,
-            registry,
-            instrument,
-            quantity: String(quantity),
-          },
+          createArguments: { owner: dealer, registry, instrument, quantity: String(quantity) },
         },
       },
     ]);
-    res.json({ ok: true, result });
+    res.json({ ok: true, signed: SIGNED_MODE, result });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // --- list a party's holdings (cash + instruments) ---
 app.get("/api/holdings", async (req, res) => {
   try {
-    const party = partyOf(req.query.role || "requester");
+    const role = req.query.role || "requester";
+    const party = await partyIdFor(role);
     const cash = await queryActive(party, "Umbra:CashHolding");
     const inst = await queryActive(party, "Umbra:InstrumentHolding");
-    res.json({ ok: true, role: req.query.role || "requester", cash, instruments: inst });
+    res.json({ ok: true, role, cash, instruments: inst });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // --- STEP 1: requester accepts a quote (locks cash, makes SettlementInstruction) ---
-// body: { quoteContractId, requesterCashCid }
 app.post("/api/quotes/:cid/accept", async (req, res) => {
   try {
     const cid = req.params.cid;
     const { requesterCashCid } = req.body;
-    const result = await submit("accept", PARTIES.requester, [
+    const result = await act("requester", "accept", [
       {
         ExerciseCommand: {
           templateId: `#${PKGN}:Umbra:Quote`,
@@ -293,27 +356,27 @@ app.post("/api/quotes/:cid/accept", async (req, res) => {
         },
       },
     ]);
-    res.json({ ok: true, result });
+    res.json({ ok: true, signed: SIGNED_MODE, result });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // --- list settlement instructions (scoped) ---
 app.get("/api/settlements", async (req, res) => {
   try {
-    const party = partyOf(req.query.role || "requester");
-    const si = await queryActive(party, "Umbra:SettlementInstruction");
-    res.json({ ok: true, role: req.query.role || "requester", count: si.length, settlements: si });
+    const role = req.query.role || "requester";
+    const si = await queryActive(await partyIdFor(role), "Umbra:SettlementInstruction");
+    res.json({ ok: true, role, count: si.length, settlements: si });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // --- STEP 2: dealer settles (delivers instrument, atomic DvP) ---
-// body: { dealer: "dealer1"|"dealer2", settlementCid, dealerInstrumentCid }
 app.post("/api/settlements/:cid/settle", async (req, res) => {
   try {
     const cid = req.params.cid;
-    const dealer = partyOf(req.body.dealer);
+    const dealerRole = String(req.body.dealer || "").toLowerCase();
+    await partyIdFor(dealerRole);
     const { dealerInstrumentCid } = req.body;
-    const result = await submit("settle", dealer, [
+    const result = await act(dealerRole, "settle", [
       {
         ExerciseCommand: {
           templateId: `#${PKGN}:Umbra:SettlementInstruction`,
@@ -323,9 +386,67 @@ app.post("/api/settlements/:cid/settle", async (req, res) => {
         },
       },
     ]);
-    res.json({ ok: true, result });
+    res.json({ ok: true, signed: SIGNED_MODE, result });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// --- live ledger offset (terminal ticker) ---
+app.get("/api/ledger-end", async (req, res) => {
+  try {
+    const r = await ledgerFetch("/v2/state/ledger-end");
+    res.json(await r.json());
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// --- one-click award + settle: full P2 flow. Works in BOTH modes.
+// In signed mode every step is signed by the controlling party and we poll
+// for each async commit before chaining the next step. body: { quoteCid } ---
+app.post("/api/award", async (req, res) => {
+  try {
+    const { quoteCid } = req.body;
+    const requester = await partyIdFor("requester");
+    const quotes = await queryActive(requester, "Umbra:Quote");
+    const q = quotes.find((x) => x.contractId === quoteCid);
+    if (!q) throw new Error("quote not found or not visible to requester");
+    const { dealer: dealerParty, quantity, price, instrument } = q.payload;
+    const dealerRole = await roleOfParty(dealerParty);
+    if (!dealerRole) throw new Error("could not map quote's dealer party to a role");
+    const dealer = await partyIdFor(dealerRole);
+    const totalCost = Number(price) * Number(quantity);
+    const steps = [];
+    const idSet = async (party, tmpl) =>
+      new Set((await queryActive(party, tmpl)).map((c) => c.contractId));
+
+    const cashBefore = await idSet(requester, "Umbra:CashHolding");
+    await act("requester", "award-cash", [{
+      CreateCommand: { templateId: `#${PKGN}:Umbra:CashHolding`,
+        createArguments: { owner: requester, issuer: requester, currency: "USD", amount: String(totalCost) } } }]);
+    const cashCid = await pollNewCid(requester, "Umbra:CashHolding", cashBefore);
+    steps.push("funded requester cash $" + totalCost + (SIGNED_MODE ? " (requester-signed)" : ""));
+
+    const instBefore = await idSet(dealer, "Umbra:InstrumentHolding");
+    await act(dealerRole, "award-inst", [{
+      CreateCommand: { templateId: `#${PKGN}:Umbra:InstrumentHolding`,
+        createArguments: { owner: dealer, registry: dealer, instrument, quantity: String(quantity) } } }]);
+    const instCid = await pollNewCid(dealer, "Umbra:InstrumentHolding", instBefore);
+    steps.push("funded dealer instrument " + quantity + " " + instrument + (SIGNED_MODE ? " (" + dealerRole + "-signed)" : ""));
+
+    const siBefore = await idSet(requester, "Umbra:SettlementInstruction");
+    await act("requester", "award-accept", [{
+      ExerciseCommand: { templateId: `#${PKGN}:Umbra:Quote`, contractId: quoteCid,
+        choice: "AcceptQuote", choiceArgument: { requesterCashCid: cashCid } } }]);
+    const siCid = await pollNewCid(requester, "Umbra:SettlementInstruction", siBefore);
+    steps.push("requester accepted, cash locked" + (SIGNED_MODE ? " (requester-signed)" : ""));
+
+    await act(dealerRole, "award-settle", [{
+      ExerciseCommand: { templateId: `#${PKGN}:Umbra:SettlementInstruction`,
+        contractId: siCid, choice: "Settle", choiceArgument: { dealerInstrumentCid: instCid } } }]);
+    steps.push("settled atomically, DvP" + (SIGNED_MODE ? " (" + dealerRole + "-signed)" : ""));
+
+    res.json({ ok: true, signed: SIGNED_MODE, price, quantity, totalCost, steps });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => console.log(`[umbra-backend] listening on ${PORT}`));
+app.listen(PORT, () =>
+  console.log(`[umbra-backend] listening on ${PORT} | mode=${SIGNED_MODE ? "SIGNED (trust-no-operator)" : "DEMO (operator)"}`));
