@@ -1,2 +1,5 @@
 /.daml
 /log
+*.local.txt
+backend/.env
+backend/node_modules/
