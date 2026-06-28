@@ -536,8 +536,14 @@ app.post("/api/dvp/award", async (req, res) => {
     // 8) executor fires ExecuteDvP. The contract is signed by all three, so the
     // nested Allocation_ExecuteTransfer ([executor,sender,receiver]) authority is satisfied.
     {
+      // ExecuteDvP authority: in SIGNED mode the requester/dealer authority is
+      // already gathered into DvPSettlement via their signed accepts, and they
+      // are EXTERNAL parties the operator cannot actAs -- so the executor (which
+      // is operator-namespaced) submits alone. In operator mode we actAs all
+      // three (operator holds CanActAs on them). Either way ExecuteDvP fires.
+      const execActAs = (SIGNED_MODE) ? [executor] : [requester, dealer, executor];
       const body = { commandId: `dvp-execute-${Date.now()}`,
-        actAs: [requester, dealer, executor],
+        actAs: execActAs,
         commands: [{ ExerciseCommand: { templateId: `#${PKGN}:UmbraDvP:DvPSettlement`,
           contractId: dvpCid, choice: "ExecuteDvP", choiceArgument: {} } }] };
       const r = await ledgerFetch("/v2/commands/submit-and-wait", { method: "POST", body: JSON.stringify(body) });

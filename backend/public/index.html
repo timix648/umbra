@@ -180,6 +180,29 @@
   .toast.ok{border-color:var(--accentline);color:var(--accent)}
   .toast.er{border-color:var(--red);color:var(--red)}
   @keyframes ti{from{transform:translateY(6px);opacity:0}to{transform:none;opacity:1}}
+
+  /* ============ STYLED TOOLTIPS ============ */
+  [data-tip]{position:relative}
+  [data-tip]:hover::after{
+    content:attr(data-tip);
+    position:absolute; left:50%; bottom:calc(100% + 8px); transform:translateX(-50%);
+    width:max-content; max-width:240px; white-space:normal; text-align:left;
+    background:var(--bg3); color:var(--text);
+    border:1px solid var(--accentline); border-radius:4px;
+    padding:7px 9px; font:500 10.5px/1.45 ui-monospace,"JetBrains Mono",monospace;
+    letter-spacing:.01em; box-shadow:0 6px 20px rgba(0,0,0,.45), var(--glow);
+    z-index:200; pointer-events:none; opacity:0; animation:tipin .12s ease-out forwards;
+  }
+  [data-tip]:hover::before{
+    content:""; position:absolute; left:50%; bottom:calc(100% + 3px); transform:translateX(-50%);
+    border:5px solid transparent; border-top-color:var(--accentline);
+    z-index:200; pointer-events:none; opacity:0; animation:tipin .12s ease-out forwards;
+  }
+  @keyframes tipin{from{opacity:0;transform:translateX(-50%) translateY(3px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+  /* tooltips that would clip at the top edge flip below */
+  .tip-below[data-tip]:hover::after{bottom:auto;top:calc(100% + 8px)}
+  .tip-below[data-tip]:hover::before{bottom:auto;top:calc(100% + 3px);border-top-color:transparent;border-bottom-color:var(--accentline)}
+
 </style>
 </head>
 <body>
@@ -789,14 +812,17 @@ function App() {
       addlog("quote: " + e.message, "er");
     }
   }
-  async function award(quoteCid) {
-    setPipe({
-      active: -1,
-      steps: ["Fund requester cash", "Fund dealer instrument", "Requester accepts — cash locked", "Atomic DvP settle"]
-    });
-    addlog("award initiated" + (mode ? " · via party signatures" : ""), "");
+  async function award(quoteCid, kind) {
+    kind = kind || "custom";
+    const isCip = kind === "cip56";
+    const path = isCip ? "/api/dvp/award" : "/api/award";
+    const steps = isCip
+      ? ["Fund requester cash", "Fund dealer instrument", "Requester allocates (CIP-56)", "Dealer allocates (CIP-56)", "Venue proposes", "Dealer accepts", "Requester accepts", "Atomic execute — assets swap"]
+      : ["Fund requester cash", "Fund dealer instrument", "Requester accepts — cash locked", "Atomic DvP settle"];
+    setPipe({ active: -1, steps });
+    addlog((isCip ? "CIP-56 settlement initiated" : "award initiated") + (mode ? " · via party signatures" : ""), "");
     try {
-      const r = await post("/api/award", {
+      const r = await post(path, {
         quoteCid
       });
       for (let i = 0; i < r.steps.length; i++) {
@@ -846,7 +872,9 @@ function App() {
   }, /*#__PURE__*/React.createElement("span", {
     className: "spin"
   }), "onboarding…") : /*#__PURE__*/React.createElement("div", {
-    className: "seg"
+    className: "seg",
+    "data-tip": "Trust model — OPERATOR: the venue submits on parties' behalf. SIGNED: each party signs with its own key and the venue cannot forge anything.",
+    style: { position: "relative" }
   }, /*#__PURE__*/React.createElement("button", {
     className: mode ? "" : "op",
     onClick: () => flipMode(false)
@@ -898,10 +926,12 @@ function App() {
     className: "acts"
   }, /*#__PURE__*/React.createElement("button", {
     className: "btn sm amber",
-    onClick: () => invite(r.contractId, "dealer1")
+    onClick: () => invite(r.contractId, "dealer1"),
+    "data-tip": "Invite Dealer 1 to submit a private quote on this RFQ"
   }, "+D1"), /*#__PURE__*/React.createElement("button", {
     className: "btn sm amber",
-    onClick: () => invite(r.contractId, "dealer2")
+    onClick: () => invite(r.contractId, "dealer2"),
+    "data-tip": "Invite Dealer 2 to submit a private quote on this RFQ"
   }, "+D2")))))), /*#__PURE__*/React.createElement(Balances, {
     title: "Requester balances",
     h: hold.requester
@@ -939,8 +969,14 @@ function App() {
       }
     }, /*#__PURE__*/React.createElement("button", {
       className: "btn sm",
-      onClick: () => award(q.contractId)
-    }, "Award")));
+      onClick: () => award(q.contractId, "custom"),
+      "data-tip": "Settle via Umbra's atomic engine — cash and asset swap in one transaction, or neither moves"
+    }, "Award"), /*#__PURE__*/React.createElement("button", {
+      className: "btn sm",
+      style: { marginLeft: "5px", borderColor: "var(--accentline)", color: "var(--accent2)" },
+      onClick: () => award(q.contractId, "cip56"),
+      "data-tip": "Settle via the CIP-56 token standard — each party allocates its own holding; assets swap atomically"
+    }, "CIP-56")));
   }))))), /*#__PURE__*/React.createElement("div", {
     className: "pane"
   }, /*#__PURE__*/React.createElement("div", {
@@ -1054,7 +1090,8 @@ function RfqForm({
         quantity
       });
       setRfqId(rnd());
-    }
+    },
+    "data-tip": "Broadcast a request-for-quote — then invite dealers to compete on price"
   }, "Create RFQ")));
 }
 function DealerCard({
@@ -1101,7 +1138,8 @@ function DealerCard({
     }))
   }), /*#__PURE__*/React.createElement("button", {
     className: "btn sm",
-    onClick: () => onQuote(iv.contractId, name, prices[iv.contractId] || "0")
+    onClick: () => onQuote(iv.contractId, name, prices[iv.contractId] || "0"),
+    "data-tip": "Submit your bid privately — rival dealers can never see it, enforced by the ledger"
   }, "Quote"))))), data.q.length > 0 && /*#__PURE__*/React.createElement("div", {
     className: "pb",
     style: {
