@@ -1,0 +1,93 @@
+module SpikeAlloc where
+
+import Splice.Api.Token.HoldingV1
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.AllocationV1
+import Splice.Api.Token.AllocationInstructionV1
+
+import Spike (SpikeHolding(..))
+
+-- An Allocation: sender's holdings reserved for one leg of a settlement.
+template SpikeAllocation
+  with
+    allocSpec   : AllocationSpecification
+    holdingCids : [ContractId Holding]
+    sender      : Party
+    receiver    : Party
+    executor    : Party
+  where
+    signatory sender
+    observer receiver, executor
+
+    interface instance Allocation for SpikeAllocation where
+      view = AllocationView with
+        allocation = allocSpec
+        holdingCids
+        meta = emptyMetadata
+
+      -- THE bellwether: execute the allocated transfer (move sender -> receiver)
+      allocation_executeTransferImpl _self _arg = do
+        -- archive the reserved holdings, sum them
+        held <- forA holdingCids $ \hcid -> do
+          let scid = coerceContractId hcid : ContractId SpikeHolding
+          h <- fetch scid
+          archive scid
+          pure h
+        let total = sum [ h.amount | h <- held ]
+        let leg = allocSpec.transferLeg
+        -- create receiver holding for the leg amount
+        rcid <- create SpikeHolding with
+          owner = receiver; admin = leg.instrumentId.admin
+          instId = leg.instrumentId.id; amount = leg.amount
+        -- change back to sender if over-allocated
+        sChange <- if total > leg.amount
+          then do
+            ccid <- create SpikeHolding with
+              owner = sender; admin = leg.instrumentId.admin
+              instId = leg.instrumentId.id; amount = total - leg.amount
+            pure [toInterfaceContractId @Holding ccid]
+          else pure []
+        pure Allocation_ExecuteTransferResult with
+          senderHoldingCids = sChange
+          receiverHoldingCids = [toInterfaceContractId @Holding rcid]
+          meta = emptyMetadata
+
+      allocation_cancelImpl _self _arg = do
+        -- release holdings back to sender (here: just return their cids)
+        pure Allocation_CancelResult with
+          senderHoldingCids = holdingCids
+          meta = emptyMetadata
+
+      allocation_withdrawImpl _self _arg = do
+        pure Allocation_WithdrawResult with
+          senderHoldingCids = holdingCids
+          meta = emptyMetadata
+
+-- A factory the sender's wallet uses to create an allocation.
+template SpikeAllocationFactory
+  with
+    admin : Party
+  where
+    signatory admin
+
+    interface instance AllocationFactory for SpikeAllocationFactory where
+      view = AllocationFactoryView with admin; meta = emptyMetadata
+
+      allocationFactory_publicFetchImpl _self _arg =
+        pure (AllocationFactoryView with admin; meta = emptyMetadata)
+
+      allocationFactory_allocateImpl _self arg = do
+        let spec = arg.allocation
+        let leg = spec.transferLeg
+        -- archive input holdings into the allocation (reserve them)
+        allocCid <- create SpikeAllocation with
+          allocSpec = spec
+          holdingCids = arg.inputHoldingCids
+          sender = leg.sender
+          receiver = leg.receiver
+          executor = spec.settlement.executor
+        pure AllocationInstructionResult with
+          output = AllocationInstructionResult_Completed with
+            allocationCid = toInterfaceContractId @Allocation allocCid
+          senderChangeCids = []
+          meta = emptyMetadata

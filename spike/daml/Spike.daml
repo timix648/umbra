@@ -1,0 +1,64 @@
+module Spike where
+
+import DA.Time (RelTime)
+import qualified DA.Map as Map
+
+import Splice.Api.Token.HoldingV1
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.TransferInstructionV1
+
+template SpikeHolding
+  with
+    owner    : Party
+    admin    : Party
+    instId   : Text
+    amount   : Decimal
+  where
+    signatory owner
+    observer admin
+    ensure amount > 0.0
+
+    interface instance Holding for SpikeHolding where
+      view = HoldingView with
+        owner
+        instrumentId = InstrumentId with admin, id = instId
+        amount
+        lock = None
+        meta = emptyMetadata
+
+template SpikeTransferFactory
+  with
+    admin : Party
+  where
+    signatory admin
+
+    interface instance TransferFactory for SpikeTransferFactory where
+      view = TransferFactoryView with admin; meta = emptyMetadata
+
+      transferFactory_publicFetchImpl _self arg =
+        pure (TransferFactoryView with admin; meta = emptyMetadata)
+
+      transferFactory_transferImpl _self arg = do
+        let t = arg.transfer
+        inputs <- forA t.inputHoldingCids $ \hcid -> do
+          let scid = coerceContractId hcid : ContractId SpikeHolding
+          h <- fetch scid
+          archive scid
+          pure h
+        let total = sum [ h.amount | h <- inputs ]
+        assertMsg "insufficient holdings" (total >= t.amount)
+        rcid <- create SpikeHolding with
+          owner = t.receiver; admin = t.instrumentId.admin
+          instId = t.instrumentId.id; amount = t.amount
+        changeCids <- if total > t.amount
+          then do
+            ccid <- create SpikeHolding with
+              owner = t.sender; admin = t.instrumentId.admin
+              instId = t.instrumentId.id; amount = total - t.amount
+            pure [toInterfaceContractId @Holding ccid]
+          else pure []
+        pure TransferInstructionResult with
+          output = TransferInstructionResult_Completed with
+            receiverHoldingCids = [toInterfaceContractId @Holding rcid]
+          senderChangeCids = changeCids
+          meta = emptyMetadata

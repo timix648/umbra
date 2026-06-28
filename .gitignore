@@ -6,3 +6,6 @@ backend/node_modules/
 backend/public/*.bak
 vendor/**/.daml/
 vendor/**/*.dar
+spike/.daml/
+spike/**/*.dar
+repomix-output.xml
