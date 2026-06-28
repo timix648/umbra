@@ -5,8 +5,11 @@ sdk-version: 3.4.11
 name: umbra
 source: daml
 init-script: UmbraTest:umbraDemo
-version: 0.0.1
+version: 0.0.2
 dependencies:
   - daml-prim
   - daml-stdlib
   - daml-script
+data-dependencies:
+  - vendor/splice-api-token-metadata-v1/.daml/dist/splice-api-token-metadata-v1-1.0.99.dar
+  - vendor/splice-api-token-holding-v1/.daml/dist/splice-api-token-holding-v1-1.0.99.dar

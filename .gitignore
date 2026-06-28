@@ -4,3 +4,5 @@
 backend/.env
 backend/node_modules/
 backend/public/*.bak
+vendor/**/.daml/
+vendor/**/*.dar

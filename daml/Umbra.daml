@@ -1,6 +1,8 @@
 module Umbra where
 
 import DA.Action (when)
+import Splice.Api.Token.HoldingV1
+import Splice.Api.Token.MetadataV1 (emptyMetadata)
 
 data Side = Buy | Sell
   deriving (Eq, Show)
@@ -15,6 +17,15 @@ template CashHolding
     signatory owner
     observer issuer
     ensure amount > 0.0
+
+    -- CIP-56: expose CashHolding as a standard, wallet-discoverable Holding
+    interface instance Holding for CashHolding where
+      view = HoldingView with
+        owner
+        instrumentId = InstrumentId with admin = issuer, id = currency
+        amount
+        lock = None
+        meta = emptyMetadata
 
 template InstrumentHolding
   with
