@@ -450,6 +450,95 @@ app.post("/api/award", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ---- CIP-56 allocation-based DvP. Each party creates its OWN allocation
+// (signatory = that party), then the executor (operator/venue) assembles the
+// DvPSettlement and fires ExecuteDvP = atomic two-leg swap in standard form.
+// body: { quoteCid }  --- mirrors /api/award but settles via the token standard.
+app.post("/api/dvp/award", async (req, res) => {
+  try {
+    const { quoteCid } = req.body;
+    const requester = await partyIdFor("requester");
+    const quotes = await queryActive(requester, "Umbra:Quote");
+    const q = quotes.find((x) => x.contractId === quoteCid);
+    if (!q) throw new Error("quote not found or not visible to requester");
+    const { dealer: dealerParty, quantity, price, instrument } = q.payload;
+    const dealerRole = await roleOfParty(dealerParty);
+    if (!dealerRole) throw new Error("could not map quote dealer party to a role");
+    const dealer = await partyIdFor(dealerRole);
+    const executor = PARTIES.requester; // venue/operator-namespaced executor party
+    const totalCost = Number(price) * Number(quantity);
+    const steps = [];
+    const idSet = async (party, tmpl) =>
+      new Set((await queryActive(party, tmpl)).map((c) => c.contractId));
+
+    // 1) fund requester cash
+    const cashBefore = await idSet(requester, "Umbra:CashHolding");
+    await act("requester", "dvp-cash", [{
+      CreateCommand: { templateId: `#${PKGN}:Umbra:CashHolding`,
+        createArguments: { owner: requester, issuer: requester, currency: "USD", amount: String(totalCost) } } }]);
+    const cashCid = await pollNewCid(requester, "Umbra:CashHolding", cashBefore);
+    steps.push("funded requester cash $" + totalCost + (SIGNED_MODE ? " (requester-signed)" : ""));
+
+    // 2) fund dealer instrument
+    const instBefore = await idSet(dealer, "Umbra:InstrumentHolding");
+    await act(dealerRole, "dvp-inst", [{
+      CreateCommand: { templateId: `#${PKGN}:Umbra:InstrumentHolding`,
+        createArguments: { owner: dealer, registry: dealer, instrument, quantity: String(quantity) } } }]);
+    const instCid = await pollNewCid(dealer, "Umbra:InstrumentHolding", instBefore);
+    steps.push("funded dealer instrument " + quantity + " " + instrument + (SIGNED_MODE ? " (" + dealerRole + "-signed)" : ""));
+
+    // 3) requester creates the CashAllocation (its own authority)
+    const caBefore = await idSet(requester, "UmbraDvP:CashAllocation");
+    await act("requester", "dvp-cash-alloc", [{
+      CreateCommand: { templateId: `#${PKGN}:UmbraDvP:CashAllocation`,
+        createArguments: {
+          requester, dealer, executor,
+          cashCid, cashIssuer: requester,
+          currency: "USD", legAmount: String(totalCost) } } }]);
+    const cashAllocCid = await pollNewCid(requester, "UmbraDvP:CashAllocation", caBefore);
+    steps.push("requester allocated cash (CIP-56 Allocation)" + (SIGNED_MODE ? " (requester-signed)" : ""));
+
+    // 4) dealer creates the InstrumentAllocation (its own authority)
+    const iaBefore = await idSet(dealer, "UmbraDvP:InstrumentAllocation");
+    await act(dealerRole, "dvp-inst-alloc", [{
+      CreateCommand: { templateId: `#${PKGN}:UmbraDvP:InstrumentAllocation`,
+        createArguments: {
+          dealer, requester, executor,
+          instCid, registry: dealer,
+          instrument, legQty: String(quantity) } } }]);
+    const instAllocCid = await pollNewCid(dealer, "UmbraDvP:InstrumentAllocation", iaBefore);
+    steps.push("dealer allocated instrument (CIP-56 Allocation)" + (SIGNED_MODE ? " (" + dealerRole + "-signed)" : ""));
+
+    // 5) executor assembles the DvPSettlement (references the allocations as interface cids)
+    const ifaceId = "#splice-api-token-allocation-v1:Splice.Api.Token.AllocationV1:Allocation";
+    const dsBefore = await idSet(executor, "UmbraDvP:DvPSettlement");
+    await submit("dvp-settle-create", executor, [{
+      CreateCommand: { templateId: `#${PKGN}:UmbraDvP:DvPSettlement`,
+        createArguments: {
+          requester, dealer, executor,
+          cashAllocCid, instAllocCid } } }]);
+    const dvpCid = await pollNewCid(executor, "UmbraDvP:DvPSettlement", dsBefore);
+    steps.push("venue assembled DvPSettlement (executor)");
+
+    // 6) executor fires the atomic two-leg swap. ExecuteDvP -> Allocation_ExecuteTransfer
+    // moves both legs, which requires requester + dealer + executor authority jointly.
+    // In operator mode the operator holds CanActAs on all three, so we submit acting
+    // as all of them (this is the venue coordinating a multi-party atomic settlement).
+    {
+      const body = { commandId: `dvp-execute-${Date.now()}`,
+        actAs: [requester, dealer, executor],
+        commands: [{ ExerciseCommand: { templateId: `#${PKGN}:UmbraDvP:DvPSettlement`,
+          contractId: dvpCid, choice: "ExecuteDvP", choiceArgument: {} } }] };
+      const r = await ledgerFetch("/v2/commands/submit-and-wait", { method: "POST", body: JSON.stringify(body) });
+      const t = await r.text();
+      if (!r.ok) throw new Error(`ExecuteDvP failed: ${r.status} ${t}`);
+    }
+    steps.push("executed atomic DvP via CIP-56 allocations");
+
+    res.json({ ok: true, signed: SIGNED_MODE, mode: "cip56-dvp", price, quantity, totalCost, steps });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () =>
   console.log(`[umbra-backend] listening on ${PORT} | mode=${SIGNED_MODE ? "SIGNED (trust-no-operator)" : "DEMO (operator)"}`));

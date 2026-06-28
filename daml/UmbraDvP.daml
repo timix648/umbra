@@ -1,52 +1,75 @@
 module UmbraDvP where
 
+import DA.Date (date, Month(..))
+import DA.Time (time)
 import Splice.Api.Token.HoldingV1
 import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.AllocationV1
 
-import Umbra (CashHolding(..), InstrumentHolding(..), Quote(..))
+import Umbra (CashHolding(..), InstrumentHolding(..))
 
 -- ============================================================================
--- CIP-56 allocation-based DvP. Fully self-contained in this module to avoid
--- a Daml import cycle: UmbraDvP imports Umbra (for CashHolding /
--- InstrumentHolding / Quote), so Umbra.daml must NOT import UmbraDvP back.
--- That means the trigger choice lives HERE, not as a choice added to Quote.
---
--- Umbra.daml's AcceptQuote/Settle/Reject choices are completely untouched --
--- this module only READS the Quote contract (via fetch), it never adds a
--- choice to it. Nothing in Umbra.daml changes at all for this to work.
+-- CIP-56 allocation-based DvP. Self-contained (imports Umbra one-way).
+-- Allocations take FLAT args; each builds its own AllocationSpecification
+-- internally, so the backend only passes primitives (no nested JSON).
+-- Each allocation is signatory=sender, so each party creates its own under
+-- its own authority (operator never forges). The executor assembles the
+-- DvPSettlement and fires ExecuteDvP to move both legs atomically.
+-- Umbra.daml's AcceptQuote/Settle/Reject are completely untouched.
 -- ============================================================================
+
+-- Build a one-leg AllocationSpecification from flat fields. `now` supplied by
+-- the choice/create context isn't available at create-time for `view`, so we
+-- use a fixed settlement reference; deadlines aren't enforced in this flow.
+mkSpec : Party -> Party -> Party -> Decimal -> Party -> Text -> Text -> AllocationSpecification
+mkSpec executor sender receiver amount admin instId legId =
+  let settlement = SettlementInfo with
+        executor
+        settlementRef = Reference with id = "umbra-dvp", cid = None
+        requestedAt = makeRequestedAt
+        allocateBefore = makeRequestedAt
+        settleBefore = makeRequestedAt
+        meta = emptyMetadata
+      leg = TransferLeg with
+        sender; receiver; amount
+        instrumentId = InstrumentId with admin, id = instId
+        meta = emptyMetadata
+  in AllocationSpecification with settlement; transferLegId = legId; transferLeg = leg
+
+-- A fixed epoch timestamp; deadlines aren't enforced by this flow, and using a
+-- constant keeps `mkSpec` pure (no getTime needed inside `view`).
+makeRequestedAt : Time
+makeRequestedAt = time (date 1970 Jan 1) 0 0 0
 
 template CashAllocation
   with
-    spec       : AllocationSpecification
-    cashCid    : ContractId CashHolding
-    sender     : Party
-    receiver   : Party
+    requester  : Party
+    dealer     : Party
     executor   : Party
+    cashCid    : ContractId CashHolding
     cashIssuer : Party
+    currency   : Text
+    legAmount  : Decimal
   where
-    signatory sender
-    observer receiver, executor
+    signatory requester
+    observer dealer, executor
 
     interface instance Allocation for CashAllocation where
       view = AllocationView with
-        allocation = spec
+        allocation = mkSpec executor requester dealer legAmount cashIssuer currency "cash-leg"
         holdingCids = [toInterfaceContractId @Holding cashCid]
         meta = emptyMetadata
 
       allocation_executeTransferImpl _self _arg = do
         cash <- fetch cashCid
         archive cashCid
-        let leg = spec.transferLeg
         recvCid <- create CashHolding with
-          owner = receiver; issuer = cashIssuer
-          currency = leg.instrumentId.id; amount = leg.amount
-        changeCids <- if cash.amount > leg.amount
+          owner = dealer; issuer = cashIssuer; currency; amount = legAmount
+        changeCids <- if cash.amount > legAmount
           then do
             c <- create CashHolding with
-              owner = sender; issuer = cashIssuer
-              currency = leg.instrumentId.id; amount = cash.amount - leg.amount
+              owner = requester; issuer = cashIssuer; currency
+              amount = cash.amount - legAmount
             pure [toInterfaceContractId @Holding c]
           else pure []
         pure Allocation_ExecuteTransferResult with
@@ -63,34 +86,33 @@ template CashAllocation
 
 template InstrumentAllocation
   with
-    spec     : AllocationSpecification
-    instCid  : ContractId InstrumentHolding
-    sender   : Party
-    receiver : Party
-    executor : Party
-    registry : Party
+    dealer     : Party
+    requester  : Party
+    executor   : Party
+    instCid    : ContractId InstrumentHolding
+    registry   : Party
+    instrument : Text
+    legQty     : Decimal
   where
-    signatory sender
-    observer receiver, executor
+    signatory dealer
+    observer requester, executor
 
     interface instance Allocation for InstrumentAllocation where
       view = AllocationView with
-        allocation = spec
+        allocation = mkSpec executor dealer requester legQty registry instrument "instrument-leg"
         holdingCids = [toInterfaceContractId @Holding instCid]
         meta = emptyMetadata
 
       allocation_executeTransferImpl _self _arg = do
         inst <- fetch instCid
         archive instCid
-        let leg = spec.transferLeg
         recvCid <- create InstrumentHolding with
-          owner = receiver; registry
-          instrument = leg.instrumentId.id; quantity = leg.amount
-        changeCids <- if inst.quantity > leg.amount
+          owner = requester; registry; instrument; quantity = legQty
+        changeCids <- if inst.quantity > legQty
           then do
             c <- create InstrumentHolding with
-              owner = sender; registry
-              instrument = leg.instrumentId.id; quantity = inst.quantity - leg.amount
+              owner = dealer; registry; instrument
+              quantity = inst.quantity - legQty
             pure [toInterfaceContractId @Holding c]
           else pure []
         pure Allocation_ExecuteTransferResult with
@@ -105,7 +127,9 @@ template InstrumentAllocation
         pure Allocation_WithdrawResult with
           senderHoldingCids = [toInterfaceContractId @Holding instCid]; meta = emptyMetadata
 
--- Carries both authorities, mirrors SettlementInstruction's pattern exactly.
+-- The venue (executor) assembles a settlement from two already-created
+-- allocations and fires ExecuteDvP to move both legs atomically.
+-- CIP-56 "app coordinates allocations" pattern.
 template DvPSettlement
   with
     requester    : Party
@@ -114,30 +138,22 @@ template DvPSettlement
     cashAllocCid : ContractId Allocation
     instAllocCid : ContractId Allocation
   where
-    signatory requester, dealer
-    observer executor
+    signatory executor
+    observer requester, dealer
 
-    -- The atomic move: both legs execute in one transaction, or neither does.
-    choice ExecuteDvP : (ContractId Allocation, ContractId Allocation)
+    choice ExecuteDvP : ()
       controller executor
       do
         let ea = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
         _ <- exercise cashAllocCid Allocation_ExecuteTransfer with extraArgs = ea
         _ <- exercise instAllocCid Allocation_ExecuteTransfer with extraArgs = ea
-        pure (cashAllocCid, instAllocCid)
+        pure ()
 
--- ============================================================================
--- Entry point: a nonconsuming choice on a tiny "kickoff" template that the
--- requester creates and controls. This is what replaces the old plan of
--- adding a choice to Quote -- it lives entirely in THIS module, so no cycle.
---
--- The backend reads the live Quote (requester, dealer, instrument, quantity,
--- price, currency) off the ledger via normal query, then creates this
--- DvPKickoff with those values copied in as plain data plus the two real
--- holding CIDs. The requester signs/creates it (same authority AcceptQuote
--- already uses), then immediately exercises InitiateDvP on it in the same
--- flow to build both allocations + the DvPSettlement coordinator.
--- ============================================================================
+-- Retained ONLY for ledger upgrade-compatibility with umbra v0.0.3, which
+-- shipped DvPKickoff + its InitiateDvP choice. Canton's smart-upgrade checker
+-- requires templates AND their choices to persist across versions. Inert in
+-- the live flow (the backend drives the allocation templates + DvPSettlement
+-- directly); this just preserves the v0.0.3 surface so v0.0.4 vets as an upgrade.
 template DvPKickoff
   with
     requester  : Party
@@ -156,67 +172,16 @@ template DvPKickoff
         dealerInstrumentCid : ContractId InstrumentHolding
       controller requester
       do
-        cash <- fetch requesterCashCid
-        assertMsg "requester is not the owner of that cash" (cash.owner == requester)
-        assertMsg "currency mismatch" (cash.currency == currency)
-        inst <- fetch dealerInstrumentCid
-        assertMsg "instrument mismatch" (inst.instrument == instrument)
-
-        now <- getTime
         let totalCost = price * quantity
-        let farFuture = now
-        let settlementRef = Reference with id = "dvp-kickoff", cid = None
-        let settlement = SettlementInfo with
-              executor = executor
-              settlementRef = settlementRef
-              requestedAt = now
-              allocateBefore = farFuture
-              settleBefore = farFuture
-              meta = emptyMetadata
-
-        let cashLeg = TransferLeg with
-              sender = requester
-              receiver = dealer
-              amount = totalCost
-              instrumentId = InstrumentId with admin = cash.issuer, id = currency
-              meta = emptyMetadata
-        let cashSpec = AllocationSpecification with
-              settlement = settlement
-              transferLegId = "cash-leg"
-              transferLeg = cashLeg
-
-        let instLeg = TransferLeg with
-              sender = dealer
-              receiver = requester
-              amount = quantity
-              instrumentId = InstrumentId with admin = inst.registry, id = instrument
-              meta = emptyMetadata
-        let instSpec = AllocationSpecification with
-              settlement = settlement
-              transferLegId = "instrument-leg"
-              transferLeg = instLeg
-
         cashAllocCid <- create CashAllocation with
-          spec = cashSpec
-          cashCid = requesterCashCid
-          sender = requester
-          receiver = dealer
-          executor = executor
-          cashIssuer = cash.issuer
-        let cashAllocIfaceCid = toInterfaceContractId @Allocation cashAllocCid
-
+          requester; dealer; executor
+          cashCid = requesterCashCid; cashIssuer = requester
+          currency; legAmount = totalCost
         instAllocCid <- create InstrumentAllocation with
-          spec = instSpec
-          instCid = dealerInstrumentCid
-          sender = dealer
-          receiver = requester
-          executor = executor
-          registry = inst.registry
-        let instAllocIfaceCid = toInterfaceContractId @Allocation instAllocCid
-
+          dealer; requester; executor
+          instCid = dealerInstrumentCid; registry = dealer
+          instrument; legQty = quantity
         create DvPSettlement with
-          requester = requester
-          dealer = dealer
-          executor = executor
-          cashAllocCid = cashAllocIfaceCid
-          instAllocCid = instAllocIfaceCid
+          requester; dealer; executor
+          cashAllocCid = toInterfaceContractId @Allocation cashAllocCid
+          instAllocCid = toInterfaceContractId @Allocation instAllocCid
