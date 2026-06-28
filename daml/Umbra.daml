@@ -38,6 +38,15 @@ template InstrumentHolding
     observer registry
     ensure quantity > 0.0
 
+    -- CIP-56: expose InstrumentHolding as a standard, wallet-discoverable Holding
+    interface instance Holding for InstrumentHolding where
+      view = HoldingView with
+        owner
+        instrumentId = InstrumentId with admin = registry, id = instrument
+        amount = quantity
+        lock = None
+        meta = emptyMetadata
+
 template Rfq
   with
     requester  : Party
@@ -147,6 +156,7 @@ template Quote
     choice Reject : ()
       controller requester
       do pure ()
+
 
 -- Carries both authorities and is visible to both parties. The funds are
 -- already locked (cash archived in AcceptQuote); the dealer now delivers the

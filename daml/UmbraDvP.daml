@@ -1,0 +1,222 @@
+module UmbraDvP where
+
+import Splice.Api.Token.HoldingV1
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.AllocationV1
+
+import Umbra (CashHolding(..), InstrumentHolding(..), Quote(..))
+
+-- ============================================================================
+-- CIP-56 allocation-based DvP. Fully self-contained in this module to avoid
+-- a Daml import cycle: UmbraDvP imports Umbra (for CashHolding /
+-- InstrumentHolding / Quote), so Umbra.daml must NOT import UmbraDvP back.
+-- That means the trigger choice lives HERE, not as a choice added to Quote.
+--
+-- Umbra.daml's AcceptQuote/Settle/Reject choices are completely untouched --
+-- this module only READS the Quote contract (via fetch), it never adds a
+-- choice to it. Nothing in Umbra.daml changes at all for this to work.
+-- ============================================================================
+
+template CashAllocation
+  with
+    spec       : AllocationSpecification
+    cashCid    : ContractId CashHolding
+    sender     : Party
+    receiver   : Party
+    executor   : Party
+    cashIssuer : Party
+  where
+    signatory sender
+    observer receiver, executor
+
+    interface instance Allocation for CashAllocation where
+      view = AllocationView with
+        allocation = spec
+        holdingCids = [toInterfaceContractId @Holding cashCid]
+        meta = emptyMetadata
+
+      allocation_executeTransferImpl _self _arg = do
+        cash <- fetch cashCid
+        archive cashCid
+        let leg = spec.transferLeg
+        recvCid <- create CashHolding with
+          owner = receiver; issuer = cashIssuer
+          currency = leg.instrumentId.id; amount = leg.amount
+        changeCids <- if cash.amount > leg.amount
+          then do
+            c <- create CashHolding with
+              owner = sender; issuer = cashIssuer
+              currency = leg.instrumentId.id; amount = cash.amount - leg.amount
+            pure [toInterfaceContractId @Holding c]
+          else pure []
+        pure Allocation_ExecuteTransferResult with
+          senderHoldingCids = changeCids
+          receiverHoldingCids = [toInterfaceContractId @Holding recvCid]
+          meta = emptyMetadata
+
+      allocation_cancelImpl _self _arg =
+        pure Allocation_CancelResult with
+          senderHoldingCids = [toInterfaceContractId @Holding cashCid]; meta = emptyMetadata
+      allocation_withdrawImpl _self _arg =
+        pure Allocation_WithdrawResult with
+          senderHoldingCids = [toInterfaceContractId @Holding cashCid]; meta = emptyMetadata
+
+template InstrumentAllocation
+  with
+    spec     : AllocationSpecification
+    instCid  : ContractId InstrumentHolding
+    sender   : Party
+    receiver : Party
+    executor : Party
+    registry : Party
+  where
+    signatory sender
+    observer receiver, executor
+
+    interface instance Allocation for InstrumentAllocation where
+      view = AllocationView with
+        allocation = spec
+        holdingCids = [toInterfaceContractId @Holding instCid]
+        meta = emptyMetadata
+
+      allocation_executeTransferImpl _self _arg = do
+        inst <- fetch instCid
+        archive instCid
+        let leg = spec.transferLeg
+        recvCid <- create InstrumentHolding with
+          owner = receiver; registry
+          instrument = leg.instrumentId.id; quantity = leg.amount
+        changeCids <- if inst.quantity > leg.amount
+          then do
+            c <- create InstrumentHolding with
+              owner = sender; registry
+              instrument = leg.instrumentId.id; quantity = inst.quantity - leg.amount
+            pure [toInterfaceContractId @Holding c]
+          else pure []
+        pure Allocation_ExecuteTransferResult with
+          senderHoldingCids = changeCids
+          receiverHoldingCids = [toInterfaceContractId @Holding recvCid]
+          meta = emptyMetadata
+
+      allocation_cancelImpl _self _arg =
+        pure Allocation_CancelResult with
+          senderHoldingCids = [toInterfaceContractId @Holding instCid]; meta = emptyMetadata
+      allocation_withdrawImpl _self _arg =
+        pure Allocation_WithdrawResult with
+          senderHoldingCids = [toInterfaceContractId @Holding instCid]; meta = emptyMetadata
+
+-- Carries both authorities, mirrors SettlementInstruction's pattern exactly.
+template DvPSettlement
+  with
+    requester    : Party
+    dealer       : Party
+    executor     : Party
+    cashAllocCid : ContractId Allocation
+    instAllocCid : ContractId Allocation
+  where
+    signatory requester, dealer
+    observer executor
+
+    -- The atomic move: both legs execute in one transaction, or neither does.
+    choice ExecuteDvP : (ContractId Allocation, ContractId Allocation)
+      controller executor
+      do
+        let ea = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+        _ <- exercise cashAllocCid Allocation_ExecuteTransfer with extraArgs = ea
+        _ <- exercise instAllocCid Allocation_ExecuteTransfer with extraArgs = ea
+        pure (cashAllocCid, instAllocCid)
+
+-- ============================================================================
+-- Entry point: a nonconsuming choice on a tiny "kickoff" template that the
+-- requester creates and controls. This is what replaces the old plan of
+-- adding a choice to Quote -- it lives entirely in THIS module, so no cycle.
+--
+-- The backend reads the live Quote (requester, dealer, instrument, quantity,
+-- price, currency) off the ledger via normal query, then creates this
+-- DvPKickoff with those values copied in as plain data plus the two real
+-- holding CIDs. The requester signs/creates it (same authority AcceptQuote
+-- already uses), then immediately exercises InitiateDvP on it in the same
+-- flow to build both allocations + the DvPSettlement coordinator.
+-- ============================================================================
+template DvPKickoff
+  with
+    requester  : Party
+    dealer     : Party
+    executor   : Party
+    instrument : Text
+    quantity   : Decimal
+    currency   : Text
+    price      : Decimal
+  where
+    signatory requester
+
+    nonconsuming choice InitiateDvP : ContractId DvPSettlement
+      with
+        requesterCashCid    : ContractId CashHolding
+        dealerInstrumentCid : ContractId InstrumentHolding
+      controller requester
+      do
+        cash <- fetch requesterCashCid
+        assertMsg "requester is not the owner of that cash" (cash.owner == requester)
+        assertMsg "currency mismatch" (cash.currency == currency)
+        inst <- fetch dealerInstrumentCid
+        assertMsg "instrument mismatch" (inst.instrument == instrument)
+
+        now <- getTime
+        let totalCost = price * quantity
+        let farFuture = now
+        let settlementRef = Reference with id = "dvp-kickoff", cid = None
+        let settlement = SettlementInfo with
+              executor = executor
+              settlementRef = settlementRef
+              requestedAt = now
+              allocateBefore = farFuture
+              settleBefore = farFuture
+              meta = emptyMetadata
+
+        let cashLeg = TransferLeg with
+              sender = requester
+              receiver = dealer
+              amount = totalCost
+              instrumentId = InstrumentId with admin = cash.issuer, id = currency
+              meta = emptyMetadata
+        let cashSpec = AllocationSpecification with
+              settlement = settlement
+              transferLegId = "cash-leg"
+              transferLeg = cashLeg
+
+        let instLeg = TransferLeg with
+              sender = dealer
+              receiver = requester
+              amount = quantity
+              instrumentId = InstrumentId with admin = inst.registry, id = instrument
+              meta = emptyMetadata
+        let instSpec = AllocationSpecification with
+              settlement = settlement
+              transferLegId = "instrument-leg"
+              transferLeg = instLeg
+
+        cashAllocCid <- create CashAllocation with
+          spec = cashSpec
+          cashCid = requesterCashCid
+          sender = requester
+          receiver = dealer
+          executor = executor
+          cashIssuer = cash.issuer
+        let cashAllocIfaceCid = toInterfaceContractId @Allocation cashAllocCid
+
+        instAllocCid <- create InstrumentAllocation with
+          spec = instSpec
+          instCid = dealerInstrumentCid
+          sender = dealer
+          receiver = requester
+          executor = executor
+          registry = inst.registry
+        let instAllocIfaceCid = toInterfaceContractId @Allocation instAllocCid
+
+        create DvPSettlement with
+          requester = requester
+          dealer = dealer
+          executor = executor
+          cashAllocCid = cashAllocIfaceCid
+          instAllocCid = instAllocIfaceCid
