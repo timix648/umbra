@@ -127,10 +127,21 @@ template InstrumentAllocation
         pure Allocation_WithdrawResult with
           senderHoldingCids = [toInterfaceContractId @Holding instCid]; meta = emptyMetadata
 
--- The venue (executor) assembles a settlement from two already-created
--- allocations and fires ExecuteDvP to move both legs atomically.
--- CIP-56 "app coordinates allocations" pattern.
-template DvPSettlement
+-- ============================================================================
+-- Propose/accept choreography. Allocation_ExecuteTransfer requires authority
+-- of [executor, sender, receiver] (see allocationControllers in the standard).
+-- A flat multi-party actAs does NOT propagate that authority through a nested
+-- interface exercise -- the authority must be GATHERED by having all parties
+-- sign the contract whose choice fires the execute. So:
+--   1. executor proposes (DvPProposal, signatory executor)
+--   2. dealer accepts    -> DvPDealerAccepted (signatory executor, dealer)
+--   3. requester accepts -> DvPSettlement     (signatory executor, dealer, requester)
+--   4. executor executes -> ExecuteDvP on the fully-signed contract gathers all
+--      three authorities, satisfying Allocation_ExecuteTransfer.
+-- ============================================================================
+
+-- Step 1: executor proposes the settlement (only executor signs initially).
+template DvPProposal
   with
     requester    : Party
     dealer       : Party
@@ -141,6 +152,46 @@ template DvPSettlement
     signatory executor
     observer requester, dealer
 
+    -- Step 2: dealer accepts, contributing dealer authority.
+    choice AcceptAsDealer : ContractId DvPDealerAccepted
+      controller dealer
+      do
+        create DvPDealerAccepted with
+          requester; dealer; executor; cashAllocCid; instAllocCid
+
+-- Step 2 result: signed by executor + dealer.
+template DvPDealerAccepted
+  with
+    requester    : Party
+    dealer       : Party
+    executor     : Party
+    cashAllocCid : ContractId Allocation
+    instAllocCid : ContractId Allocation
+  where
+    signatory executor, dealer
+    observer requester
+
+    -- Step 3: requester accepts, contributing the final authority.
+    choice AcceptAsRequester : ContractId DvPSettlement
+      controller requester
+      do
+        create DvPSettlement with
+          requester; dealer; executor; cashAllocCid; instAllocCid
+
+-- Step 3 result: signed by ALL THREE. Now ExecuteDvP gathers all authorities.
+template DvPSettlement
+  with
+    requester    : Party
+    dealer       : Party
+    executor     : Party
+    cashAllocCid : ContractId Allocation
+    instAllocCid : ContractId Allocation
+  where
+    signatory requester, dealer, executor
+
+    -- Step 4: executor fires it. Because this contract is signed by all three,
+    -- exercising its choice makes all three authorities available to the nested
+    -- Allocation_ExecuteTransfer (whose controllers are executor/sender/receiver).
     choice ExecuteDvP : ()
       controller executor
       do
@@ -149,11 +200,6 @@ template DvPSettlement
         _ <- exercise instAllocCid Allocation_ExecuteTransfer with extraArgs = ea
         pure ()
 
--- Retained ONLY for ledger upgrade-compatibility with umbra v0.0.3, which
--- shipped DvPKickoff + its InitiateDvP choice. Canton's smart-upgrade checker
--- requires templates AND their choices to persist across versions. Inert in
--- the live flow (the backend drives the allocation templates + DvPSettlement
--- directly); this just preserves the v0.0.3 surface so v0.0.4 vets as an upgrade.
 template DvPKickoff
   with
     requester  : Party

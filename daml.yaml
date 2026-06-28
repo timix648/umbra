@@ -5,7 +5,7 @@ sdk-version: 3.4.11
 name: umbra
 source: daml
 init-script: UmbraTest:umbraDemo
-version: 0.0.4
+version: 0.0.5
 dependencies:
   - daml-prim
   - daml-stdlib

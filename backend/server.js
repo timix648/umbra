@@ -509,21 +509,32 @@ app.post("/api/dvp/award", async (req, res) => {
     const instAllocCid = await pollNewCid(dealer, "UmbraDvP:InstrumentAllocation", iaBefore);
     steps.push("dealer allocated instrument (CIP-56 Allocation)" + (SIGNED_MODE ? " (" + dealerRole + "-signed)" : ""));
 
-    // 5) executor assembles the DvPSettlement (references the allocations as interface cids)
-    const ifaceId = "#splice-api-token-allocation-v1:Splice.Api.Token.AllocationV1:Allocation";
-    const dsBefore = await idSet(executor, "UmbraDvP:DvPSettlement");
-    await submit("dvp-settle-create", executor, [{
-      CreateCommand: { templateId: `#${PKGN}:UmbraDvP:DvPSettlement`,
-        createArguments: {
-          requester, dealer, executor,
-          cashAllocCid, instAllocCid } } }]);
-    const dvpCid = await pollNewCid(executor, "UmbraDvP:DvPSettlement", dsBefore);
-    steps.push("venue assembled DvPSettlement (executor)");
+    // 5) executor PROPOSES the settlement (only executor signs initially)
+    const propBefore = await idSet(executor, "UmbraDvP:DvPProposal");
+    await submit("dvp-propose", executor, [{
+      CreateCommand: { templateId: `#${PKGN}:UmbraDvP:DvPProposal`,
+        createArguments: { requester, dealer, executor, cashAllocCid, instAllocCid } } }]);
+    const propCid = await pollNewCid(executor, "UmbraDvP:DvPProposal", propBefore);
+    steps.push("venue proposed settlement (executor)");
 
-    // 6) executor fires the atomic two-leg swap. ExecuteDvP -> Allocation_ExecuteTransfer
-    // moves both legs, which requires requester + dealer + executor authority jointly.
-    // In operator mode the operator holds CanActAs on all three, so we submit acting
-    // as all of them (this is the venue coordinating a multi-party atomic settlement).
+    // 6) dealer ACCEPTS -> DvPDealerAccepted (gathers dealer authority)
+    const daBefore = await idSet(dealer, "UmbraDvP:DvPDealerAccepted");
+    await act(dealerRole, "dvp-dealer-accept", [{
+      ExerciseCommand: { templateId: `#${PKGN}:UmbraDvP:DvPProposal`,
+        contractId: propCid, choice: "AcceptAsDealer", choiceArgument: {} } }]);
+    const daCid = await pollNewCid(dealer, "UmbraDvP:DvPDealerAccepted", daBefore);
+    steps.push("dealer accepted settlement" + (SIGNED_MODE ? " (" + dealerRole + "-signed)" : ""));
+
+    // 7) requester ACCEPTS -> DvPSettlement (now signed by all three)
+    const dsBefore = await idSet(requester, "UmbraDvP:DvPSettlement");
+    await act("requester", "dvp-req-accept", [{
+      ExerciseCommand: { templateId: `#${PKGN}:UmbraDvP:DvPDealerAccepted`,
+        contractId: daCid, choice: "AcceptAsRequester", choiceArgument: {} } }]);
+    const dvpCid = await pollNewCid(requester, "UmbraDvP:DvPSettlement", dsBefore);
+    steps.push("requester accepted, settlement fully authorized" + (SIGNED_MODE ? " (requester-signed)" : ""));
+
+    // 8) executor fires ExecuteDvP. The contract is signed by all three, so the
+    // nested Allocation_ExecuteTransfer ([executor,sender,receiver]) authority is satisfied.
     {
       const body = { commandId: `dvp-execute-${Date.now()}`,
         actAs: [requester, dealer, executor],
@@ -533,7 +544,7 @@ app.post("/api/dvp/award", async (req, res) => {
       const t = await r.text();
       if (!r.ok) throw new Error(`ExecuteDvP failed: ${r.status} ${t}`);
     }
-    steps.push("executed atomic DvP via CIP-56 allocations");
+    steps.push("executed atomic DvP via CIP-56 allocations (all three authorized)");
 
     res.json({ ok: true, signed: SIGNED_MODE, mode: "cip56-dvp", price, quantity, totalCost, steps });
   } catch (e) { res.status(500).json({ error: e.message }); }
