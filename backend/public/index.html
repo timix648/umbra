@@ -797,10 +797,10 @@ function App() {
       kind: kind || ""
     }, ...x].slice(0, 40));
   }, []);
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (opts) => {
     try {
       const [m, rf, qa, i1, i2, qd1, qd2, hr, hd1, hd2, qp, le] = await Promise.all([api("/api/mode"), api("/api/rfqs"), api("/api/quotes?role=requester"), api("/api/invitations?role=dealer1"), api("/api/invitations?role=dealer2"), api("/api/quotes?role=dealer1"), api("/api/quotes?role=dealer2"), api("/api/holdings?role=requester"), api("/api/holdings?role=dealer1"), api("/api/holdings?role=dealer2"), api("/api/quotes?role=public"), api("/api/ledger-end")]);
-      setMode(m.signedMode);
+      if (!(opts && opts.skipMode)) setMode(m.signedMode);
       setParties(m.parties || {});
       setRfqs(rf.rfqs || []);
       setQuotesAll(qa.quotes || []);
@@ -852,7 +852,7 @@ function App() {
       addlog("mode: " + e.message, "er");
     }
     setBusyMode(false);
-    refresh();
+    refresh({ skipMode: true });
   }
   async function createRfq(f) {
     try {
