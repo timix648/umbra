@@ -203,6 +203,55 @@
   .tip-below[data-tip]:hover::after{bottom:auto;top:calc(100% + 8px)}
   .tip-below[data-tip]:hover::before{bottom:auto;top:calc(100% + 3px);border-top-color:transparent;border-bottom-color:var(--accentline)}
 
+
+  /* ============ tip-left (right-edge tooltips grow leftward) ============ */
+  .tip-left[data-tip]:hover::after{left:auto;right:0;transform:none;animation:tipinL .12s ease-out forwards}
+  .tip-left[data-tip]:hover::before{left:auto;right:14px;transform:none}
+  @keyframes tipinL{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:translateY(0)}}
+
+  /* ============ SETTLEMENT OVERLAY (atomic climax) ============ */
+  .ovl{position:fixed;inset:0;z-index:300;display:grid;place-items:center;
+    background:rgba(6,8,12,.74);backdrop-filter:blur(3px);
+    animation:ovlin .25s ease-out forwards;cursor:pointer}
+  @keyframes ovlin{from{opacity:0}to{opacity:1}}
+  .ovl.out{animation:ovlout .3s ease-in forwards}
+  @keyframes ovlout{to{opacity:0}}
+  .ovlcard{width:min(440px,90vw);background:var(--bg2);border:1px solid var(--accentline);
+    border-radius:8px;padding:26px 26px 22px;box-shadow:0 24px 80px rgba(0,0,0,.6),var(--glow);
+    text-align:center;cursor:default;animation:cardin .35s cubic-bezier(.2,.8,.2,1) forwards}
+  @keyframes cardin{from{opacity:0;transform:translateY(14px) scale(.97)}to{opacity:1;transform:none}}
+  .ovl .eyb{font:600 9.5px/1 ui-monospace,monospace;letter-spacing:.22em;text-transform:uppercase;color:var(--accent);margin-bottom:16px}
+  .swaprow{display:flex;align-items:center;justify-content:center;gap:0;margin:6px 0 18px;position:relative;height:64px}
+  .leg{display:flex;flex-direction:column;align-items:center;gap:5px;width:128px;z-index:2}
+  .leg .tok{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;
+    font:700 13px/1 ui-monospace,monospace;border:1.5px solid}
+  .leg.cash .tok{color:var(--amber);border-color:var(--amberline);background:var(--amberbg)}
+  .leg.bond .tok{color:#6AA6FF;border-color:rgba(106,166,255,.45);background:rgba(106,166,255,.12)}
+  .leg .lbl{font:600 9px/1.3 ui-monospace,monospace;letter-spacing:.05em;color:var(--mute);text-transform:uppercase}
+  .swaparr{position:absolute;left:0;right:0;top:18px;display:flex;flex-direction:column;gap:5px;z-index:1;opacity:0;animation:arrin .4s ease-out .25s forwards}
+  @keyframes arrin{to{opacity:1}}
+  .swaparr .ar{height:2px;background:linear-gradient(90deg,var(--amberline),var(--accentline),rgba(106,166,255,.45));position:relative}
+  .swaparr .ar.r2{background:linear-gradient(270deg,var(--amberline),var(--accentline),rgba(106,166,255,.45))}
+  .leg.cash{animation:legL .55s cubic-bezier(.4,0,.2,1) .3s both}
+  .leg.bond{animation:legR .55s cubic-bezier(.4,0,.2,1) .3s both}
+  @keyframes legL{0%{transform:translateX(0)}45%{transform:translateX(86px)}100%{transform:translateX(0)}}
+  @keyframes legR{0%{transform:translateX(0)}45%{transform:translateX(-86px)}100%{transform:translateX(0)}}
+  .ovl .done{font:700 18px/1.2 inherit;color:var(--text);margin:2px 0 5px;opacity:0;animation:fadeup .4s ease-out .85s forwards}
+  .ovl .amt{font:600 13px/1 ui-monospace,monospace;color:var(--accent2);opacity:0;animation:fadeup .4s ease-out .95s forwards}
+  .ovl .sub{font:500 10.5px/1.5 ui-monospace,monospace;color:var(--mute);margin-top:10px;opacity:0;animation:fadeup .4s ease-out 1.05s forwards}
+  .ovl .chk{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--accent);color:#0c0618;font-size:12px;margin-right:7px;vertical-align:middle}
+  @keyframes fadeup{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+  /* ============ SETTLED TRADES panel ============ */
+  .strade{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line)}
+  .strade:last-child{border-bottom:0}
+  .strade .l{display:flex;flex-direction:column;gap:2px;min-width:0}
+  .strade .l .ti{font:600 11px/1.2 ui-monospace,monospace;color:var(--text)}
+  .strade .l .me{font:500 9px/1 ui-monospace,monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+  .strade .rt{text-align:right;display:flex;flex-direction:column;gap:2px}
+  .strade .rt .am{font:600 11px/1.2 ui-monospace,monospace;color:var(--accent2)}
+  .strade .rt .bd{font:600 8px/1 ui-monospace,monospace;letter-spacing:.1em;text-transform:uppercase;padding:2px 5px;border-radius:3px;color:var(--accent);background:var(--accentbg);border:1px solid var(--accentline);align-self:flex-end}
+
 </style>
 </head>
 <body>
@@ -522,6 +571,26 @@ const ROLE_COLOR = {
   dealer2: "#6AA6FF",
   public: "var(--dim)"
 };
+function RoleIcon({ role }) {
+  const c = ROLE_COLOR[role] || "var(--mute)";
+  const common = { width: 14, height: 14, viewBox: "0 0 24 24", fill: "none", stroke: c, strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round", style: { display: "block", flex: "0 0 auto" } };
+  const P = (d) => /*#__PURE__*/React.createElement("path", { d });
+  if (role === "requester")
+    // buyer: a hand/wallet receiving — downward tray with arrow in
+    return /*#__PURE__*/React.createElement("svg", common,
+      /*#__PURE__*/React.createElement("path", { d: "M12 3v9" }),
+      /*#__PURE__*/React.createElement("path", { d: "M8 9l4 4 4-4" }),
+      /*#__PURE__*/React.createElement("path", { d: "M4 17h16v3H4z" }));
+  if (role === "dealer1" || role === "dealer2")
+    // dealer: a price tag
+    return /*#__PURE__*/React.createElement("svg", common,
+      /*#__PURE__*/React.createElement("path", { d: "M3 12l8-8 9 9-8 8z" }),
+      /*#__PURE__*/React.createElement("circle", { cx: "8.5", cy: "8.5", r: "1.4", fill: c, stroke: "none" }));
+  // public: an eye (observer)
+  return /*#__PURE__*/React.createElement("svg", common,
+    /*#__PURE__*/React.createElement("path", { d: "M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" }),
+    /*#__PURE__*/React.createElement("circle", { cx: "12", cy: "12", r: "2.5" }));
+}
 const short = p => !p ? "—" : p.length > 26 ? p.slice(0, 13) + "…" + p.slice(-7) : p;
 const cleanRole = pid => (pid || "").split("::")[0].replace(/-\d+$/, "");
 async function api(path, opts) {
@@ -693,6 +762,13 @@ function App() {
     steps: []
   });
   const [log, setLog] = useState([]);
+  const [settled, setSettled] = useState([]);
+  const [overlay, setOverlay] = useState(null);
+  useEffect(() => {
+    if (!overlay) return;
+    const t = setTimeout(() => setOverlay(null), 3000);
+    return () => clearTimeout(t);
+  }, [overlay]);
   const [push, toastNode] = useToasts();
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -832,6 +908,17 @@ function App() {
           active: i
         }));
       }
+      setPipe(p => ({ ...p, active: p.steps.length }));
+      const trade = {
+        id: Date.now(),
+        instrument: r.instrument || (steps && "trade"),
+        qty: r.quantity, price: r.price, amount: r.totalCost,
+        engine: isCip ? "CIP-56" : "Custom",
+        signed: !!r.signed,
+        ts: new Date().toLocaleTimeString()
+      };
+      setSettled(prev => [trade, ...prev]);
+      setOverlay(trade);
       push("Settled — $" + r.totalCost);
       addlog("DvP settled $" + r.totalCost + (r.signed ? " (fully signed)" : ""), "ok");
       refresh();
@@ -885,15 +972,20 @@ function App() {
     className: "ids"
   }, ["requester", "dealer1", "dealer2", "public"].map(r => {
     const s = mode && r !== "public";
+    const TIP = {
+      requester: "The buyer initiating the trade. In SIGNED mode this party holds its own key; in OPERATOR mode it shares the venue's namespace.",
+      dealer1: "A competing dealer quoting a price. It can never see the other dealers' quotes — enforced by the ledger.",
+      dealer2: "A competing dealer quoting a price. It can never see the other dealers' quotes — enforced by the ledger.",
+      public: "An outside observer. A non-stakeholder sees nothing on the ledger — no RFQ, no quotes, no settlement."
+    };
     return /*#__PURE__*/React.createElement("div", {
-      className: "id",
-      key: r
+      className: "id tip-below",
+      key: r,
+      "data-tip": TIP[r]
     }, /*#__PURE__*/React.createElement("div", {
       className: "r"
-    }, /*#__PURE__*/React.createElement("i", {
-      style: {
-        background: ROLE_COLOR[r]
-      }
+    }, /*#__PURE__*/React.createElement(RoleIcon, {
+      role: r
     }), r), /*#__PURE__*/React.createElement("div", {
       className: "p"
     }, short(parties[r])), /*#__PURE__*/React.createElement("div", {
@@ -925,11 +1017,11 @@ function App() {
   }, short(r.contractId))), /*#__PURE__*/React.createElement("div", {
     className: "acts"
   }, /*#__PURE__*/React.createElement("button", {
-    className: "btn sm amber",
+    className: "btn sm amber tip-below",
     onClick: () => invite(r.contractId, "dealer1"),
     "data-tip": "Invite Dealer 1 to submit a private quote on this RFQ"
   }, "+D1"), /*#__PURE__*/React.createElement("button", {
-    className: "btn sm amber",
+    className: "btn sm amber tip-below",
     onClick: () => invite(r.contractId, "dealer2"),
     "data-tip": "Invite Dealer 2 to submit a private quote on this RFQ"
   }, "+D2")))))), /*#__PURE__*/React.createElement(Balances, {
@@ -1049,7 +1141,23 @@ function App() {
     style: {
       paddingTop: 0
     }
-  }, /*#__PURE__*/React.createElement("b", null, pub), " contracts visible. An outsider is never a stakeholder, so the ledger discloses nothing — no RFQ, no quotes, no settlement.")))), toastNode);
+  }, /*#__PURE__*/React.createElement("b", null, pub), " contracts visible. An outsider is never a stakeholder, so the ledger discloses nothing — no RFQ, no quotes, no settlement.")))), toastNode, overlay && /*#__PURE__*/React.createElement("div", { className: "ovl", onClick: () => setOverlay(null) },
+  /*#__PURE__*/React.createElement("div", { className: "ovlcard", onClick: e => e.stopPropagation() },
+    /*#__PURE__*/React.createElement("div", { className: "eyb" }, overlay.engine === "CIP-56" ? "Atomic Settlement - CIP-56 Standard" : "Atomic Settlement"),
+    /*#__PURE__*/React.createElement("div", { className: "swaprow" },
+      /*#__PURE__*/React.createElement("div", { className: "swaparr" },
+        /*#__PURE__*/React.createElement("div", { className: "ar" }),
+        /*#__PURE__*/React.createElement("div", { className: "ar r2" })),
+      /*#__PURE__*/React.createElement("div", { className: "leg cash" },
+        /*#__PURE__*/React.createElement("div", { className: "tok" }, "$"),
+        /*#__PURE__*/React.createElement("div", { className: "lbl" }, "Cash to Dealer")),
+      /*#__PURE__*/React.createElement("div", { className: "leg bond" },
+        /*#__PURE__*/React.createElement("div", { className: "tok" }, "B"),
+        /*#__PURE__*/React.createElement("div", { className: "lbl" }, "Bond to Buyer"))),
+    /*#__PURE__*/React.createElement("div", { className: "done" },
+      /*#__PURE__*/React.createElement("span", { className: "chk" }, "OK"), "Settled Atomically"),
+    /*#__PURE__*/React.createElement("div", { className: "amt" }, "$" + overlay.amount + " for " + overlay.qty + " units"),
+    /*#__PURE__*/React.createElement("div", { className: "sub" }, "Both legs moved in one indivisible transaction" + (overlay.signed ? ", each party signed with its own key" : "") + ". Or neither would have."))));
 }
 function RfqForm({
   onCreate
@@ -1082,7 +1190,7 @@ function RfqForm({
     value: quantity,
     onChange: e => setQuantity(e.target.value)
   }))), /*#__PURE__*/React.createElement("button", {
-    className: "btn",
+    className: "btn tip-below",
     onClick: () => {
       onCreate({
         rfqId,
@@ -1137,7 +1245,7 @@ function DealerCard({
       [iv.contractId]: e.target.value
     }))
   }), /*#__PURE__*/React.createElement("button", {
-    className: "btn sm",
+    className: "btn sm tip-below",
     onClick: () => onQuote(iv.contractId, name, prices[iv.contractId] || "0"),
     "data-tip": "Submit your bid privately — rival dealers can never see it, enforced by the ledger"
   }, "Quote"))))), data.q.length > 0 && /*#__PURE__*/React.createElement("div", {

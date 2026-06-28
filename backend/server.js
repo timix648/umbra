@@ -142,6 +142,29 @@ async function queryActive(party, templateModuleEntity) {
 // --- helper: poll until a NEW contract id (not in `beforeSet`) appears.
 // In demo mode submit-and-wait commits synchronously so this hits on try 0;
 // in signed mode execute is async-accepted, so we wait for the commit. ---
+// After a successful settle, archive the RFQ, its invitations, and any leftover
+// quotes for that rfqId so the board reflects "this trade is done" (best-effort;
+// in signed mode external-party quotes can't be archived by the operator).
+async function cleanupRfq(rfqId) {
+  if (!rfqId) return;
+  const requester = await partyIdFor("requester");
+  for (const tmpl of ["Umbra:Quote", "Umbra:RfqInvitation", "Umbra:Rfq"]) {
+    let items = [];
+    try { items = await queryActive(requester, tmpl); } catch { continue; }
+    for (const c of items) {
+      if (!c.payload || c.payload.rfqId !== rfqId) continue;
+      const actAs = (tmpl === "Umbra:Quote" && c.payload.dealer) ? [requester, c.payload.dealer] : [requester];
+      try {
+        await ledgerFetch("/v2/commands/submit-and-wait", { method: "POST", body: JSON.stringify({
+          commandId: `cleanup-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
+          actAs,
+          commands: [{ ExerciseCommand: { templateId: `#${PKGN}:${tmpl}`, contractId: c.contractId, choice: "Archive", choiceArgument: {} } }]
+        }) });
+      } catch (e) { /* best-effort */ }
+    }
+  }
+}
+
 async function pollNewCid(party, templateModuleEntity, beforeSet, tries = 12) {
   for (let i = 0; i < tries; i++) {
     const ids = (await queryActive(party, templateModuleEntity)).map((c) => c.contractId);
@@ -415,7 +438,7 @@ app.post("/api/award", async (req, res) => {
     const dealerRole = await roleOfParty(dealerParty);
     if (!dealerRole) throw new Error("could not map quote's dealer party to a role");
     const dealer = await partyIdFor(dealerRole);
-    const totalCost = Number(price) * Number(quantity);
+    const totalCost = Math.round(Number(price) * Number(quantity) * 1e6) / 1e6;
     const steps = [];
     const idSet = async (party, tmpl) =>
       new Set((await queryActive(party, tmpl)).map((c) => c.contractId));
@@ -466,7 +489,7 @@ app.post("/api/dvp/award", async (req, res) => {
     if (!dealerRole) throw new Error("could not map quote dealer party to a role");
     const dealer = await partyIdFor(dealerRole);
     const executor = PARTIES.requester; // venue/operator-namespaced executor party
-    const totalCost = Number(price) * Number(quantity);
+    const totalCost = Math.round(Number(price) * Number(quantity) * 1e6) / 1e6;
     const steps = [];
     const idSet = async (party, tmpl) =>
       new Set((await queryActive(party, tmpl)).map((c) => c.contractId));
@@ -552,6 +575,7 @@ app.post("/api/dvp/award", async (req, res) => {
     }
     steps.push("executed atomic DvP via CIP-56 allocations (all three authorized)");
 
+    await cleanupRfq(q.payload.rfqId);
     res.json({ ok: true, signed: SIGNED_MODE, mode: "cip56-dvp", price, quantity, totalCost, steps });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
