@@ -26,7 +26,7 @@
     --glow:0 0 0 3px rgba(124,77,255,.14);
   }
   *{box-sizing:border-box}
-  html,body{margin:0;height:100%}
+  html,body{margin:0;height:100%;overflow-x:hidden}
   body{
     background:var(--bg); color:var(--text);
     font:13px/1.4 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
@@ -82,6 +82,8 @@
   /* ============ GRID / PANES ============ */
   .grid{display:grid;grid-template-columns:312px 1fr 348px;min-height:calc(100vh - 96px)}
   .col{border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0}
+  .pane.fillcol{flex:1;display:flex;flex-direction:column;min-height:0}
+  .pane.fillcol .pb,.pane.fillcol .log{flex:1;min-height:0;display:flex;flex-direction:column}
   .col:last-child{border-right:0}
   @media(max-width:1160px){.grid{grid-template-columns:1fr}.col{border-right:0;border-bottom:1px solid var(--line)}}
 
@@ -165,13 +167,14 @@
   .hint{padding:0 12px 12px;font:500 11.5px/1.5 inherit;color:var(--mute)}
 
   /* activity log */
-  .log{padding:8px 12px;font:500 11px/1.7 ui-monospace,monospace;color:var(--mute);max-height:148px;overflow:auto}
+  .log{padding:8px 12px;font:500 11px/1.7 ui-monospace,monospace;color:var(--mute);flex:1;min-height:0;overflow:auto}
   .log .t{color:var(--dim)}
   .log .ok{color:var(--accent)} .log .er{color:var(--red)}
 
   /* balances */
   .bal{display:flex;align-items:center;justify-content:space-between;height:30px;padding:0 12px;border-bottom:1px solid var(--line);font:500 12px/1 ui-monospace,monospace}
   .bal:last-child{border-bottom:0}
+  .balscroll{flex:1;min-height:0;overflow-y:auto}
   .bal .v{color:var(--accent)} .bal .v.i{color:var(--amber)}
 
   /* toasts */
@@ -251,6 +254,12 @@
   .strade .rt{text-align:right;display:flex;flex-direction:column;gap:2px}
   .strade .rt .am{font:600 11px/1.2 ui-monospace,monospace;color:var(--accent2)}
   .strade .rt .bd{font:600 8px/1 ui-monospace,monospace;letter-spacing:.1em;text-transform:uppercase;padding:2px 5px;border-radius:3px;color:var(--accent);background:var(--accentbg);border:1px solid var(--accentline);align-self:flex-end}
+
+
+  /* ============ button spinner (inline busy indicator) ============ */
+  .spinr{display:inline-block;width:11px;height:11px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .6s linear infinite;vertical-align:-1px;margin-right:5px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  button[disabled]{cursor:default}
 
 </style>
 </head>
@@ -762,6 +771,7 @@ function App() {
     steps: []
   });
   const [awarding, setAwarding] = useState(false);
+  const [busyInvite, setBusyInvite] = useState({});
   const [log, setLog] = useState([]);
   const [settled, setSettled] = useState([]);
   const [overlay, setOverlay] = useState(null);
@@ -863,6 +873,9 @@ function App() {
     }
   }
   async function invite(cid, dealer) {
+    const k = cid + "-" + dealer;
+    if (busyInvite[k]) return;
+    setBusyInvite(b => ({ ...b, [k]: true }));
     try {
       await post("/api/rfqs/" + cid + "/invite", {
         dealer
@@ -873,6 +886,8 @@ function App() {
     } catch (e) {
       push(e.message, "er");
       addlog("invite: " + e.message, "er");
+    } finally {
+      setBusyInvite(b => { const nb = { ...b }; delete nb[k]; return nb; });
     }
   }
   async function submitQuote(cid, dealer, price) {
@@ -1023,13 +1038,15 @@ function App() {
     className: "acts"
   }, /*#__PURE__*/React.createElement("button", {
     className: "btn sm amber tip-below",
+    disabled: !!busyInvite[r.contractId + "-dealer1"],
     onClick: () => invite(r.contractId, "dealer1"),
     "data-tip": "Invite Dealer 1 to submit a private quote on this RFQ"
-  }, "+D1"), /*#__PURE__*/React.createElement("button", {
+  }, busyInvite[r.contractId + "-dealer1"] ? /*#__PURE__*/React.createElement("span", { className: "spinr" }) : "+D1"), /*#__PURE__*/React.createElement("button", {
     className: "btn sm amber tip-below",
+    disabled: !!busyInvite[r.contractId + "-dealer2"],
     onClick: () => invite(r.contractId, "dealer2"),
     "data-tip": "Invite Dealer 2 to submit a private quote on this RFQ"
-  }, "+D2")))))), /*#__PURE__*/React.createElement(Balances, {
+  }, busyInvite[r.contractId + "-dealer2"] ? /*#__PURE__*/React.createElement("span", { className: "spinr" }) : "+D2")))))), /*#__PURE__*/React.createElement(Balances, {
     title: "Requester balances",
     h: hold.requester
   })), /*#__PURE__*/React.createElement("div", {
@@ -1086,7 +1103,7 @@ function App() {
   }, mode ? "signed" : "operator")), /*#__PURE__*/React.createElement("div", {
     className: "hint"
   }, "Award a quote to run the full flow: fund both legs, lock the requester's cash, then swap instrument for cash in a single indivisible transaction. Completes whole or aborts whole.")), /*#__PURE__*/React.createElement("div", {
-    className: "pane"
+    className: "pane fillcol"
   }, /*#__PURE__*/React.createElement("div", {
     className: "ph"
   }, /*#__PURE__*/React.createElement("h3", null, "Activity")), /*#__PURE__*/React.createElement("div", {
@@ -1152,6 +1169,7 @@ function RfqForm({
   const [rfqId, setRfqId] = useState(rnd);
   const [instrument, setInstrument] = useState("UST-2030");
   const [quantity, setQuantity] = useState("100");
+  const [busy, setBusy] = useState(false);
   return /*#__PURE__*/React.createElement("div", {
     className: "pane"
   }, /*#__PURE__*/React.createElement("div", {
@@ -1177,16 +1195,15 @@ function RfqForm({
     onChange: e => setQuantity(e.target.value)
   }))), /*#__PURE__*/React.createElement("button", {
     className: "btn tip-below",
-    onClick: () => {
-      onCreate({
-        rfqId,
-        instrument,
-        quantity
-      });
-      setRfqId(rnd());
+    disabled: busy,
+    onClick: async () => {
+      if (busy) return;
+      setBusy(true);
+      try { await onCreate({ rfqId, instrument, quantity }); setRfqId(rnd()); }
+      finally { setBusy(false); }
     },
     "data-tip": "Broadcast a request-for-quote — then invite dealers to compete on price"
-  }, "Create RFQ")));
+  }, busy ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", { className: "spinr" }), "Creating") : "Create RFQ")));
 }
 function DealerCard({
   name,
@@ -1196,6 +1213,7 @@ function DealerCard({
   onQuote
 }) {
   const [prices, setPrices] = useState({});
+  const [busyQuote, setBusyQuote] = useState({});
   const accent = name === "dealer1" ? "#E0A33B" : "#6AA6FF";
   return /*#__PURE__*/React.createElement("div", {
     className: "pane"
@@ -1231,10 +1249,16 @@ function DealerCard({
       [iv.contractId]: e.target.value
     }))
   }), /*#__PURE__*/React.createElement("button", {
-    className: "btn sm tip-below",
-    onClick: () => onQuote(iv.contractId, name, prices[iv.contractId] || "0"),
+    className: "btn sm tip-below tip-left",
+    disabled: !!busyQuote[iv.contractId],
+    onClick: async () => {
+      if (busyQuote[iv.contractId]) return;
+      setBusyQuote(b => ({ ...b, [iv.contractId]: true }));
+      try { await onQuote(iv.contractId, name, prices[iv.contractId] || "0"); }
+      finally { setBusyQuote(b => { const nb = { ...b }; delete nb[iv.contractId]; return nb; }); }
+    },
     "data-tip": "Submit your bid privately — rival dealers can never see it, enforced by the ledger"
-  }, "Quote"))))), data.q.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, busyQuote[iv.contractId] ? /*#__PURE__*/React.createElement("span", { className: "spinr" }) : "Quote"))))), data.q.length > 0 && /*#__PURE__*/React.createElement("div", {
     className: "pb",
     style: {
       paddingTop: 8,
@@ -1266,7 +1290,7 @@ function Balances({
   const cash = h.cash || [],
     inst = h.instruments || [];
   return /*#__PURE__*/React.createElement("div", {
-    className: "pane"
+    className: "pane fillcol"
   }, /*#__PURE__*/React.createElement("div", {
     className: "ph"
   }, /*#__PURE__*/React.createElement("h3", null, title), /*#__PURE__*/React.createElement("span", {
@@ -1275,7 +1299,7 @@ function Balances({
     className: "pb flush"
   }, cash.length + inst.length === 0 ? /*#__PURE__*/React.createElement("div", {
     className: "empty"
-  }, "No holdings.") : /*#__PURE__*/React.createElement("div", null, cash.map(c => /*#__PURE__*/React.createElement("div", {
+  }, "No holdings.") : /*#__PURE__*/React.createElement("div", { className: "balscroll" }, cash.map(c => /*#__PURE__*/React.createElement("div", {
     className: "bal",
     key: c.contractId
   }, /*#__PURE__*/React.createElement("span", null, c.payload.currency, " cash"), /*#__PURE__*/React.createElement("span", {
