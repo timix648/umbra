@@ -1,0 +1,100 @@
+module UmbraDvpTest where
+
+import Umbra
+import UmbraDvP
+import Daml.Script
+import Splice.Api.Token.AllocationV1 (Allocation)
+import DA.Assert ((===))
+
+-- ============================================================================
+-- P5 SAFETY NET: CIP-56 allocation-based atomic DvP, proven headless.
+--
+-- UmbraTest.daml only covers the custom AcceptQuote -> Settle path. The
+-- headline result (CIP-56 allocation DvP in UmbraDvP.daml) was previously
+-- proven only by hitting the live ledger via /api/dvp/award. This script
+-- proves it with `daml test`, so the P5 claim holds even if DevNet is down.
+--
+-- It mirrors the choreography backend /api/dvp/award walks, in order:
+--   1. requester funds cash, dealer funds instrument (self-issued, as backend)
+--   2. requester creates its own CashAllocation        (signatory requester)
+--   3. dealer    creates its own InstrumentAllocation  (signatory dealer)
+--   4. executor proposes                               -> DvPProposal
+--   5. dealer accepts    (gathers dealer authority)    -> DvPDealerAccepted
+--   6. requester accepts (gathers all three)           -> DvPSettlement
+--   7. executor fires ExecuteDvP: because DvPSettlement is signed by all
+--      three, the nested Allocation_ExecuteTransfer ([executor,sender,receiver])
+--      authority is satisfied, and BOTH legs move in one transaction.
+-- ============================================================================
+
+umbraDvpAtomicSettles : Script ()
+umbraDvpAtomicSettles = do
+  requester <- allocateParty "ReqDvP"
+  dealer    <- allocateParty "DealerDvP"
+  executor  <- allocateParty "VenueDvP"
+
+  let instrument = "UST-2030"
+      quantity   = 100.0
+      price      = 98.50
+      currency   = "USD"
+      totalCost  = price * quantity   -- 9850.0
+
+  -- (1) Fund the legs exactly as backend /api/dvp/award does: requester
+  -- self-issues the cash, dealer self-registers the instrument.
+  cashCid <- submit requester do
+    createCmd CashHolding with
+      owner = requester; issuer = requester; currency; amount = totalCost
+  instCid <- submit dealer do
+    createCmd InstrumentHolding with
+      owner = dealer; registry = dealer; instrument; quantity
+
+  -- (2) requester allocates its cash, under its OWN authority.
+  cashAllocCid <- submit requester do
+    createCmd CashAllocation with
+      requester; dealer; executor
+      cashCid; cashIssuer = requester
+      currency; legAmount = totalCost
+
+  -- (3) dealer allocates its instrument, under its OWN authority.
+  instAllocCid <- submit dealer do
+    createCmd InstrumentAllocation with
+      dealer; requester; executor
+      instCid; registry = dealer
+      instrument; legQty = quantity
+
+  -- (4) executor proposes the settlement (only executor signs initially).
+  propCid <- submit executor do
+    createCmd DvPProposal with
+      requester; dealer; executor
+      cashAllocCid = toInterfaceContractId @Allocation cashAllocCid
+      instAllocCid = toInterfaceContractId @Allocation instAllocCid
+
+  -- (5) dealer accepts -> DvPDealerAccepted (signed by executor + dealer).
+  daCid <- submit dealer do exerciseCmd propCid AcceptAsDealer
+
+  -- (6) requester accepts -> DvPSettlement (signed by all three).
+  dvpCid <- submit requester do exerciseCmd daCid AcceptAsRequester
+
+  -- (7) executor fires the atomic two-leg swap.
+  submitMulti [executor] [requester, dealer] do exerciseCmd dvpCid ExecuteDvP
+
+  -- ---- Proof both legs moved atomically ----
+  -- requester now holds exactly the bought instrument (and queries it as owner,
+  -- avoiding the issuer/registry observer cross-visibility).
+  reqInst <- query @InstrumentHolding requester
+  assertMsg "requester must hold exactly 1 instrument holding" (length reqInst == 1)
+  case reqInst of
+    [(_, ri)] -> do
+      ri.owner    === requester
+      ri.quantity === quantity
+    _ -> abort "unexpected requester instrument holdings"
+
+  -- dealer now holds exactly the sale proceeds.
+  dealerCash <- query @CashHolding dealer
+  assertMsg "dealer must hold exactly 1 cash holding" (length dealerCash == 1)
+  case dealerCash of
+    [(_, dc)] -> do
+      dc.owner  === dealer
+      dc.amount === totalCost
+    _ -> abort "unexpected dealer cash holdings"
+
+  pure ()
