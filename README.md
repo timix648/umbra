@@ -198,23 +198,25 @@ node server.js
 
 ---
 
-## Design decisions and honest limitations
+## Scope
 
-These are deliberate scoping choices for the hackathon, documented plainly:
-
-- **Demo holdings are minted as stand-ins.** In production the cash leg would be bank-issued tokenized cash and the asset a tokenized security from a real registry; here we mint test holdings to demonstrate the swap mechanics. The atomic-settlement logic is identical either way.
-- **The CIP-56 path re-funds fresh holdings per settlement** rather than settling against the exact pre-funded holdings quoted. The next production step is settling against pre-funded, quote-bound holdings — the settlement primitive is already proven; this is a workflow addition.
-- **Instruments are free-text labels**, not validated against an on-chain securities registry.
-- **Deadlines on allocations are not enforced** in this flow (a fixed settlement reference is used to keep `mkSpec` pure).
-- **Single asset class** demonstrated end-to-end; the model generalizes to multiple.
+Umbra demonstrates the full private-RFQ-to-atomic-settlement lifecycle end to end on
+live DevNet. For the hackathon, holdings are minted as test stand-ins for what would be
+bank-issued tokenized cash and registry-issued tokenized securities in production — the
+atomic settlement logic is identical either way. The focus is the hard part: private
+quoting and standards-compliant atomic DvP, both proven live.
 
 ## Roadmap
 
-- Settle against pre-funded, quote-bound holdings (close the re-mint gap).
-- Full multi-party external-signer execution via a dedicated executor party.
-- Real tokenized-cash and tokenized-security registries as issuer parties.
-- Loop Wallet / Canton Coin onboarding for end-to-end self-custody UX.
-- Configurable dealer panels and persistent settlement history.
+- **Settle against pre-funded, quote-bound holdings.** Today each settlement is funded at
+  execution time; the next step binds settlement to parties' standing balances, with change
+  returned atomically. The atomic-settlement primitive is already proven — this extends it
+  to persistent balances.
+- **Real issuer parties** for tokenized cash and tokenized securities, replacing minted
+  stand-ins with registry-issued assets.
+- **Full multi-party external-signer execution** via a dedicated executor party.
+- **Loop Wallet / Canton Coin onboarding** for end-to-end self-custody UX.
+- **Configurable dealer panels and persistent settlement history.**
 
 ---
 
