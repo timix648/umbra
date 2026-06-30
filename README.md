@@ -22,9 +22,7 @@ and CIP-56 standard settlement all working against real ledger infrastructure.
 ## Links
 
 - **Demo video:** _link_
-- **Live app:** _link_
-- **Landing page:** _link_
-- **Submission:** _link_
+- **Live app:** _https://um-bra.app/_
 - **Contact / socials:** _link_
 
 ---
