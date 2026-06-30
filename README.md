@@ -53,7 +53,7 @@ uniquely offers.
 
 ---
 
-## The five guarantees (all proven live on DevNet)
+## The six guarantees (all proven live on DevNet)
 
 | # | Guarantee | How it's enforced |
 |---|-----------|-------------------|
@@ -62,9 +62,12 @@ uniquely offers.
 | P3 | **External-party signing** — no trusted operator | Parties onboarded with their own keys; transactions assembled, signed, and executed under each party's own authority |
 | P4 | **CIP-56 Holding interface** — standards-compliant assets | Holdings implement the Splice `Holding` interface, rendering a standard `HoldingView` |
 | P5 | **CIP-56 allocation-based atomic DvP** — settlement via the token standard | Each party creates its own `Allocation` (signatory = sender); the executor assembles a fully-signed settlement and fires a single atomic `ExecuteTransfer` across both legs |
+| P6 | **Sound settlement** — underfunded trades are rejected, not silently minted | Each allocation leg asserts the holder actually holds enough (`cash.amount >= legAmount`, `inst.quantity >= legQty`) before any transfer; proven by headless `daml test` cases confirming an underfunded buyer or under-delivering dealer cannot settle |
 
 The headline engineering result is **P5**: a working CIP-56 allocation-based atomic swap, in
 both operator mode and trust-no-operator signed mode, on live DevNet.
+
+P5 is also **sound**: the atomic transfer refuses to execute unless each party genuinely holds its leg — verified by headless tests, so the guarantee holds without a live ledger.
 
 ---
 
@@ -208,10 +211,9 @@ quoting and standards-compliant atomic DvP, both proven live.
 
 ## Roadmap
 
-- **Settle against pre-funded, quote-bound holdings.** Today each settlement is funded at
-  execution time; the next step binds settlement to parties' standing balances, with change
-  returned atomically. The atomic-settlement primitive is already proven — this extends it
-  to persistent balances.
+- **Settle against parties' standing balances.** Today each settlement is funded
+  per-trade; the next step binds settlement to persistent balances. Atomic change-return and
+  underfunded-trade rejection are already proven — this extends them to standing balances.
 - **Real issuer parties** for tokenized cash and tokenized securities, replacing minted
   stand-ins with registry-issued assets.
 - **Full multi-party external-signer execution** via a dedicated executor party.

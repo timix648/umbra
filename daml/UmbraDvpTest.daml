@@ -98,3 +98,114 @@ umbraDvpAtomicSettles = do
     _ -> abort "unexpected dealer cash holdings"
 
   pure ()
+
+
+-- ============================================================================
+-- MINT-GUARD PROOF: an underfunded buyer must NOT be able to settle.
+--
+-- Before the assertMsg guards in CashAllocation/InstrumentAllocation, the
+-- allocation execute body archived the input holding and minted the full leg
+-- amount to the receiver regardless of balance -- so an underfunded trade
+-- settled anyway (cash from nothing). This test funds the requester SHORT and
+-- asserts ExecuteDvP aborts. Green here == the mint hole is closed.
+-- ============================================================================
+umbraDvpRejectsUnderfundedCash : Script ()
+umbraDvpRejectsUnderfundedCash = do
+  requester <- allocateParty "ReqShort"
+  dealer    <- allocateParty "DealerShort"
+  executor  <- allocateParty "VenueShort"
+
+  let instrument = "UST-2030"
+      quantity   = 100.0
+      price      = 98.50
+      currency   = "USD"
+      totalCost  = price * quantity
+      shortCash  = totalCost - 1.0
+
+  cashCid <- submit requester do
+    createCmd CashHolding with
+      owner = requester; issuer = requester; currency; amount = shortCash
+  instCid <- submit dealer do
+    createCmd InstrumentHolding with
+      owner = dealer; registry = dealer; instrument; quantity
+
+  cashAllocCid <- submit requester do
+    createCmd CashAllocation with
+      requester; dealer; executor
+      cashCid; cashIssuer = requester
+      currency; legAmount = totalCost
+
+  instAllocCid <- submit dealer do
+    createCmd InstrumentAllocation with
+      dealer; requester; executor
+      instCid; registry = dealer
+      instrument; legQty = quantity
+
+  propCid <- submit executor do
+    createCmd DvPProposal with
+      requester; dealer; executor
+      cashAllocCid = toInterfaceContractId @Allocation cashAllocCid
+      instAllocCid = toInterfaceContractId @Allocation instAllocCid
+  daCid  <- submit dealer    do exerciseCmd propCid AcceptAsDealer
+  dvpCid <- submit requester do exerciseCmd daCid   AcceptAsRequester
+
+  submitMultiMustFail [executor] [requester, dealer] do
+    exerciseCmd dvpCid ExecuteDvP
+
+  pure ()
+
+
+-- ============================================================================
+-- MINT-GUARD PROOF (instrument leg): a dealer who doesn't hold enough of the
+-- instrument must NOT be able to settle. Mirror of the cash-short test, but
+-- the DEALER is funded short (99 held, 100 promised). The instrument leg's
+-- guard (inst.quantity >= legQty) must abort ExecuteDvP. Green == the
+-- instrument-side mint hole is closed too, proven by its own test.
+-- ============================================================================
+umbraDvpRejectsUndeliveredInstrument : Script ()
+umbraDvpRejectsUndeliveredInstrument = do
+  requester <- allocateParty "ReqInstShort"
+  dealer    <- allocateParty "DealerInstShort"
+  executor  <- allocateParty "VenueInstShort"
+
+  let instrument = "UST-2030"
+      quantity   = 100.0
+      price      = 98.50
+      currency   = "USD"
+      totalCost  = price * quantity
+      shortQty   = quantity - 1.0
+
+  -- Cash leg funded CORRECTLY this time; the DEALER is short on the bond.
+  cashCid <- submit requester do
+    createCmd CashHolding with
+      owner = requester; issuer = requester; currency; amount = totalCost
+  instCid <- submit dealer do
+    createCmd InstrumentHolding with
+      owner = dealer; registry = dealer; instrument; quantity = shortQty
+
+  cashAllocCid <- submit requester do
+    createCmd CashAllocation with
+      requester; dealer; executor
+      cashCid; cashIssuer = requester
+      currency; legAmount = totalCost
+
+  -- legQty is the FULL quantity, but the holding only has shortQty.
+  instAllocCid <- submit dealer do
+    createCmd InstrumentAllocation with
+      dealer; requester; executor
+      instCid; registry = dealer
+      instrument; legQty = quantity
+
+  propCid <- submit executor do
+    createCmd DvPProposal with
+      requester; dealer; executor
+      cashAllocCid = toInterfaceContractId @Allocation cashAllocCid
+      instAllocCid = toInterfaceContractId @Allocation instAllocCid
+  daCid  <- submit dealer    do exerciseCmd propCid AcceptAsDealer
+  dvpCid <- submit requester do exerciseCmd daCid   AcceptAsRequester
+
+  -- MUST fail: dealer holds 99, promised 100 -> instrument guard aborts.
+  submitMultiMustFail [executor] [requester, dealer] do
+    exerciseCmd dvpCid ExecuteDvP
+
+  pure ()
