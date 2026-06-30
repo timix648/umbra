@@ -6,6 +6,30 @@ require("dotenv").config();
 const app = express();
 app.use(express.json());
 
+// ---- humanize(): turn raw ledger error strings into clean user-facing text ----
+// Daml aborts and ledger rejections arrive as "400 {...insufficient cash...}" or
+// similar. The catch blocks below all return e.message verbatim, so cleaning the
+// message HERE (at the two raw-ledger throw sites) makes every endpoint inherit
+// friendly text without touching each catch block. Unmatched errors fall through
+// to a trimmed version of the raw string rather than a misleading guess.
+function humanize(raw) {
+  const m = String(raw || "");
+  const has = (...needles) => needles.some(n => m.toLowerCase().includes(n.toLowerCase()));
+  if (has("insufficient cash", "enough cash", "requester is not the owner of that cash"))
+    return "You don't have enough USD to settle this trade.";
+  if (has("currency mismatch"))
+    return "Currency mismatch between the quote and your cash.";
+  if (has("instrument mismatch"))
+    return "The instrument in this quote doesn't match the holding provided.";
+  if (has("not visible", "not active", "already archived", "contract not found"))
+    return "This quote is no longer available \u2014 it may have been settled or withdrawn.";
+  if (has("expired", "expiresAt"))
+    return "This RFQ has expired.";
+  // Fallback: strip a leading "NNN " HTTP-status prefix and any JSON envelope noise.
+  const stripped = m.replace(/^\d{3}\s+/, "").trim();
+  return stripped.length ? stripped : "The ledger rejected this request.";
+}
+
 const path = require("path");
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
@@ -119,7 +143,7 @@ async function queryActive(party, templateModuleEntity) {
     body: JSON.stringify(body),
   });
   const text = await r.text();
-  if (!r.ok) throw new Error(`${r.status} ${text}`);
+  if (!r.ok) throw new Error(humanize(`${r.status} ${text}`));
   let items;
   try {
     items = JSON.parse(text);
@@ -182,7 +206,7 @@ async function submit(commandId, actAsParty, commands) {
     method: "POST", body: JSON.stringify(body),
   });
   const text = await r.text();
-  if (!r.ok) throw new Error(`${r.status} ${text}`);
+  if (!r.ok) throw new Error(humanize(`${r.status} ${text}`));
   return JSON.parse(text);
 }
 
