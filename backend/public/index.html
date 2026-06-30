@@ -938,7 +938,7 @@ function App() {
       setSettled(prev => [trade, ...prev]);
       setOverlay(trade);
       push("Settled — $" + r.totalCost);
-      addlog("DvP settled $" + r.totalCost + (r.signed ? " (fully signed)" : ""), "ok");
+      addlog("DvP settled $" + Number(r.totalCost).toLocaleString() + (r.signed ? " (fully signed)" : ""), "ok");
       refresh();
     } catch (e) {
       push(e.message, "er");
@@ -1032,7 +1032,7 @@ function App() {
     key: r.contractId
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "k"
-  }, r.payload.rfqId, " · ", r.payload.quantity, " ", r.payload.instrument), /*#__PURE__*/React.createElement("div", {
+  }, r.payload.rfqId, " · ", Number(r.payload.quantity).toLocaleString(), " ", r.payload.instrument), /*#__PURE__*/React.createElement("div", {
     className: "s"
   }, short(r.contractId))), /*#__PURE__*/React.createElement("div", {
     className: "acts"
@@ -1070,14 +1070,14 @@ function App() {
     return /*#__PURE__*/React.createElement("tr", {
       key: q.contractId,
       className: isBest ? "best" : ""
-    }, /*#__PURE__*/React.createElement("td", null, cleanRole(q.payload.dealer)), /*#__PURE__*/React.createElement("td", null, q.payload.instrument), /*#__PURE__*/React.createElement("td", null, q.payload.quantity), /*#__PURE__*/React.createElement("td", {
+    }, /*#__PURE__*/React.createElement("td", null, cleanRole(q.payload.dealer)), /*#__PURE__*/React.createElement("td", null, q.payload.instrument), /*#__PURE__*/React.createElement("td", null, Number(q.payload.quantity).toLocaleString()), /*#__PURE__*/React.createElement("td", {
       className: "px"
     }, /*#__PURE__*/React.createElement("span", {
       className: "depth",
       style: {
         width: depth + "%"
       }
-    }), q.payload.price, isBest ? " ◂" : ""), /*#__PURE__*/React.createElement("td", {
+    }), Number(q.payload.price).toFixed(2), isBest ? " ◂" : ""), /*#__PURE__*/React.createElement("td", {
       style: {
         textAlign: "right"
       }
@@ -1159,7 +1159,7 @@ function App() {
         /*#__PURE__*/React.createElement("div", { className: "lbl" }, "Bond to Buyer"))),
     /*#__PURE__*/React.createElement("div", { className: "done" },
       /*#__PURE__*/React.createElement("span", { className: "chk" }, "OK"), "Settled Atomically"),
-    /*#__PURE__*/React.createElement("div", { className: "amt" }, "$" + overlay.amount + " for " + overlay.qty + " units"),
+    /*#__PURE__*/React.createElement("div", { className: "amt" }, "$" + Number(overlay.amount).toLocaleString() + " for " + Number(overlay.qty).toLocaleString() + " units"),
     /*#__PURE__*/React.createElement("div", { className: "sub" }, "Both legs moved in one indivisible transaction" + (overlay.signed ? ", each party signed with its own key" : "") + ". Or neither would have."))));
 }
 function RfqForm({
@@ -1233,7 +1233,7 @@ function DealerCard({
     key: iv.contractId
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "k"
-  }, iv.payload.quantity, " ", iv.payload.instrument), /*#__PURE__*/React.createElement("div", {
+  }, Number(iv.payload.quantity).toLocaleString(), " ", iv.payload.instrument), /*#__PURE__*/React.createElement("div", {
     className: "s"
   }, iv.payload.rfqId)), /*#__PURE__*/React.createElement("div", {
     className: "acts"
@@ -1242,7 +1242,7 @@ function DealerCard({
       width: 62,
       padding: "5px 7px"
     },
-    placeholder: "px",
+    placeholder: "price",
     value: prices[iv.contractId] || "",
     onChange: e => setPrices(p => ({
       ...p,
@@ -1278,7 +1278,7 @@ function DealerCard({
     }
   }, /*#__PURE__*/React.createElement("span", null, q.payload.instrument), /*#__PURE__*/React.createElement("span", {
     className: "v"
-  }, q.payload.price)))), /*#__PURE__*/React.createElement(RedactedTape, {
+  }, Number(q.payload.price).toFixed(2))))), /*#__PURE__*/React.createElement(RedactedTape, {
     rivalCount: rivalCount,
     rival: rival
   }));
@@ -1309,7 +1309,7 @@ function Balances({
     key: i.contractId
   }, /*#__PURE__*/React.createElement("span", null, i.payload.instrument), /*#__PURE__*/React.createElement("span", {
     className: "v i"
-  }, i.payload.quantity))))));
+  }, Number(i.payload.quantity).toLocaleString()))))));
 }
 ReactDOM.createRoot(document.getElementById("root")).render(/*#__PURE__*/React.createElement(App, null));
 </script>
