@@ -13,7 +13,7 @@ rules. No dealer can see whether a rival was even invited, let alone what they q
 > Canton was built to fix exactly this. **Umbra is the proof.**
 
 **Challenge track:** Private DeFi & Capital Markets
-**Network:** Canton DevNet (Seaport validator)
+**Network:** Canton DevNet (FiveNorth validator)
 **Status:** Live end-to-end on DevNet — privacy, atomic settlement, external-party signing,
 and CIP-56 standard settlement all working against real ledger infrastructure.
 
@@ -21,9 +21,9 @@ and CIP-56 standard settlement all working against real ledger infrastructure.
 
 ## Links
 
-- **Demo video:** _https://youtu.be/_KvXxE2QPC4?si=yda9T4WSkhwNM1zI_
-- **Live app:** _https://um-bra.app/_
-- **Contact:** _https://x.com/UmbraOnCanton_
+- **Demo video:** https://youtu.be/_KvXxE2QPC4
+- **Live app:** https://um-bra.app/
+- **Contact:** https://x.com/UmbraOnCanton
 
 ---
 
@@ -65,7 +65,8 @@ uniquely offers.
 The headline engineering result is **P5**: a working CIP-56 allocation-based atomic swap, in
 both operator mode and trust-no-operator signed mode, on live DevNet.
 
-P5 is also **sound**: the atomic transfer refuses to execute unless each party genuinely holds its leg — verified by headless tests, so the guarantee holds without a live ledger.
+P5 is also **sound**: the atomic transfer refuses to execute unless each party genuinely holds
+its leg — verified by headless tests, so the guarantee holds even without a live ledger.
 
 ---
 
@@ -98,7 +99,8 @@ umbra/
   daml/
     Umbra.daml         Core market contracts + custom atomic settlement engine
     UmbraDvP.daml      CIP-56 allocation-based atomic DvP (standards-compliant path)
-    UmbraTest.daml     Demo init script
+    UmbraTest.daml     Demo init script + privacy/settlement test scenarios
+    UmbraDvpTest.daml  Headless CIP-56 DvP tests: atomic settlement + soundness guards
   backend/
     server.js          Express API over the Canton JSON Ledger API v2
     token.js           OAuth client-credentials auth + ledger fetch with 401 retry
@@ -121,10 +123,15 @@ umbra/
 
 **`UmbraDvP.daml`** — the CIP-56 allocation-based settlement path (P5):
 
-- `CashAllocation`, `InstrumentAllocation` — each implements the Splice `Allocation` interface, with **signatory = the sending party**, so each party authorizes its own leg. The operator never forges authority.
+- `CashAllocation`, `InstrumentAllocation` — each implements the Splice `Allocation` interface, with **signatory = the sending party**, so each party authorizes its own leg. The operator never forges authority. Each execute leg asserts the holder actually holds enough before transferring (P6).
 - `DvPProposal` -> `DvPDealerAccepted` -> `DvPSettlement` — a propose/accept choreography. Because the final `DvPSettlement` is signed by requester, dealer, **and** executor, its `ExecuteDvP` choice carries enough authority to drive the nested `Allocation_ExecuteTransfer` on both legs atomically. This solves the authority-propagation wall that a naive flat multi-party submission hits.
 
 > **Why the choreography matters:** `Allocation_ExecuteTransfer` requires the authority of executor, sender, **and** receiver. A flat `actAs: [a, b, c]` submission does **not** propagate that authority through a nested interface exercise. The propose/accept flow gathers each party's signature onto a single jointly-signed contract whose choice then carries all the authority required for the atomic transfer.
+
+**`UmbraDvpTest.daml`** — headless proofs for the CIP-56 path:
+
+- `umbraDvpAtomicSettles` — drives the full allocation choreography and asserts both legs move (P5).
+- `umbraDvpRejectsUnderfundedCash` / `umbraDvpRejectsUndeliveredInstrument` — prove an underfunded buyer or under-delivering dealer cannot settle (P6). These run under `daml test`, so the soundness guarantee holds even without a live ledger.
 
 ### Backend (`server.js`)
 
@@ -161,26 +168,51 @@ A single-file React terminal (loaded via CDN — no build step) that renders all
 
 ### 1. Configure environment
 
-Create `backend/.env` (never commit this):
+Create `backend/.env` (never commit this — it is gitignored):
 
 ```
+# Auth (OAuth client-credentials against the DevNet validator)
 AUTH_URL=https://auth.sandbox.fivenorth.io/application/o/token/
 CLIENT_ID=validator-devnet-m2m
 CLIENT_SECRET=your_secret_here
 AUDIENCE=validator-devnet-m2m
 SCOPE=daml_ledger_api
+
+# Ledger
 LEDGER_API=https://ledger-api.validator.devnet.sandbox.fivenorth.io
+LEDGER_USER_ID=your_ledger_user_id
 SYNCHRONIZER_ID=global-domain::1220...
+
+# Package resolution — MUST match the deployed package name
+PACKAGE_NAME=umbra-v2
+PACKAGE_ID=deployed_package_id_optional
+
+# Parties
 REQUESTER=Requester::1220...
 DEALER1=Dealer1::1220...
 DEALER2=Dealer2::1220...
+OBSERVER=Observer::1220...
+
+# Optional
+PORT=4000
+SIGNED_MODE=false
 ```
+
+> **`PACKAGE_NAME=umbra-v2` is required** — the backend resolves all templates by package
+> name (`#umbra-v2:...`). It must match the name in `daml.yaml` and the package deployed to
+> the ledger, or template resolution will fail.
 
 ### 2. Build the Daml model
 
 ```
 export PATH="$HOME/.daml/bin:$PATH"
 daml build
+```
+
+This produces `.daml/dist/umbra-v2-0.1.0.dar`. Run the test suite to verify the guarantees:
+
+```
+daml test
 ```
 
 ### 3. Run the backend (serves the API and the UI)
