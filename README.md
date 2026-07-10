@@ -21,9 +21,9 @@ and CIP-56 standard settlement all working against real ledger infrastructure.
 
 ## Links
 
-- **Demo video:** _link_
+- **Demo video:** _https://youtu.be/_KvXxE2QPC4?si=yda9T4WSkhwNM1zI_
 - **Live app:** _https://um-bra.app/_
-- **Contact / socials:** _link_
+- **Contact:** _https://x.com/UmbraOnCanton_
 
 ---
 
