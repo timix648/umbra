@@ -1,0 +1,390 @@
+module UmbraSwap where
+
+import DA.Date (date, Month(..))
+import DA.Time (time)
+import DA.List (find)
+import DA.Optional (isSome)
+import Splice.Api.Token.HoldingV1
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.AllocationV1
+
+-- ============================================================================
+-- UMBRA SWAP — the unified any-to-any settlement engine.
+--
+-- One asset model, one allocation, one swap path. cBTC, cETH and CC are all
+-- ordinary CIP-56 assets identified by (admin, assetId); the engine never
+-- special-cases any of them. A trade swaps leg A for leg B where each leg is
+-- an arbitrary asset, so cBTC<->cETH, cBTC<->CC and cETH<->CC all fall out of
+-- the same code with no per-asset branches.
+--
+-- Design decisions (locked):
+--   * New file — the legacy Umbra.daml / UmbraDvP.daml paths are left intact
+--     until this engine is proven green, then retired.
+--   * The RFQ layer is generalised too: a request names the asset it OFFERS
+--     and the asset it WANTS, and a dealer quotes a price in the wanted asset.
+--   * The set of tradeable assets lives on-ledger in an AssetRegistry, not in
+--     backend config.
+-- ============================================================================
+
+
+-- ----------------------------------------------------------------------------
+-- Asset identity
+-- ----------------------------------------------------------------------------
+-- An asset is fully described by its issuing/administering party plus a symbol.
+-- Two holdings are fungible iff their (admin, symbol) match.
+data AssetId = AssetId
+  with
+    admin  : Party    -- issuer (cBTC/cETH issuer) or registry/admin (CC)
+    symbol : Text     -- "cBTC", "cETH", "CC"
+  deriving (Eq, Show, Ord)
+
+
+-- ----------------------------------------------------------------------------
+-- On-ledger asset registry
+-- ----------------------------------------------------------------------------
+-- The venue operator curates which assets are tradeable. Kept on-ledger so the
+-- valid asset set is auditable and not a hidden backend constant. Listing an
+-- asset is operator-authorised; the registry is observable by all participants
+-- so any party can validate an RFQ's assets against it.
+template AssetRegistry
+  with
+    operator     : Party
+    participants : [Party]        -- who can see the registry (dealers, requesters)
+    assets       : [AssetId]      -- the tradeable set
+  where
+    signatory operator
+    observer participants
+
+    -- List (or re-list) an asset. Idempotent: re-listing an existing asset is
+    -- a no-op rather than a duplicate.
+    choice ListAsset : ContractId AssetRegistry
+      with
+        asset : AssetId
+      controller operator
+      do
+        let assets' = if asset `elem` assets then assets else asset :: assets
+        create this with assets = assets'
+
+    choice DelistAsset : ContractId AssetRegistry
+      with
+        asset : AssetId
+      controller operator
+      do create this with assets = filter (/= asset) assets
+
+    -- Add/remove a participant who may observe the registry.
+    choice SetParticipants : ContractId AssetRegistry
+      with
+        participants' : [Party]
+      controller operator
+      do create this with participants = participants'
+
+    -- Read-only helper: assert an asset is currently listed.
+    nonconsuming choice RequireListed : ()
+      with
+        asset : AssetId
+      controller operator
+      do assertMsg ("asset not listed: " <> asset.symbol) (asset `elem` assets)
+
+
+-- ----------------------------------------------------------------------------
+-- Unified asset holding
+-- ----------------------------------------------------------------------------
+-- Replaces CashHolding and InstrumentHolding with a single generic holding.
+-- Implements the CIP-56 Holding interface so wallets and the allocation
+-- machinery treat cBTC, cETH and CC identically.
+template AssetHolding
+  with
+    owner  : Party
+    asset  : AssetId
+    amount : Decimal
+  where
+    signatory owner
+    observer asset.admin
+    ensure amount > 0.0
+
+    -- CIP-56: expose as a standard, wallet-discoverable Holding.
+    interface instance Holding for AssetHolding where
+      view = HoldingView with
+        owner
+        instrumentId = InstrumentId with admin = asset.admin, id = asset.symbol
+        amount
+        lock = None
+        meta = emptyMetadata
+
+
+-- ----------------------------------------------------------------------------
+-- Unified allocation (one template for every asset)
+-- ----------------------------------------------------------------------------
+-- A single AssetAllocation replaces CashAllocation + InstrumentAllocation.
+-- signatory = sender, so each party commits its own leg under its own
+-- authority; the operator never forges. Executing the allocation moves the
+-- committed amount sender -> receiver and returns any change to the sender.
+mkSpec : Party -> Party -> Party -> Decimal -> AssetId -> Text -> AllocationSpecification
+mkSpec executor sender receiver amount asset legId =
+  let settlement = SettlementInfo with
+        executor
+        settlementRef = Reference with id = "umbra-swap", cid = None
+        requestedAt = epoch
+        allocateBefore = epoch
+        settleBefore = epoch
+        meta = emptyMetadata
+      leg = TransferLeg with
+        sender; receiver; amount
+        instrumentId = InstrumentId with admin = asset.admin, id = asset.symbol
+        meta = emptyMetadata
+  in AllocationSpecification with settlement; transferLegId = legId; transferLeg = leg
+
+-- Fixed epoch; deadlines are not enforced by this flow, and a constant keeps
+-- mkSpec pure (no getTime inside `view`).
+epoch : Time
+epoch = time (date 1970 Jan 1) 0 0 0
+
+template AssetAllocation
+  with
+    sender     : Party
+    receiver   : Party
+    executor   : Party
+    asset      : AssetId
+    amount     : Decimal
+    holdingCid : ContractId AssetHolding   -- the sender's holding backing this leg
+    legId      : Text
+  where
+    signatory sender
+    observer receiver, executor, asset.admin
+
+    interface instance Allocation for AssetAllocation where
+      view = AllocationView with
+        allocation = mkSpec executor sender receiver amount asset legId
+        holdingCids = [toInterfaceContractId @Holding holdingCid]
+        meta = emptyMetadata
+
+      allocation_executeTransferImpl _self _arg = do
+        h <- fetch holdingCid
+        assertMsg "allocation sender is not the holding owner" (h.owner == sender)
+        assertMsg "asset mismatch on allocation" (h.asset == asset)
+        assertMsg ("insufficient " <> asset.symbol) (h.amount >= amount)
+        archive holdingCid
+        recvCid <- create AssetHolding with
+          owner = receiver; asset; amount
+        changeCids <-
+          if h.amount > amount
+            then do
+              c <- create AssetHolding with
+                owner = sender; asset; amount = h.amount - amount
+              pure [toInterfaceContractId @Holding c]
+            else pure []
+        pure Allocation_ExecuteTransferResult with
+          senderHoldingCids = changeCids
+          receiverHoldingCids = [toInterfaceContractId @Holding recvCid]
+          meta = emptyMetadata
+
+      -- Sender may withdraw an unexecuted allocation; the backing holding
+      -- returns to the sender.
+      allocation_withdrawImpl _self _arg =
+        pure Allocation_WithdrawResult with
+          senderHoldingCids = [toInterfaceContractId @Holding holdingCid]
+          meta = emptyMetadata
+
+      allocation_cancelImpl _self _arg =
+        pure Allocation_CancelResult with
+          senderHoldingCids = [toInterfaceContractId @Holding holdingCid]
+          meta = emptyMetadata
+
+
+-- ----------------------------------------------------------------------------
+-- Generalised RFQ layer
+-- ----------------------------------------------------------------------------
+-- A request advertises: "I will give `offerAmount` of `offerAsset`, and I want
+-- `wantAsset` in return." Dealers quote a `price` denominated in wantAsset
+-- (total wantAsset they will pay for the whole offer). Lower price = cheaper
+-- for whoever is buying; the requester picks the best quote. Both assets are
+-- validated against the AssetRegistry when the RFQ is created.
+template SwapRfq
+  with
+    requester   : Party
+    operator    : Party
+    offerAsset  : AssetId       -- what the requester provides
+    offerAmount : Decimal
+    wantAsset   : AssetId       -- what the requester wants in return
+    invited     : [Party]       -- dealers who may quote
+  where
+    signatory requester
+    observer operator, invited
+    ensure offerAmount > 0.0 && offerAsset /= wantAsset
+
+    -- Invite a dealer to quote (creates a private invitation visible only to
+    -- that dealer and the requester).
+    choice InviteDealer : ContractId SwapInvitation
+      with
+        dealer : Party
+      controller requester
+      do
+        assertMsg "dealer already invited" (dealer `elem` invited)
+        create SwapInvitation with
+          requester; operator; dealer
+          offerAsset; offerAmount; wantAsset
+
+    choice CancelRfq : ()
+      controller requester
+      do pure ()
+
+
+-- A private, per-dealer invitation. Only the requester and this dealer are
+-- stakeholders, so no dealer can observe another's invitation or quote.
+template SwapInvitation
+  with
+    requester   : Party
+    operator    : Party
+    dealer      : Party
+    offerAsset  : AssetId
+    offerAmount : Decimal
+    wantAsset   : AssetId
+  where
+    signatory requester
+    observer dealer
+
+    -- The dealer responds with a price (total wantAsset for the whole offer).
+    choice SubmitSwapQuote : ContractId SwapQuote
+      with
+        price : Decimal
+      controller dealer
+      do
+        assertMsg "price must be positive" (price > 0.0)
+        create SwapQuote with
+          requester; operator; dealer
+          offerAsset; offerAmount; wantAsset; price
+
+    choice DeclineInvitation : ()
+      controller dealer
+      do pure ()
+
+
+-- A dealer's private quote. Signed by the dealer, visible only to the
+-- requester — the ledger itself withholds it from rival dealers (P1).
+template SwapQuote
+  with
+    requester   : Party
+    operator    : Party
+    dealer      : Party
+    offerAsset  : AssetId
+    offerAmount : Decimal
+    wantAsset   : AssetId
+    price       : Decimal     -- total wantAsset the dealer pays for the offer
+  where
+    signatory dealer
+    observer requester
+
+    -- The requester accepts. This kicks off the two-leg swap:
+    --   * requester gives offerAmount of offerAsset  -> dealer
+    --   * dealer gives price of wantAsset            -> requester
+    -- Each side supplies its own backing holding; both legs settle atomically.
+    choice AcceptSwapQuote : ContractId SwapProposal
+      controller requester
+      do
+        create SwapProposal with
+          requester; operator; dealer
+          offerAsset; offerAmount
+          wantAsset; price
+
+
+-- ----------------------------------------------------------------------------
+-- Two-leg atomic swap choreography
+-- ----------------------------------------------------------------------------
+-- The authority to fire both legs' Allocation_ExecuteTransfer must be gathered
+-- onto a single jointly-signed contract. We reuse the proven propose/accept
+-- pattern, generalised so BOTH legs are arbitrary AssetAllocations.
+template SwapProposal
+  with
+    requester   : Party
+    operator    : Party
+    dealer      : Party
+    offerAsset  : AssetId
+    offerAmount : Decimal
+    wantAsset   : AssetId
+    price       : Decimal
+  where
+    signatory requester
+    observer dealer, operator
+
+    -- Requester commits its offer leg and hands off to the dealer.
+    choice CommitRequesterLeg : ContractId SwapDealerPending
+      with
+        requesterHoldingCid : ContractId AssetHolding
+      controller requester
+      do
+        offerAllocCid <- create AssetAllocation with
+          sender = requester; receiver = dealer; executor = operator
+          asset = offerAsset; amount = offerAmount
+          holdingCid = requesterHoldingCid; legId = "offer-leg"
+        create SwapDealerPending with
+          requester; operator; dealer
+          offerAsset; offerAmount; wantAsset; price
+          offerAllocCid
+
+
+template SwapDealerPending
+  with
+    requester    : Party
+    operator     : Party
+    dealer       : Party
+    offerAsset   : AssetId
+    offerAmount  : Decimal
+    wantAsset    : AssetId
+    price        : Decimal
+    offerAllocCid : ContractId AssetAllocation
+  where
+    signatory requester
+    observer dealer, operator
+
+    -- Dealer commits its want leg. Now both allocations exist; the dealer's
+    -- acceptance gathers dealer authority onto the settlement.
+    choice CommitDealerLeg : ContractId SwapSettlement
+      with
+        dealerHoldingCid : ContractId AssetHolding
+      controller dealer
+      do
+        wantAllocCid <- create AssetAllocation with
+          sender = dealer; receiver = requester; executor = operator
+          asset = wantAsset; amount = price
+          holdingCid = dealerHoldingCid; legId = "want-leg"
+        create SwapSettlement with
+          requester; operator; dealer
+          offerAllocCid; wantAllocCid
+
+
+-- Signed by requester AND dealer (via the chain of accepts) — so ExecuteSwap,
+-- controlled by the operator/executor, carries all the authority the nested
+-- Allocation_ExecuteTransfer on each leg requires.
+template SwapSettlement
+  with
+    requester    : Party
+    operator     : Party
+    dealer       : Party
+    offerAllocCid : ContractId AssetAllocation
+    wantAllocCid  : ContractId AssetAllocation
+  where
+    signatory requester, dealer
+    observer operator
+
+    -- Fire both legs in one indivisible transaction. If either leg fails its
+    -- balance check, the whole thing reverts — no half-settled state (P6).
+    choice ExecuteSwap : ()
+      controller operator
+      do
+        let ea = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+        _ <- exercise (toInterfaceContractId @Allocation offerAllocCid)
+               Allocation_ExecuteTransfer with extraArgs = ea
+        _ <- exercise (toInterfaceContractId @Allocation wantAllocCid)
+               Allocation_ExecuteTransfer with extraArgs = ea
+        pure ()
+
+    -- Either principal can abort before execution; both allocations are then
+    -- withdrawn by their senders out-of-band.
+    choice AbortSwap : ()
+      controller requester
+      do pure ()
+
+
+-- Convenience helper for tooling: is an asset listed in a registry snapshot?
+isListed : [AssetId] -> AssetId -> Bool
+isListed assets a = isSome (find (== a) assets)

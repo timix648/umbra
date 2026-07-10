@@ -1,0 +1,185 @@
+module UmbraSwapTest where
+
+import UmbraSwap
+import Daml.Script
+import DA.Assert ((===))
+
+-- ============================================================================
+-- Proofs for the unified any-to-any swap engine.
+--
+-- The same SwapProposal -> CommitRequesterLeg -> CommitDealerLeg ->
+-- ExecuteSwap choreography settles EVERY asset pairing with no per-asset
+-- branch:  cBTC<->CC, cETH<->CC, and the headline cBTC<->cETH (both legs
+-- non-cash — impossible in the old instrument-vs-cash engine).
+--
+-- Also proves the generalised soundness guard (P6): a swap where either side
+-- cannot cover its leg aborts wholesale, leaving no half-settled state.
+-- ============================================================================
+
+-- Parties + the three assets used across the tests.
+data World = World
+  with
+    operator  : Party
+    requester : Party
+    dealer    : Party
+    cbtc      : AssetId   -- admin = btcIssuer
+    ceth      : AssetId   -- admin = ethIssuer
+    cc        : AssetId   -- admin = ccAdmin
+
+setup : Script World
+setup = do
+  operator  <- allocateParty "Operator"
+  requester <- allocateParty "Requester"
+  dealer    <- allocateParty "Dealer"
+  btcIssuer <- allocateParty "BitSafe"
+  ethIssuer <- allocateParty "OnRails"
+  ccAdmin   <- allocateParty "CantonCoin"
+  pure World with
+    operator; requester; dealer
+    cbtc = AssetId with admin = btcIssuer, symbol = "cBTC"
+    ceth = AssetId with admin = ethIssuer, symbol = "cETH"
+    cc   = AssetId with admin = ccAdmin,   symbol = "CC"
+
+-- Mint a holding of `asset` for `owner` (admin co-signs, as in production
+-- issuance).
+mint : Party -> AssetId -> Decimal -> Script (ContractId AssetHolding)
+mint owner asset amount =
+  submitMulti [owner, asset.admin] [] do
+    createCmd AssetHolding with owner; asset; amount
+
+-- Drive the full swap: requester gives `offerAmt` of `offerAsset`, dealer
+-- gives `wantAmt` of `wantAsset`, settled atomically. Returns unit; callers
+-- assert on resulting holdings.
+runSwap
+  :  World
+  -> AssetId -> Decimal            -- offer leg (requester -> dealer)
+  -> AssetId -> Decimal            -- want leg  (dealer -> requester)
+  -> ContractId AssetHolding       -- requester's backing holding
+  -> ContractId AssetHolding       -- dealer's backing holding
+  -> Script ()
+runSwap w offerAsset offerAmt wantAsset wantAmt reqHolding dealerHolding = do
+  -- RFQ front half (generalised): requester offers, invites the dealer.
+  rfq <- submit w.requester do
+    createCmd SwapRfq with
+      requester = w.requester; operator = w.operator
+      offerAsset; offerAmount = offerAmt
+      wantAsset; invited = [w.dealer]
+  inv <- submit w.requester do exerciseCmd rfq InviteDealer with dealer = w.dealer
+  quote <- submit w.dealer do exerciseCmd inv SubmitSwapQuote with price = wantAmt
+  prop <- submit w.requester do exerciseCmd quote AcceptSwapQuote
+
+  -- Both parties commit their own legs, then the operator fires the swap.
+  pending <- submit w.requester do
+    exerciseCmd prop CommitRequesterLeg with requesterHoldingCid = reqHolding
+  settlement <- submit w.dealer do
+    exerciseCmd pending CommitDealerLeg with dealerHoldingCid = dealerHolding
+  -- Operator executes; the settlement is signed by requester + dealer, so the
+  -- nested Allocation_ExecuteTransfer on both legs has the authority it needs.
+  submitMulti [w.operator] [w.requester, w.dealer] do exerciseCmd settlement ExecuteSwap
+
+-- Assert a party holds exactly one holding of `asset` with `amount`.
+assertHolds : Party -> AssetId -> Decimal -> Script ()
+assertHolds owner asset amount = do
+  hs <- query @AssetHolding owner
+  let matching = filter (\(_, h) -> h.asset == asset && h.owner == owner) hs
+  assertMsg (show asset.symbol <> " holding count") (length matching == 1)
+  case matching of
+    [(_, h)] -> h.amount === amount
+    _ -> abort "unexpected holdings"
+
+
+-- ---- TEST 1: cBTC <-> CC (asset for cash) ----
+swapCbtcForCc : Script ()
+swapCbtcForCc = do
+  w <- setup
+  -- requester offers 1 cBTC, wants 100 CC; dealer pays 100 CC.
+  reqH <- mint w.requester w.cbtc 1.0
+  dlrH <- mint w.dealer    w.cc   100.0
+  runSwap w w.cbtc 1.0 w.cc 100.0 reqH dlrH
+  -- After: dealer holds the cBTC, requester holds the CC.
+  assertHolds w.dealer    w.cbtc 1.0
+  assertHolds w.requester w.cc   100.0
+  pure ()
+
+-- ---- TEST 2: cETH <-> CC ----
+swapCethForCc : Script ()
+swapCethForCc = do
+  w <- setup
+  reqH <- mint w.requester w.ceth 10.0
+  dlrH <- mint w.dealer    w.cc   500.0
+  runSwap w w.ceth 10.0 w.cc 500.0 reqH dlrH
+  assertHolds w.dealer    w.ceth 10.0
+  assertHolds w.requester w.cc   500.0
+  pure ()
+
+-- ---- TEST 3: cBTC <-> cETH (the headline cross-asset swap) ----
+-- Both legs are non-cash assets; the old instrument-vs-cash engine could not
+-- express this at all. Here it is just another pairing.
+swapCbtcForCeth : Script ()
+swapCbtcForCeth = do
+  w <- setup
+  reqH <- mint w.requester w.cbtc 2.0
+  dlrH <- mint w.dealer    w.ceth 30.0
+  runSwap w w.cbtc 2.0 w.ceth 30.0 reqH dlrH
+  assertHolds w.dealer    w.cbtc 2.0
+  assertHolds w.requester w.ceth 30.0
+  pure ()
+
+-- ---- TEST 4: change is returned when a leg is over-funded ----
+swapReturnsChange : Script ()
+swapReturnsChange = do
+  w <- setup
+  -- requester offers 1 cBTC but backs it with a 3 cBTC holding -> 2 back.
+  reqH <- mint w.requester w.cbtc 3.0
+  dlrH <- mint w.dealer    w.cc   100.0
+  runSwap w w.cbtc 1.0 w.cc 100.0 reqH dlrH
+  assertHolds w.dealer    w.cbtc 1.0     -- dealer got exactly 1
+  assertHolds w.requester w.cbtc 2.0     -- requester got 2 cBTC change
+  assertHolds w.requester w.cc   100.0   -- and the 100 CC proceeds
+  pure ()
+
+-- ---- TEST 5: underfunded leg rejects wholesale (generalised P6) ----
+swapRejectsUnderfunded : Script ()
+swapRejectsUnderfunded = do
+  w <- setup
+  -- dealer only holds 99 CC but must deliver 100 -> ExecuteSwap must abort.
+  reqH <- mint w.requester w.cbtc 1.0
+  dlrH <- mint w.dealer    w.cc   99.0
+  -- walk to the settlement, then expect ExecuteSwap to fail.
+  rfq <- submit w.requester do
+    createCmd SwapRfq with
+      requester = w.requester; operator = w.operator
+      offerAsset = w.cbtc; offerAmount = 1.0
+      wantAsset = w.cc; invited = [w.dealer]
+  inv <- submit w.requester do exerciseCmd rfq InviteDealer with dealer = w.dealer
+  quote <- submit w.dealer do exerciseCmd inv SubmitSwapQuote with price = 100.0
+  prop <- submit w.requester do exerciseCmd quote AcceptSwapQuote
+  pending <- submit w.requester do
+    exerciseCmd prop CommitRequesterLeg with requesterHoldingCid = reqH
+  settlement <- submit w.dealer do
+    exerciseCmd pending CommitDealerLeg with dealerHoldingCid = dlrH
+  -- The dealer's leg can't cover 100 CC from a 99 CC holding -> whole tx aborts.
+  submitMultiMustFail [w.operator] [w.requester, w.dealer] do exerciseCmd settlement ExecuteSwap
+  pure ()
+
+-- ---- TEST 6: on-ledger registry lists/validates assets ----
+registryListsAssets : Script ()
+registryListsAssets = do
+  w <- setup
+  reg <- submit w.operator do
+    createCmd AssetRegistry with
+      operator = w.operator
+      participants = [w.requester, w.dealer]
+      assets = []
+  reg <- submit w.operator do exerciseCmd reg ListAsset with asset = w.cbtc
+  reg <- submit w.operator do exerciseCmd reg ListAsset with asset = w.ceth
+  reg <- submit w.operator do exerciseCmd reg ListAsset with asset = w.cc
+  -- re-listing is idempotent (no duplicate)
+  reg <- submit w.operator do exerciseCmd reg ListAsset with asset = w.cbtc
+  Some r <- queryContractId w.operator reg
+  assertMsg "three assets listed" (length r.assets == 3)
+  -- validation passes for a listed asset, fails for an unlisted one
+  submit w.operator do exerciseCmd reg RequireListed with asset = w.cbtc
+  bogus <- pure (AssetId with admin = w.operator, symbol = "FAKE")
+  submitMustFail w.operator do exerciseCmd reg RequireListed with asset = bogus
+  pure ()
