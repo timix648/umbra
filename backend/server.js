@@ -1111,19 +1111,35 @@ async function marketUsd() {
   return usd;
 }
 
+// per-pair price history so the sparkline follows the pair actually being traded
+const seriesFor = {};
+function pushSeries(pair, v) {
+  if (!seriesFor[pair]) seriesFor[pair] = [];
+  const a = seriesFor[pair];
+  if (!a.length || a[a.length - 1] !== v) a.push(v);
+  if (a.length > 60) a.shift();
+  return a;
+}
+
 app.get("/api/market/rate", async (req, res) => {
   const base = String(req.query.base || "cBTC");
   const quote = String(req.query.quote || "cETH");
+  const pair = base + "/" + quote;
   try {
     const usd = await marketUsd();
     const b = usd[base], q = usd[quote];
+    // CC has no reliable public price. We say so rather than invent one.
     if (!b || !q) {
-      return res.json({ ok: true, base, quote, mid: null, usd, series: [], at: mkt.at,
-                        note: "no reference price for this pair" });
+      return res.json({
+        ok: true, base, quote, mid: null, usd, series: [], at: mkt.at,
+        note: "No market reference for " + pair + " \u2014 " +
+              (!usd[base] ? base : quote) + " has no reliable public price."
+      });
     }
-    res.json({ ok: true, base, quote, mid: b / q, usd, series: mkt.series.slice(), at: mkt.at });
+    const mid = b / q;
+    res.json({ ok: true, base, quote, mid, usd, series: pushSeries(pair, mid).slice(), at: mkt.at });
   } catch (e) {
-    res.json({ ok: false, base, quote, mid: null, error: e.message });
+    res.json({ ok: false, base, quote, mid: null, usd: null, series: [], error: e.message });
   }
 });
 

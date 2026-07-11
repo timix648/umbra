@@ -325,6 +325,133 @@
   .whg-sub b{color:var(--text);font-weight:600}
   .mod-h .lk{margin-right:7px;opacity:.7}
 
+  /* holdings value */
+  .hl-tot{display:flex;align-items:baseline;justify-content:space-between;padding:0 2px 12px;
+    margin-bottom:6px;border-bottom:1px solid var(--line)}
+  .hl-tot span{font:600 8.5px/1 ui-monospace,monospace;letter-spacing:.16em;
+    text-transform:uppercase;color:var(--dim)}
+  .hl-tot b{font:650 19px/1 ui-monospace,monospace;font-variant-numeric:tabular-nums;color:var(--text)}
+  .hl-v{text-align:right}
+  .hl-u{margin-top:3px;font:500 10px/1 ui-monospace,monospace;color:var(--dim)}
+  .hold-u{margin-top:3px;font:500 10px/1 ui-monospace,monospace;color:var(--dim)}
+
+  /* light mode: the new desks were dark-only. these surfaces are token-driven now. */
+  [data-theme="light"] .mod,
+  [data-theme="light"] .lgn-role{background:linear-gradient(180deg,#FFFFFF 0%,#F4F6FA 100%);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.9), 0 1px 2px rgba(10,10,20,.06), 0 6px 18px rgba(10,10,20,.05)}
+  [data-theme="light"] .lgn-role.lead{background:linear-gradient(180deg,#FBF9FF 0%,#F2EEFC 100%)}
+  [data-theme="light"] .ask,
+  [data-theme="light"] .hold-i,
+  [data-theme="light"] .rq-chip,
+  [data-theme="light"] .rq-stat,
+  [data-theme="light"] .dq{background:var(--bg2)}
+  [data-theme="light"] .mod-h{border-bottom-color:var(--line)}
+  [data-theme="light"] .btn.hold{background:var(--bg3);color:var(--mute)}
+  [data-theme="light"] .btn.prime{color:#fff}
+  [data-theme="light"] .hl-r + .hl-r,
+  [data-theme="light"] .iv-r,
+  [data-theme="light"] .lgn-role .lgn-sees{border-color:var(--line)}
+  [data-theme="light"] .qm .up{color:#15803D}
+  [data-theme="light"] .prt-note.ok{color:var(--accent2)}
+
+  /* ===== REQUESTER DESK ===== */
+  .rqk{display:grid;grid-template-columns:1fr 380px;gap:18px;padding:18px 44px;width:100%;
+    align-items:stretch;height:calc(100vh - 50px);overflow:hidden}
+  @media(max-width:1080px){.rqk{grid-template-columns:1fr;height:auto;overflow:visible}}
+
+  /* holdings chips in the header */
+  .rq-chips{display:flex;gap:7px}
+  .rq-chip{display:flex;align-items:center;gap:6px;padding:5px 10px;border:1px solid var(--line2);
+    border-radius:20px;background:var(--bg2);font:600 10.5px/1 ui-monospace,monospace}
+  .rq-chip b{color:var(--text);font-weight:700}
+  .rq-chip span{color:var(--dim);font-size:9px;letter-spacing:.06em}
+  @media(max-width:1180px){.rq-chips{display:none}}
+
+  /* the live request header */
+  .rq-live{width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block;
+    margin-right:8px;box-shadow:0 0 0 0 var(--accent);animation:lp 2.2s infinite}
+  .rq-close{font:600 9px/1 ui-monospace,monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+  .rq-close b{margin-left:7px;font-size:14px;letter-spacing:.02em;color:var(--text)}
+  .rq-close.warn b{color:var(--amber)}
+  .rq-legs{display:flex;align-items:center;gap:22px}
+  .rq-leg{display:flex;align-items:center;gap:12px}
+  .rq-lab{font:600 8.5px/1 ui-monospace,monospace;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--dim);margin-bottom:6px}
+  .rq-amt{font:650 26px/1 ui-monospace,monospace;font-variant-numeric:tabular-nums;color:var(--text)}
+  .rq-amt span{margin-left:7px;font-size:11px;font-weight:600;color:var(--mute)}
+  .rq-amt.big{font-size:22px;letter-spacing:.02em}
+  .rq-for{display:flex;flex-direction:column;align-items:center;gap:5px}
+  .rq-for span:first-child{font:600 8px/1 ui-monospace,monospace;letter-spacing:.16em;
+    text-transform:uppercase;color:var(--dim)}
+  .rq-swap{font:400 15px/1 ui-monospace,monospace;color:var(--accent)}
+  .rq-stats{display:flex;gap:0;margin-left:auto;border:1px solid var(--line2);border-radius:4px;overflow:hidden}
+  .rq-stat{padding:10px 16px;background:var(--bg2)}
+  .rq-stat + .rq-stat{border-left:1px solid var(--line2)}
+  .rq-sv{font:650 15px/1 ui-monospace,monospace;color:var(--text)}
+  .rq-sv.up{color:#4ADE80} .rq-sv.dn{color:var(--red)}
+  .rq-blind{margin-top:16px;padding:9px 12px;border:1px solid var(--accentline);border-radius:4px;
+    background:var(--accentbg);font:400 11.5px/1.5 ui-sans-serif,system-ui,sans-serif;color:var(--accent2)}
+
+  /* the quote board */
+  .rq-note{font:600 9px/1 ui-monospace,monospace;letter-spacing:.12em;color:var(--dim)}
+  .rq-qm td{height:auto;padding:12px 14px;vertical-align:middle}
+  .rq-qm th{padding:9px 14px}
+  .rq-d{display:flex;align-items:center;gap:10px}
+  .rq-dd{width:8px;height:8px;border-radius:2px;flex:none}
+  .rq-dn{font:600 12.5px/1.2 ui-sans-serif,system-ui,sans-serif;color:var(--text)}
+  .rq-ds{margin-top:3px;font:500 9.5px/1 ui-monospace,monospace;color:var(--dim)}
+  .rq-bp{margin-top:3px;font:600 9px/1 ui-monospace,monospace;letter-spacing:.08em;color:var(--accent)}
+  .rq-px{font:650 17px/1 ui-monospace,monospace;color:var(--text)}
+  .rq-pu{margin-top:3px;font:500 9px/1 ui-monospace,monospace;color:var(--dim)}
+  .qm .up{color:#4ADE80} .qm .dn{color:var(--red)} .qm .warn{color:var(--amber)}
+
+  /* hold-to-award */
+  .btn.hold{position:relative;overflow:hidden;min-width:118px;padding:9px 14px;
+    border:1px solid var(--line2);background:var(--bg3);color:var(--mute);
+    font:600 10.5px/1 ui-monospace,monospace;letter-spacing:.04em;
+    transition:border-color .14s,color .14s,background .14s}
+  .btn.hold:hover{border-color:var(--accentline);color:var(--accent2);background:var(--hover)}
+  .btn.hold.lead{border-color:var(--accent);background:var(--accentbg);color:var(--accent2)}
+  .btn.hold.holding{border-color:var(--accent);color:#0B0714}
+  .hold-fill{position:absolute;left:0;top:0;bottom:0;width:0;
+    background:linear-gradient(90deg,#A883FF,#8B5CF6);transition:width .05s linear;z-index:0}
+  .hold-t{position:relative;z-index:1}
+  .btn.hold:active{transform:none}
+
+  /* dealers who have not priced */
+  .rq-passed{border-top:1px solid var(--line)}
+  .rq-prow{display:flex;align-items:center;gap:10px;padding:11px 14px;opacity:.6}
+  .rq-pn{font:600 12px/1 ui-sans-serif,system-ui,sans-serif;color:var(--mute)}
+  .rq-pb{font:600 8.5px/1 ui-monospace,monospace;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--dim);border:1px solid var(--line2);border-radius:3px;padding:3px 6px}
+  .rq-pt{font:400 11px/1 ui-sans-serif,system-ui,sans-serif;color:var(--dim)}
+
+  /* market reference */
+  .mr-pair{font:600 10px/1 ui-monospace,monospace;color:var(--dim)}
+  .mr-mid{font:650 34px/1 ui-monospace,monospace;font-variant-numeric:tabular-nums;color:var(--text)}
+  .mr-mid span{margin-left:9px;font-size:11px;font-weight:600;color:var(--dim)}
+  .mr-spark{width:100%;height:44px;margin:14px 0 10px;display:block}
+  .mr-spark.empty{height:44px;border-bottom:1px dashed var(--line2)}
+  .mr-foot{display:flex;align-items:center;gap:8px;font:500 10px/1 ui-monospace,monospace;color:var(--dim)}
+
+  /* holdings list */
+  .hl{display:flex;flex-direction:column;gap:2px}
+  .hl-r{display:flex;align-items:center;gap:11px;padding:10px 2px}
+  .hl-r + .hl-r{border-top:1px solid rgba(255,255,255,.045)}
+  .hl-n{flex:1;min-width:0}
+  .hl-s{font:600 12px/1.2 ui-sans-serif,system-ui,sans-serif;color:var(--text)}
+  .hl-x{margin-top:2px;font:400 10px/1 ui-sans-serif,system-ui,sans-serif;color:var(--dim)}
+  .hl-a{font:650 14px/1 ui-monospace,monospace;font-variant-numeric:tabular-nums;color:var(--text)}
+
+  /* invited dealers rail */
+  .iv-r{display:flex;align-items:center;gap:10px;padding:11px 18px;border-bottom:1px solid rgba(255,255,255,.045)}
+  .iv-r:last-child{border-bottom:0}
+  .iv-n{flex:1;font:600 12px/1 ui-sans-serif,system-ui,sans-serif;color:var(--text)}
+  .iv-b{font:600 8.5px/1 ui-monospace,monospace;letter-spacing:.1em;text-transform:uppercase;
+    border-radius:3px;padding:3px 7px}
+  .iv-b.q{color:var(--accent);background:var(--accentbg);border:1px solid var(--accentline)}
+  .iv-b.w{color:var(--dim);background:var(--hover);border:1px solid var(--line2)}
+
   /* ===== 1c DEALER DESK (three-column) ===== */
   /* dsk-fit: the desk is exactly one screen. nothing below the fold. */
   .dsk{display:grid;grid-template-columns:280px 1fr 380px;gap:18px;
@@ -2048,9 +2175,284 @@ function Login({ onPick }) {
           "Venue operations \u2192"))));
 }
 
+// real notional. usd map comes from the price feed; CC has no price -> null.
+const usdOf = (usd, sym, amt) => {
+  const p = usd && usd[sym];
+  if (!p || !isFinite(Number(amt))) return null;
+  return Number(amt) * Number(p);
+};
+const fmtUsd = v => v == null ? null
+  : "$" + v.toLocaleString(undefined, { maximumFractionDigits: v >= 1000 ? 0 : 2 });
+
+// theme, shared by every surface (was stranded in the operator console)
+function useTheme() {
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem("umbra-theme") || "dark"; } catch { return "dark"; }
+  });
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    try { localStorage.setItem("umbra-theme", theme); } catch {}
+  }, [theme]);
+  return [theme, () => setTheme(t => t === "dark" ? "light" : "dark")];
+}
+const ThemeBtn = ({ theme, flip }) => React.createElement("button", {
+  className: "icbtn", title: "Toggle theme", onClick: flip, style: { marginRight: 2 }
+}, theme === "dark" ? "\u2600" : "\u263e");
+
+const DEALER_NAMES = { dealer1: "Meridian Capital", dealer2: "Halcyon Markets" };
+const DEALER_NAME = p => DEALER_NAMES[cleanRole(p)] || cleanRole(p) || "Dealer";
+const ASSET_LONGS = { cBTC: "Bitcoin · Canton", cETH: "Ethereum · Canton", CC: "Canton Coin" };
+const ASSET_LONG = sym => ASSET_LONGS[sym] || sym;
+
+function RequesterDesk(P) {
+  const { meta, signed, onExit, note, rfqs, quotes, holdings, rate, series, usd, rateNote,
+          onCreate, onAward, awarding, awardStep } = P;
+  const [theme, flipTheme] = useTheme();
+
+  const [now, setNow] = React.useState(Date.now());
+  React.useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
+  const [composing, setComposing] = React.useState(false);
+  const [holdOn, setHoldOn] = React.useState(null);   // contractId being held
+  const [holdPct, setHoldPct] = React.useState(0);
+  const holdRef = React.useRef(null);
+
+  const HOLD_MS = 1500;
+  function startHold(q) {
+    if (awarding) return;
+    setHoldOn(q.contractId); setHoldPct(0);
+    const t0 = Date.now();
+    holdRef.current = setInterval(() => {
+      const pct = Math.min(1, (Date.now() - t0) / HOLD_MS);
+      setHoldPct(pct);
+      if (pct >= 1) { clearInterval(holdRef.current); holdRef.current = null; setHoldOn(null); setHoldPct(0); onAward(q); }
+    }, 16);
+  }
+  function cancelHold() {
+    if (holdRef.current) { clearInterval(holdRef.current); holdRef.current = null; }
+    setHoldOn(null); setHoldPct(0);
+  }
+  React.useEffect(() => () => { if (holdRef.current) clearInterval(holdRef.current); }, []);
+
+  function fmt(iso) {
+    if (!iso) return { txt: "\u2014", warn: false, dead: false };
+    const ms = new Date(iso).getTime() - now;
+    if (isNaN(ms)) return { txt: "\u2014", warn: false, dead: false };
+    if (ms <= 0) return { txt: "00:00", warn: true, dead: true };
+    const s = Math.floor(ms / 1000);
+    return { txt: String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0"),
+             warn: ms < 60000, dead: false };
+  }
+
+  const rfq = rfqs[0] || null;                      // the live request
+  const live = rfq ? quotes.filter(q => !fmt(q.payload.validUntil).dead) : [];
+  const ranked = live.slice().sort((a, b) => Number(b.payload.price) - Number(a.payload.price));
+  const invited = rfq ? (rfq.payload.invited || []) : [];
+  const quotedBy = new Set(quotes.map(q => cleanRole(q.payload.dealer)));
+
+  // real market maths — mid comes from the ledgerless price feed; no invented spread
+  const offerAmt = rfq ? Number(rfq.payload.offerAmount) : 0;
+  const mktTotal = (rate != null && offerAmt) ? rate * offerAmt : null;
+  const bps = (px) => (mktTotal ? ((Number(px) - mktTotal) / mktTotal) * 10000 : null);
+  const bestBps = ranked.length ? bps(ranked[0].payload.price) : null;
+
+  const spark = (series && series.length > 1) ? (function () {
+    const w = 300, h = 42, mn = Math.min(...series), mx = Math.max(...series), rg = (mx - mn) || 1;
+    const pts = series.map((v, i) =>
+      (i / (series.length - 1) * w).toFixed(1) + "," + (h - ((v - mn) / rg) * h).toFixed(1)).join(" ");
+    return React.createElement("svg", { className: "mr-spark", viewBox: "0 0 " + w + " " + h, preserveAspectRatio: "none" },
+      React.createElement("polyline", { points: pts, fill: "none", stroke: "var(--accent)", strokeWidth: "1.6", vectorEffect: "non-scaling-stroke" }));
+  })() : React.createElement("div", { className: "mr-spark empty" });
+
+  const cd = rfq ? fmt(rfq.payload.expiresAt) : null;
+
+  const chip = (h) => {
+    const v = fmtUsd(usdOf(usd, h.payload.asset.symbol, h.payload.amount));
+    return React.createElement("div", { className: "rq-chip", key: h.contractId,
+      title: v ? h.payload.asset.symbol + " \u00b7 " + v : h.payload.asset.symbol },
+      React.createElement(AssetIcon, { symbol: h.payload.asset.symbol, size: "sm" }),
+      React.createElement("b", { className: "m" }, Number(h.payload.amount).toLocaleString()),
+      React.createElement("span", null, h.payload.asset.symbol));
+  };
+
+  return React.createElement("div", { className: "prt" },
+
+    React.createElement("header", { className: "prt-bar" },
+      React.createElement("div", { className: "prt-id" },
+        React.createElement("a", { className: "dsk-brand", href: "/", title: "Back to umbra" },
+          React.createElement(Umbrella, null),
+          React.createElement("b", null, "UMBRA"),
+          React.createElement("span", { className: "cx" }, "Blind block auction \u00b7 Requester"))),
+      React.createElement("div", { className: "prt-right" },
+        React.createElement("div", { className: "rq-chips" }, holdings.map(chip)),
+        rfq ? React.createElement("button", { className: "btn sm", onClick: () => setComposing(c => !c) },
+          composing ? "Close" : "New request") : null,
+        React.createElement(ThemeBtn, { theme, flip: flipTheme }),
+        React.createElement("span", { className: "prt-trust " + (signed ? "sg" : "op") }, signed ? "self-signing" : "operator acts"),
+        React.createElement("button", { className: "prt-out", onClick: onExit }, "Sign out"))),
+
+    note ? React.createElement("div", { className: "prt-note " + (note.bad ? "bad" : "ok") }, note.m) : null,
+
+    React.createElement("main", { className: "rqk" },
+
+      React.createElement("div", { className: "dsk-col" },
+
+        (composing || !rfq)
+          ? React.createElement("section", { className: "mod mod-focal" },
+              React.createElement("div", { className: "mod-h" }, React.createElement("h2", null, "New request")),
+              React.createElement("div", { className: "mod-b" },
+                React.createElement(SwapRfqForm, { onCreate: async (f) => { await onCreate(f); setComposing(false); } })))
+          : null,
+
+        rfq ? React.createElement("section", { className: "mod mod-focal rq-head" },
+          React.createElement("div", { className: "mod-h" },
+            React.createElement("h2", null,
+              React.createElement("span", { className: "rq-live" }), "Request for quote \u00b7 live"),
+            React.createElement("span", { className: "rq-close" + (cd.warn ? " warn" : "") },
+              "Responses close ", React.createElement("b", { className: "m" }, cd.txt))),
+          React.createElement("div", { className: "mod-b" },
+            React.createElement("div", { className: "rq-legs" },
+              React.createElement("div", { className: "rq-leg" },
+                React.createElement(AssetIcon, { symbol: rfq.payload.offerAsset.symbol, size: "lg" }),
+                React.createElement("div", null,
+                  React.createElement("div", { className: "rq-lab" }, "You offer"),
+                  React.createElement("div", { className: "rq-amt m" }, offerAmt.toLocaleString(),
+                    React.createElement("span", null, rfq.payload.offerAsset.symbol)))),
+              React.createElement("div", { className: "rq-for" },
+                React.createElement("span", null, "for"),
+                React.createElement("span", { className: "rq-swap" }, "\u21c4")),
+              React.createElement("div", { className: "rq-leg" },
+                React.createElement(AssetIcon, { symbol: rfq.payload.wantAsset.symbol, size: "lg" }),
+                React.createElement("div", null,
+                  React.createElement("div", { className: "rq-lab" }, "You want"),
+                  React.createElement("div", { className: "rq-amt m big" }, rfq.payload.wantAsset.symbol))),
+              React.createElement("div", { className: "rq-stats" },
+                React.createElement("div", { className: "rq-stat" },
+                  React.createElement("div", { className: "rq-lab" }, "Responded"),
+                  React.createElement("div", { className: "rq-sv m" }, quotes.length, " / ", invited.length || "\u2014")),
+                React.createElement("div", { className: "rq-stat" },
+                  React.createElement("div", { className: "rq-lab" }, "Best vs mkt"),
+                  React.createElement("div", { className: "rq-sv m " + (bestBps == null ? "" : bestBps >= 0 ? "up" : "dn") },
+                    bestBps == null ? "\u2014" : (bestBps >= 0 ? "+" : "") + bestBps.toFixed(1) + " bps")))),
+            React.createElement("div", { className: "rq-blind" },
+              "Dealers are cryptographically blind to one another \u2014 no dealer can see a rival\u2019s quote."))) : null,
+
+        React.createElement("section", { className: "mod rq-board" },
+          React.createElement("div", { className: "mod-h" },
+            React.createElement("h2", null, "Incoming quotes"),
+            React.createElement("span", { className: "rq-note" }, "Firm \u00b7 atomic settlement")),
+          React.createElement("div", { className: "mod-b flush" },
+            React.createElement("table", { className: "qm rq-qm" },
+              React.createElement("thead", null, React.createElement("tr", null,
+                React.createElement("th", null, "Dealer"),
+                React.createElement("th", null, "You receive"),
+                React.createElement("th", null, "Implied rate"),
+                React.createElement("th", null, "vs mkt"),
+                React.createElement("th", null, "Expires"),
+                React.createElement("th", null))),
+              React.createElement("tbody", null,
+                ranked.length === 0
+                  ? React.createElement("tr", null, React.createElement("td", { colSpan: 6, className: "waiting" },
+                      rfq ? "Waiting for quotes \u2014 each dealer is pricing blind, unable to see the others."
+                          : "No live request. Create one to invite dealers."))
+                  : ranked.map((q, i) => {
+                      const p = q.payload, best = i === 0;
+                      const b = bps(p.price);
+                      const e = fmt(p.validUntil);
+                      const held = holdOn === q.contractId;
+                      return React.createElement("tr", { key: q.contractId, className: best ? "best" : "" },
+                        React.createElement("td", null,
+                          React.createElement("div", { className: "rq-d" },
+                            React.createElement("span", { className: "rq-dd", style: { background: ROLES[cleanRole(p.dealer)] ? ROLES[cleanRole(p.dealer)].dot : "var(--dim)" } }),
+                            React.createElement("div", null,
+                              React.createElement("div", { className: "rq-dn" }, DEALER_NAME(p.dealer)),
+                              best ? React.createElement("div", { className: "rq-bp" }, "\u2605 Best price")
+                                   : React.createElement("div", { className: "rq-ds" }, "quoted")))),
+                        React.createElement("td", null,
+                          React.createElement("div", { className: "rq-px m" }, Number(p.price).toFixed(3)),
+                          React.createElement("div", { className: "rq-pu" }, p.wantAsset.symbol)),
+                        React.createElement("td", null,
+                          React.createElement("div", { className: "m" }, offerAmt ? (Number(p.price) / offerAmt).toFixed(4) : "\u2014"),
+                          React.createElement("div", { className: "rq-pu" }, p.wantAsset.symbol, " / ", p.offerAsset.symbol)),
+                        React.createElement("td", { className: "m " + (b == null ? "" : b >= 0 ? "up" : "dn") },
+                          b == null ? "\u2014" : (b >= 0 ? "+" : "") + b.toFixed(1) + " bps"),
+                        React.createElement("td", { className: "m " + (e.warn ? "warn" : "") }, e.txt),
+                        React.createElement("td", { style: { textAlign: "right" } },
+                          React.createElement("button", {
+                            className: "btn sm award hold" + (held ? " holding" : "") + (best ? " lead" : ""),
+                            disabled: awarding,
+                            title: "Press and hold to settle \u2014 this is irreversible",
+                            "data-tip": "Press and HOLD to award. Settlement is atomic and irreversible \u2014 both legs move, or neither does.",
+                            onMouseDown: () => startHold(q),
+                            onMouseUp: cancelHold,
+                            onMouseLeave: cancelHold,
+                            onTouchStart: (ev) => { ev.preventDefault(); startHold(q); },
+                            onTouchEnd: cancelHold
+                          },
+                            React.createElement("span", { className: "hold-fill", style: { width: (held ? holdPct * 100 : 0) + "%" } }),
+                            React.createElement("span", { className: "hold-t" },
+                              awarding ? (awardStep || "Settling\u2026") : (held ? "Hold\u2026" : "Hold to award"))))); 
+                    }))),
+            (rfq && invited.length > quotes.length)
+              ? React.createElement("div", { className: "rq-passed" },
+                  invited.map(d => cleanRole(d)).filter(d => !quotedBy.has(d)).map(d =>
+                    React.createElement("div", { className: "rq-prow", key: d },
+                      React.createElement("span", { className: "rq-dd", style: { background: "var(--dim)" } }),
+                      React.createElement("span", { className: "rq-pn" }, DEALER_NAME(d)),
+                      React.createElement("span", { className: "rq-pb" }, "awaiting"),
+                      React.createElement("span", { className: "rq-pt" }, "has not priced this block"))))
+              : null))),
+
+      React.createElement("div", { className: "dsk-col" },
+
+        React.createElement("section", { className: "mod" },
+          React.createElement("div", { className: "mod-h" },
+            React.createElement("h2", null, "Market reference"),
+            rfq ? React.createElement("span", { className: "mr-pair m" },
+              rfq.payload.offerAsset.symbol, " / ", rfq.payload.wantAsset.symbol) : null),
+          React.createElement("div", { className: "mod-b" },
+            React.createElement("div", { className: "mr-mid m" },
+              rate != null ? Number(rate).toFixed(2) : "\u2014",
+              rfq ? React.createElement("span", null, rfq.payload.wantAsset.symbol + " / " + rfq.payload.offerAsset.symbol) : null),
+            spark,
+            React.createElement("div", { className: "mr-foot" },
+              React.createElement("span", { className: "live" }),
+              rate != null ? "Live spot \u00b7 CoinGecko" : (rateNote || "Reference unavailable")))),
+
+        React.createElement("section", { className: "mod" },
+          React.createElement("div", { className: "mod-h" },
+            React.createElement("h2", null, "Holdings"),
+            React.createElement("span", { className: "mod-c m" }, holdings.length)),
+          React.createElement("div", { className: "mod-b" },
+            holdings.length === 0
+              ? React.createElement("div", { className: "void" },
+                  React.createElement("div", { className: "void-t" }, "No assets yet"),
+                  React.createElement("div", { className: "void-s" }, "Your balances appear here once funded."))
+              : React.createElement("div", { className: "hl" },
+                  holdings.map(h => React.createElement("div", { className: "hl-r", key: h.contractId },
+                    React.createElement(AssetIcon, { symbol: h.payload.asset.symbol }),
+                    React.createElement("div", { className: "hl-n" },
+                      React.createElement("div", { className: "hl-s" }, h.payload.asset.symbol),
+                      React.createElement("div", { className: "hl-x" }, ASSET_LONG(h.payload.asset.symbol))),
+                    React.createElement("div", { className: "hl-a m" }, Number(h.payload.amount).toLocaleString())))))),
+
+        rfq ? React.createElement("section", { className: "mod" },
+          React.createElement("div", { className: "mod-h" },
+            React.createElement("h2", null, "Invited dealers"),
+            React.createElement("span", { className: "mod-c m" }, invited.length)),
+          React.createElement("div", { className: "mod-b flush" },
+            invited.map(d => {
+              const r = cleanRole(d), has = quotedBy.has(r);
+              return React.createElement("div", { className: "iv-r", key: d },
+                React.createElement("span", { className: "rq-dd", style: { background: ROLES[r] ? ROLES[r].dot : "var(--dim)" } }),
+                React.createElement("span", { className: "iv-n" }, DEALER_NAME(d)),
+                React.createElement("span", { className: "iv-b " + (has ? "q" : "w") }, has ? "quoted" : "awaiting"));
+            }))) : null)));
+}
+
 // ---- PORTAL ----
 function DealerDesk(P) {
-  const { meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, price, setPrice, busy, sendQuote, fresh } = P;
+  const { meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, usd, price, setPrice, busy, sendQuote, fresh } = P;
+  const [theme, flipTheme] = useTheme();
   const active = inv[0] || null;                       // the request being priced (first live invitation)
   const rest   = inv.slice(1);                         // any other live invitations
   const settled = (history && history.settlements) || [];
@@ -2094,7 +2496,7 @@ function DealerDesk(P) {
     // header with REF + countdown
     React.createElement("header", { className: "prt-bar" },
       React.createElement("div", { className: "prt-id" },
-        React.createElement("div", { className: "dsk-brand" },
+        React.createElement("a", { className: "dsk-brand", href: "/", title: "Back to umbra" },
           React.createElement(Umbrella, null),
           React.createElement("b", null, "UMBRA"),
           React.createElement("span", { className: "cx" }, "OTC block \u00b7 Canton \u00b7 Dealer desk")),
@@ -2109,6 +2511,7 @@ function DealerDesk(P) {
               : React.createElement("span", { className: "dsk-ref na tip-below tip-left", "data-tip": "Live market reference is unavailable right now. Price using your own read \u2014 the ledger never requires a reference." }, "REF", React.createElement("b", null, "\u2014")))
           : null,
         active ? React.createElement("span", { className: "dsk-close" + (cd.warn ? " warn" : "") }, "Closes in ", React.createElement("b", null, cd.txt)) : null,
+        React.createElement(ThemeBtn, { theme, flip: flipTheme }),
         React.createElement("span", { className: "prt-trust " + (signed ? "sg" : "op") }, signed ? "self-signing" : "operator acts"),
         React.createElement("button", { className: "prt-out", onClick: onExit }, "Sign out"))),
 
@@ -2244,19 +2647,30 @@ function PartyPortal({ role, onExit }) {
   const [fresh, setFresh] = useState(false);
   const [history, setHistory] = useState({ settlements: [], rfqs: [] });
   const [rate, setRate] = useState(null);
+  const [series, setSeries] = useState([]);
+  const [rfqs, setRfqs] = useState([]);
+  const [awarding, setAwarding] = useState(false);
+  const [awardStep, setAwardStep] = useState(null);
+  const [usd, setUsd] = useState(null);
+  const [rateNote, setRateNote] = useState(null);
+  const pairRef = useRef(null);
 
   const say = (m, bad) => { setNote({ m, bad }); setTimeout(() => setNote(null), 3400); };
 
   const load = useCallback(async () => {
     try {
-      const [si, sq, sh, md, le, hist, rt] = await Promise.all([
+      // the reference must be for the pair actually in play, not a fixed default
+      const pr = pairRef.current;
+      const rateQ = pr ? ("?base=" + pr.base + "&quote=" + pr.quote) : "";
+      const [si, sq, sh, md, le, hist, rt, rq] = await Promise.all([
         api("/api/swap/invitations?role=" + role).catch(() => ({})),
         api("/api/swap/quotes?role=" + role).catch(() => ({})),
         api("/api/swap/holdings?role=" + role).catch(() => ({})),
         api("/api/mode").catch(() => ({})),
         api("/api/ledger-end").catch(() => ({})),
         api("/api/swap/history?role=" + role).catch(() => ({})),
-        api("/api/market/rate").catch(() => ({}))
+        api("/api/market/rate" + rateQ).catch(() => ({})),
+        api("/api/swap/rfqs").catch(() => ({}))
       ]);
       const nx = (si && si.invitations) || [];
       setInv(prev => { if (nx.length > prev.length) { setFresh(true); setTimeout(() => setFresh(false), 900); } return nx; });
@@ -2266,7 +2680,14 @@ function PartyPortal({ role, onExit }) {
       if (md) setSigned(!!md.signedMode);
       if (le) setOffset(le.offset);
       if (hist && hist.ok) setHistory({ settlements: hist.settlements || [], rfqs: hist.rfqs || [] });
-      if (rt && rt.ok) setRate(rt.mid); else setRate(null);
+      if (rt && rt.ok) { setRate(rt.mid); setSeries(rt.series || []); setUsd(rt.usd || null); setRateNote(rt.note || null); }
+      else { setRate(null); setSeries([]); setRateNote(null); }
+      if (rq && rq.rfqs) setRfqs(rq.rfqs);
+      // remember which pair to price next tick
+      const liveRfq = (rq && rq.rfqs && rq.rfqs[0]) || null;
+      const liveInv = nx[0] || null;
+      const src = liveRfq ? liveRfq.payload : (liveInv ? liveInv.payload : null);
+      pairRef.current = src ? { base: src.offerAsset.symbol, quote: src.wantAsset.symbol } : null;
     } catch (e) {}
   }, [role]);
 
@@ -2286,6 +2707,40 @@ function PartyPortal({ role, onExit }) {
     finally { setBusy(b => { const n = { ...b }; delete n[cid]; return n; }); }
   }
 
+  // Award a dealer's ACTUAL quote: accept -> commit both legs -> atomic execute.
+  async function awardQuote(q) {
+    if (awarding) return;
+    setAwarding(true);
+    const p = q.payload;
+    const dealerRole = cleanRole(p.dealer);
+    const offerSym = p.offerAsset.symbol, wantSym = p.wantAsset.symbol;
+    const pick = (list, sym, need) => {
+      const w = Number(need);
+      const m = (list || []).filter(h => h.payload.asset.symbol === sym && Number(h.payload.amount) >= w)
+        .sort((a, b) => Number(a.payload.amount) - Number(b.payload.amount))[0];
+      return m ? m.contractId : null;
+    };
+    try {
+      setAwardStep("Accepting\u2026");
+      const mine = pick(holdings, offerSym, p.offerAmount);
+      if (!mine) throw new Error("You hold no " + offerSym + " \u2265 " + p.offerAmount);
+      const dh = await api("/api/swap/holdings?role=" + dealerRole).catch(() => ({}));
+      const theirs = pick(dh && dh.holdings, wantSym, p.price);
+      if (!theirs) throw new Error(DEALER_NAME(p.dealer) + " holds no " + wantSym + " \u2265 " + p.price);
+
+      const a = await post("/api/swap/quotes/" + q.contractId + "/accept", {});
+      setAwardStep("Your leg\u2026");
+      const b = await post("/api/swap/proposals/" + a.proposalCid + "/commit-offer", { holdingCid: mine });
+      setAwardStep("Their leg\u2026");
+      const c = await post("/api/swap/pending/" + b.pendingCid + "/commit-want", { dealer: dealerRole, holdingCid: theirs });
+      setAwardStep("Settling\u2026");
+      await post("/api/swap/settlements/" + c.settlementCid + "/execute", { dealer: dealerRole });
+      say("Settled \u2014 " + p.offerAmount + " " + offerSym + " \u21c4 " + p.price + " " + wantSym);
+      load();
+    } catch (e) { say(e.message, true); }
+    finally { setAwarding(false); setAwardStep(null); }
+  }
+
   async function createRfq(f) {
     try {
       await post("/api/swap/rfq", {
@@ -2301,8 +2756,14 @@ function PartyPortal({ role, onExit }) {
   const sorted = myQuotes.slice().sort((a, b) => Number(b.payload.price) - Number(a.payload.price));
 
   if (isDealer) return DealerDesk({
-    meta, pid, offset, signed, onExit, note, inv, history, holdings, rate,
+    meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, usd,
     price, setPrice, busy, sendQuote, fresh
+  });
+
+  return RequesterDesk({
+    meta, signed, onExit, note,
+    rfqs, quotes: myQuotes, holdings, rate, series, usd, rateNote,
+    onCreate: createRfq, onAward: awardQuote, awarding, awardStep
   });
 
   const Holdings = React.createElement("section", { className: "mod" },
