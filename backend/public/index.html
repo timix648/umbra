@@ -2004,6 +2004,160 @@ function Login({ onPick }) {
 }
 
 // ---- PORTAL ----
+function DealerDesk(P) {
+  const { meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, price, setPrice, busy, sendQuote, fresh } = P;
+  const active = inv[0] || null;                       // the request being priced (first live invitation)
+  const rest   = inv.slice(1);                         // any other live invitations
+  const settled = (history && history.settlements) || [];
+  const pastRfqs = (history && history.rfqs) || [];
+
+  // countdown from active invitation's expiresAt (real; "\u2014" if absent)
+  const [now, setNow] = React.useState(Date.now());
+  React.useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
+  function fmtCountdown(iso) {
+    if (!iso) return { txt: "\u2014", warn: false };
+    const ms = new Date(iso).getTime() - now;
+    if (isNaN(ms)) return { txt: "\u2014", warn: false };
+    if (ms <= 0) return { txt: "00:00", warn: true };
+    const s = Math.floor(ms / 1000), m = Math.floor(s / 60), ss = s % 60;
+    return { txt: String(m).padStart(2,"0") + ":" + String(ss).padStart(2,"0"), warn: ms < 30000 };
+  }
+  const cd = fmtCountdown(active && active.payload && active.payload.expiresAt);
+
+  const qItem = (iv, isOn) => {
+    const o = iv.payload.offerAsset.symbol, w = iv.payload.wantAsset.symbol;
+    const c = fmtCountdown(iv.payload.expiresAt);
+    return React.createElement("button", { className: "dq-i" + (isOn ? " on" : ""), key: iv.contractId },
+      React.createElement("div", { className: "dq-top" },
+        React.createElement("span", { className: "dq-id" }, short(iv.contractId).toUpperCase()),
+        React.createElement("span", { className: "dq-t" + (c.warn ? " warn" : "") }, c.txt)),
+      React.createElement("div", { className: "dq-pair" },
+        React.createElement(AssetIcon, { symbol: o, size: "sm" }),
+        React.createElement("span", null, Number(iv.payload.offerAmount).toLocaleString()),
+        React.createElement("span", { className: "dq-arr" }, "\u2192"),
+        React.createElement(AssetIcon, { symbol: w, size: "sm" })));
+  };
+  const pastItem = (st, won) =>
+    React.createElement("div", { className: "dq-i dq-past", key: st.contractId || Math.random() },
+      React.createElement("div", { className: "dq-top" },
+        React.createElement("span", { className: "dq-id" }, short(st.contractId || "").toUpperCase()),
+        React.createElement("span", { className: "dq-badge " + (won ? "won" : "exp") }, won ? "settled" : "expired")));
+
+  const queueCount = inv.length + settled.length;
+
+  return React.createElement("div", { className: "prt" },
+    // header with REF + countdown
+    React.createElement("header", { className: "prt-bar" },
+      React.createElement("div", { className: "prt-id" },
+        React.createElement("span", { className: "prt-dot", style: { background: meta.dot } }),
+        React.createElement("span", { className: "prt-nm" }, meta.nm),
+        pid ? React.createElement("span", { className: "prt-pid m" }, short(pid)) : null),
+      React.createElement("div", { className: "prt-right" },
+        rate != null
+          ? React.createElement("span", { className: "dsk-ref" }, "REF", React.createElement("b", null, Number(rate).toFixed(2)))
+          : React.createElement("span", { className: "dsk-ref na" }, "REF", React.createElement("b", null, "\u2014")),
+        active ? React.createElement("span", { className: "dsk-close" + (cd.warn ? " warn" : "") }, "Closes in ", React.createElement("b", null, cd.txt)) : null,
+        React.createElement("span", { className: "prt-trust " + (signed ? "sg" : "op") }, signed ? "self-signing" : "operator acts"),
+        React.createElement("button", { className: "prt-out", onClick: onExit }, "Sign out"))),
+
+    note ? React.createElement("div", { className: "prt-note " + (note.bad ? "bad" : "ok") }, note.m) : null,
+
+    React.createElement("main", { className: "dsk" },
+
+      // LEFT: request queue
+      React.createElement("div", { className: "dsk-col" },
+        React.createElement("div", { className: "dq" },
+          React.createElement("div", { className: "dq-h" },
+            React.createElement("span", null, "Request queue"),
+            React.createElement("span", { className: "dq-c" }, queueCount)),
+          inv.length === 0 && settled.length === 0
+            ? React.createElement("div", { className: "dq-empty" }, "No requests yet. A buyer's invitation appears here \u2014 only ones sent to you.")
+            : React.createElement(React.Fragment, null,
+                active ? qItem(active, true) : null,
+                rest.map(iv => qItem(iv, false)),
+                settled.map(st => pastItem(st, true))))),
+
+      // CENTER: the active ask + price input
+      React.createElement("div", { className: "dsk-col" },
+        active
+          ? React.createElement("section", { className: "mod mod-focal" },
+              React.createElement("div", { className: "mod-h" },
+                React.createElement("h2", null, "Active request"),
+                React.createElement("span", { className: "mod-c m" }, short(active.contractId).toUpperCase())),
+              React.createElement("div", { className: "mod-b" }, (function () {
+                const o = active.payload.offerAsset.symbol, w = active.payload.wantAsset.symbol;
+                const amt = Number(active.payload.offerAmount);
+                return React.createElement(React.Fragment, null,
+                  React.createElement("div", { className: "ask-pair" },
+                    React.createElement("div", { className: "ask-side" },
+                      React.createElement(AssetIcon, { symbol: o, size: "lg" }),
+                      React.createElement("div", { className: "ask-amt m" }, amt.toLocaleString()),
+                      React.createElement("div", { className: "ask-sym" }, o)),
+                    React.createElement("div", { className: "ask-arr" }, "\u2192"),
+                    React.createElement("div", { className: "ask-side" },
+                      React.createElement(AssetIcon, { symbol: w, size: "lg" }),
+                      React.createElement("div", { className: "ask-amt m dim" }, "?"),
+                      React.createElement("div", { className: "ask-sym" }, w))),
+                  React.createElement("p", { className: "ask-line" },
+                    "The buyer gives ", React.createElement("b", null, amt.toLocaleString() + " " + o),
+                    ". What do you pay, in ", React.createElement("b", null, w), "?"),
+                  React.createElement("div", { className: "ask-act" },
+                    React.createElement("div", { className: "ask-input" },
+                      React.createElement("input", {
+                        inputMode: "decimal", placeholder: "0.00",
+                        value: price[active.contractId] || "",
+                        onChange: e => setPrice(x => ({ ...x, [active.contractId]: e.target.value })),
+                        onKeyDown: e => { if (e.key === "Enter") sendQuote(active.contractId, w); }
+                      }),
+                      React.createElement("span", { className: "ask-unit" }, w)),
+                    React.createElement("button", {
+                      className: "btn ask-btn", disabled: !!busy[active.contractId],
+                      onClick: () => sendQuote(active.contractId, w)
+                    }, busy[active.contractId] ? React.createElement("span", { className: "spinr" }) : "Seal quote to the ledger")));
+              })()))
+          : React.createElement("section", { className: "mod mod-focal" },
+              React.createElement("div", { className: "mod-h" }, React.createElement("h2", null, "Awaiting a request")),
+              React.createElement("div", { className: "mod-b" },
+                React.createElement("div", { className: "ask-empty" },
+                  React.createElement("div", { className: "ask-mark" }, "\u2014"),
+                  React.createElement("p", null, "No one has asked you for a price."),
+                  React.createElement("span", null, "A request appears here only if the buyer invites you. You never see one sent to another dealer."))))),
+
+      // RIGHT: withholds + holdings
+      React.createElement("div", { className: "dsk-col" },
+        React.createElement("section", { className: "mod" },
+          React.createElement("div", { className: "mod-h" }, React.createElement("h2", null, "The ledger withholds")),
+          React.createElement("div", { className: "mod-b" },
+            React.createElement("div", { className: "whg" },
+              ["Rival price", "Rival count", "Rival exists?", "Buyer identity"].map(t =>
+                React.createElement("div", { className: "whg-c", key: t },
+                  React.createElement("div", { className: "whg-t" }, t),
+                  React.createElement("div", { className: "whg-b" })))),
+            React.createElement("p", { className: "wh-f" },
+              "Not hidden by this screen. ", React.createElement("b", null, "Never sent to you."),
+              " Canton discloses a quote only to the buyer who asked."))),
+        React.createElement("section", { className: "mod" },
+          React.createElement("div", { className: "mod-h" },
+            React.createElement("h2", null, "Holdings"),
+            React.createElement("span", { className: "mod-c m" }, holdings.length)),
+          React.createElement("div", { className: "mod-b" },
+            holdings.length === 0
+              ? React.createElement("div", { className: "void" },
+                  React.createElement("div", { className: "void-t" }, "No assets yet"),
+                  React.createElement("div", { className: "void-s" }, "Your balances appear here once funded."))
+              : React.createElement("div", { className: "hold" },
+                  holdings.map(h => React.createElement("div", { className: "hold-i", key: h.contractId },
+                    React.createElement(AssetIcon, { symbol: h.payload.asset.symbol }),
+                    React.createElement("div", { className: "hold-t" },
+                      React.createElement("div", { className: "hold-a m" }, Number(h.payload.amount).toLocaleString()),
+                      React.createElement("div", { className: "hold-s" }, h.payload.asset.symbol))))))),
+        React.createElement("section", { className: "mod" },
+          React.createElement("div", { className: "mod-b" },
+            React.createElement("p", { className: "wh-f", style: { paddingTop: 0 } },
+              "Winning trade settles ", React.createElement("b", null, "atomically"),
+              " \u2014 both legs move, or neither does."))))));
+}
+
 function PartyPortal({ role, onExit }) {
   const meta = ROLES[role];
   const isDealer = role === "dealer1" || role === "dealer2";
@@ -2074,6 +2228,11 @@ function PartyPortal({ role, onExit }) {
 
   const pid = parties[role] || "";
   const sorted = myQuotes.slice().sort((a, b) => Number(b.payload.price) - Number(a.payload.price));
+
+  if (isDealer) return DealerDesk({
+    meta, pid, offset, signed, onExit, note, inv, history, holdings, rate,
+    price, setPrice, busy, sendQuote, fresh
+  });
 
   const Holdings = React.createElement("section", { className: "mod" },
     React.createElement("div", { className: "mod-h" },
