@@ -299,11 +299,46 @@
   .mod-b{padding:18px}
   .mod-b.flush{padding:0}
 
+  /* brand bar */
+  .dsk-brand{display:flex;align-items:center;gap:10px;min-width:0}
+  .dsk-brand .mark{width:16px;height:16px;flex:none;display:block}
+  .dsk-brand b{font:650 13px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:.3em;
+    text-indent:.3em;color:var(--text)}
+  .dsk-brand .cx{font:600 8.5px/1 ui-monospace,monospace;letter-spacing:.16em;
+    text-transform:uppercase;color:var(--dim);padding-left:11px;border-left:1px solid var(--line2);
+    white-space:nowrap}
+  @media(max-width:780px){.dsk-brand .cx{display:none}}
+
+  /* quick-fill pricing row */
+  .qf{display:flex;align-items:center;gap:6px;margin-top:10px}
+  .qf button{border:1px solid var(--line2);background:var(--bg2);color:var(--mute);
+    border-radius:3px;padding:5px 9px;font:600 9.5px/1 ui-monospace,monospace;
+    letter-spacing:.06em;transition:.13s}
+  .qf button:hover:not(:disabled){background:var(--hover);color:var(--text);border-color:var(--accentline)}
+  .qf button:disabled{opacity:.35;cursor:default}
+  .qf .imp{margin-left:auto;font:600 9.5px/1 ui-monospace,monospace;color:var(--dim);
+    white-space:nowrap}
+  .qf .imp b{color:var(--mute);font-weight:700}
+
+  /* withholds subtitle */
+  .whg-sub{margin:0 0 12px;font:400 11.5px/1.5 ui-sans-serif,system-ui,sans-serif;color:var(--mute)}
+  .whg-sub b{color:var(--text);font-weight:600}
+  .mod-h .lk{margin-right:7px;opacity:.7}
+
   /* ===== 1c DEALER DESK (three-column) ===== */
-  .dsk{display:grid;grid-template-columns:262px 1fr 360px;gap:16px;
-    padding:16px 20px;max-width:1320px;margin:0 auto;align-items:start}
-  @media(max-width:1080px){.dsk{grid-template-columns:1fr}}
-  .dsk-col{display:flex;flex-direction:column;gap:16px;min-width:0}
+  /* dsk-fit: the desk is exactly one screen. nothing below the fold. */
+  .dsk{display:grid;grid-template-columns:280px 1fr 380px;gap:18px;
+    padding:18px 44px;width:100%;align-items:stretch;
+    height:calc(100vh - 50px);overflow:hidden}
+  .prt{height:100vh;overflow:hidden;display:flex;flex-direction:column}
+  .prt > main.dsk{flex:1;min-height:0}
+  @media(max-width:1080px){.dsk{grid-template-columns:1fr;height:auto;overflow:visible}
+    .prt{height:auto;overflow:visible}}
+  .dsk-col{display:flex;flex-direction:column;gap:16px;min-width:0;min-height:0;
+    overflow-y:auto;overflow-x:hidden;scrollbar-width:thin}
+  .dsk-col::-webkit-scrollbar{width:5px}
+  .dsk-col::-webkit-scrollbar-thumb{background:var(--line2);border-radius:3px}
+  .dsk-col > .mod, .dsk-col > .dq{flex:none}
   /* queue rail */
   .dq{border:1px solid var(--line);border-radius:5px;background:var(--bg2);overflow:hidden}
   .dq-h{display:flex;align-items:center;justify-content:space-between;padding:11px 14px;
@@ -331,6 +366,7 @@
   .dsk-ref{font:600 10px/1 ui-monospace,monospace;color:var(--mute);letter-spacing:.06em}
   .dsk-ref b{color:var(--text);font-weight:700;margin-left:5px}
   .dsk-ref.na b{color:var(--dim)}
+  .dsk-ref-pair{color:var(--dim);font-weight:600}
   .dsk-close{display:flex;align-items:center;gap:6px;font:600 9px/1 ui-monospace,monospace;
     letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
   .dsk-close b{font-size:12px;letter-spacing:.04em;color:var(--text)}
@@ -341,8 +377,17 @@
   .whg-c{background:var(--bg2);padding:10px 12px}
   .whg-t{font:600 8px/1 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;
     color:var(--dim);margin-bottom:7px}
-  .whg-b{height:9px;border-radius:2px;
-    background:repeating-linear-gradient(135deg,var(--redact) 0 6px,transparent 6px 10px)}
+  .whg-b{display:flex;align-items:flex-end;gap:2px;height:12px}
+  .whg-b i{flex:1;background:var(--redact);border-radius:1px;height:40%;
+    animation:whgeq 1.1s ease-in-out infinite;transform-origin:bottom}
+  .whg-b i:nth-child(2){animation-delay:.15s}
+  .whg-b i:nth-child(3){animation-delay:.30s}
+  .whg-b i:nth-child(4){animation-delay:.45s}
+  .whg-b i:nth-child(5){animation-delay:.60s}
+  .whg-b i:nth-child(6){animation-delay:.75s}
+  .whg-b i:nth-child(7){animation-delay:.90s}
+  @keyframes whgeq{0%,100%{height:25%}50%{height:100%}}
+  @media(prefers-reduced-motion:reduce){.whg-b i{animation:none;height:45%}}
 
   /* empty states that teach */
   .void{padding:26px 8px;text-align:center}
@@ -2049,13 +2094,20 @@ function DealerDesk(P) {
     // header with REF + countdown
     React.createElement("header", { className: "prt-bar" },
       React.createElement("div", { className: "prt-id" },
-        React.createElement("span", { className: "prt-dot", style: { background: meta.dot } }),
-        React.createElement("span", { className: "prt-nm" }, meta.nm),
-        pid ? React.createElement("span", { className: "prt-pid m" }, short(pid)) : null),
+        React.createElement("div", { className: "dsk-brand" },
+          React.createElement(Umbrella, null),
+          React.createElement("b", null, "UMBRA"),
+          React.createElement("span", { className: "cx" }, "OTC block \u00b7 Canton \u00b7 Dealer desk")),
+        React.createElement("span", { className: "prt-dot", style: { background: meta.dot, marginLeft: 6 } }),
+        React.createElement("span", { className: "prt-nm" }, meta.nm)),
       React.createElement("div", { className: "prt-right" },
-        rate != null
-          ? React.createElement("span", { className: "dsk-ref" }, "REF", React.createElement("b", null, Number(rate).toFixed(2)))
-          : React.createElement("span", { className: "dsk-ref na" }, "REF", React.createElement("b", null, "\u2014")),
+        active
+          ? (rate != null
+              ? React.createElement("span", { className: "dsk-ref tip-below tip-left", "data-tip": "Live mid-market reference for this pair (CoinGecko). A pricing anchor \u2014 not a quote." },
+                  "REF", React.createElement("b", null, Number(rate).toFixed(2)),
+                  React.createElement("span", { className: "dsk-ref-pair" }, " " + active.payload.wantAsset.symbol + "/" + active.payload.offerAsset.symbol))
+              : React.createElement("span", { className: "dsk-ref na tip-below tip-left", "data-tip": "Live market reference is unavailable right now. Price using your own read \u2014 the ledger never requires a reference." }, "REF", React.createElement("b", null, "\u2014")))
+          : null,
         active ? React.createElement("span", { className: "dsk-close" + (cd.warn ? " warn" : "") }, "Closes in ", React.createElement("b", null, cd.txt)) : null,
         React.createElement("span", { className: "prt-trust " + (signed ? "sg" : "op") }, signed ? "self-signing" : "operator acts"),
         React.createElement("button", { className: "prt-out", onClick: onExit }, "Sign out"))),
@@ -2113,7 +2165,27 @@ function DealerDesk(P) {
                     React.createElement("button", {
                       className: "btn ask-btn", disabled: !!busy[active.contractId],
                       onClick: () => sendQuote(active.contractId, w)
-                    }, busy[active.contractId] ? React.createElement("span", { className: "spinr" }) : "Seal quote to the ledger")));
+                    }, busy[active.contractId] ? React.createElement("span", { className: "spinr" }) : "Seal quote to the ledger")),
+                  // quick-fill: price off the REAL mid, nudge in basis points.
+                  (function () {
+                    const cid = active.contractId;
+                    const cur = Number(price[cid]);
+                    const mid = rate != null ? Number(rate) * amt : null;   // total in want-asset at spot
+                    const set = v => setPrice(x => ({ ...x, [cid]: v == null ? "" : v.toFixed(4).replace(/0+$/,"").replace(/\.$/,"") }));
+                    const nudge = bps => { const base = isFinite(cur) && cur > 0 ? cur : mid; if (base) set(base * (1 + bps / 10000)); };
+                    const implied = isFinite(cur) && cur > 0 && amt > 0 ? cur / amt : null;
+                    return React.createElement("div", { className: "qf" },
+                      React.createElement("button", {
+                        disabled: mid == null, onClick: () => set(mid),
+                        title: mid == null ? "No reference rate available" : "Price at the market mid"
+                      }, "Ref"),
+                      React.createElement("button", { disabled: mid == null && !(cur > 0), onClick: () => nudge(10) }, "+0.10%"),
+                      React.createElement("button", { disabled: mid == null && !(cur > 0), onClick: () => nudge(-10) }, "\u22120.10%"),
+                      React.createElement("button", { disabled: !price[cid], onClick: () => set(null) }, "Clear"),
+                      React.createElement("span", { className: "imp" }, "= ",
+                        React.createElement("b", null, implied != null ? implied.toFixed(4) : "\u2014"),
+                        " /" + o));
+                  })());
               })()))
           : React.createElement("section", { className: "mod mod-focal" },
               React.createElement("div", { className: "mod-h" }, React.createElement("h2", null, "Awaiting a request")),
@@ -2126,13 +2198,16 @@ function DealerDesk(P) {
       // RIGHT: withholds + holdings
       React.createElement("div", { className: "dsk-col" },
         React.createElement("section", { className: "mod" },
-          React.createElement("div", { className: "mod-h" }, React.createElement("h2", null, "The ledger withholds")),
+          React.createElement("div", { className: "mod-h" },
+            React.createElement("h2", null, "The ledger withholds")),
           React.createElement("div", { className: "mod-b" },
+            React.createElement("p", { className: "whg-sub" },
+              React.createElement("b", null, "Blind by construction."), " Quote freely."),
             React.createElement("div", { className: "whg" },
               ["Rival price", "Rival count", "Rival exists?", "Buyer identity"].map(t =>
                 React.createElement("div", { className: "whg-c", key: t },
                   React.createElement("div", { className: "whg-t" }, t),
-                  React.createElement("div", { className: "whg-b" })))),
+                  React.createElement("div", { className: "whg-b" }, [0,1,2,3,4,5,6].map(k => React.createElement("i", { key: k })))))),
             React.createElement("p", { className: "wh-f" },
               "Not hidden by this screen. ", React.createElement("b", null, "Never sent to you."),
               " Canton discloses a quote only to the buyer who asked."))),
@@ -2151,11 +2226,7 @@ function DealerDesk(P) {
                     React.createElement("div", { className: "hold-t" },
                       React.createElement("div", { className: "hold-a m" }, Number(h.payload.amount).toLocaleString()),
                       React.createElement("div", { className: "hold-s" }, h.payload.asset.symbol))))))),
-        React.createElement("section", { className: "mod" },
-          React.createElement("div", { className: "mod-b" },
-            React.createElement("p", { className: "wh-f", style: { paddingTop: 0 } },
-              "Winning trade settles ", React.createElement("b", null, "atomically"),
-              " \u2014 both legs move, or neither does."))))));
+        null)));
 }
 
 function PartyPortal({ role, onExit }) {
