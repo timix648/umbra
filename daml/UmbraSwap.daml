@@ -207,6 +207,7 @@ template SwapRfq
     offerAmount : Decimal
     wantAsset   : AssetId       -- what the requester wants in return
     invited     : [Party]       -- dealers who may quote
+    expiresAt   : Time          -- dealers may not quote after this
   where
     signatory requester
     observer operator, invited
@@ -222,7 +223,7 @@ template SwapRfq
         assertMsg "dealer already invited" (dealer `elem` invited)
         create SwapInvitation with
           requester; operator; dealer
-          offerAsset; offerAmount; wantAsset
+          offerAsset; offerAmount; wantAsset; expiresAt
 
     choice CancelRfq : ()
       controller requester
@@ -239,20 +240,28 @@ template SwapInvitation
     offerAsset  : AssetId
     offerAmount : Decimal
     wantAsset   : AssetId
+    expiresAt   : Time
   where
     signatory requester
     observer dealer
 
     -- The dealer responds with a price (total wantAsset for the whole offer).
+    -- The dealer prices the request. A quote submitted after the RFQ has
+    -- expired is refused by the ledger itself, not merely hidden by the UI.
+    -- `validUntil` is how long this dealer's price stays firm.
     choice SubmitSwapQuote : ContractId SwapQuote
       with
-        price : Decimal
+        price      : Decimal
+        validUntil : Time
       controller dealer
       do
+        now <- getTime
         assertMsg "price must be positive" (price > 0.0)
+        assertMsg "this request has expired" (now < expiresAt)
+        assertMsg "quote validity must be in the future" (validUntil > now)
         create SwapQuote with
           requester; operator; dealer
-          offerAsset; offerAmount; wantAsset; price
+          offerAsset; offerAmount; wantAsset; price; validUntil
 
     choice DeclineInvitation : ()
       controller dealer
@@ -270,6 +279,7 @@ template SwapQuote
     offerAmount : Decimal
     wantAsset   : AssetId
     price       : Decimal     -- total wantAsset the dealer pays for the offer
+    validUntil  : Time        -- the dealer's price is firm until this moment
   where
     signatory dealer
     observer requester
@@ -281,6 +291,8 @@ template SwapQuote
     choice AcceptSwapQuote : ContractId SwapProposal
       controller requester
       do
+        now <- getTime
+        assertMsg "this quote is no longer firm" (now < validUntil)
         create SwapProposal with
           requester; operator; dealer
           offerAsset; offerAmount

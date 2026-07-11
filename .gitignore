@@ -9,3 +9,10 @@ vendor/**/*.dar
 spike/.daml/
 spike/**/*.dar
 repomix-output.xml
+
+# local backups & scratch
+backend/public/*.pre*
+backend/*.pre*
+daml/*.pre*
+latest*.xml
+backend/umbra_swap_endpoints.js

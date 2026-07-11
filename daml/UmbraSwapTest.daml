@@ -2,6 +2,7 @@ module UmbraSwapTest where
 
 import UmbraSwap
 import Daml.Script
+import DA.Time (addRelTime, minutes, seconds)
 import DA.Assert ((===))
 
 -- ============================================================================
@@ -59,13 +60,18 @@ runSwap
   -> Script ()
 runSwap w offerAsset offerAmt wantAsset wantAmt reqHolding dealerHolding = do
   -- RFQ front half (generalised): requester offers, invites the dealer.
+  now <- getTime
   rfq <- submit w.requester do
     createCmd SwapRfq with
       requester = w.requester; operator = w.operator
       offerAsset; offerAmount = offerAmt
       wantAsset; invited = [w.dealer]
+      expiresAt = addRelTime now (minutes 15)
   inv <- submit w.requester do exerciseCmd rfq InviteDealer with dealer = w.dealer
-  quote <- submit w.dealer do exerciseCmd inv SubmitSwapQuote with price = wantAmt
+  quote <- submit w.dealer do
+    exerciseCmd inv SubmitSwapQuote with
+      price = wantAmt
+      validUntil = addRelTime now (minutes 5)
   prop <- submit w.requester do exerciseCmd quote AcceptSwapQuote
 
   -- Both parties commit their own legs, then the operator fires the swap.
@@ -146,13 +152,18 @@ swapRejectsUnderfunded = do
   reqH <- mint w.requester w.cbtc 1.0
   dlrH <- mint w.dealer    w.cc   99.0
   -- walk to the settlement, then expect ExecuteSwap to fail.
+  now <- getTime
   rfq <- submit w.requester do
     createCmd SwapRfq with
       requester = w.requester; operator = w.operator
       offerAsset = w.cbtc; offerAmount = 1.0
       wantAsset = w.cc; invited = [w.dealer]
+      expiresAt = addRelTime now (minutes 15)
   inv <- submit w.requester do exerciseCmd rfq InviteDealer with dealer = w.dealer
-  quote <- submit w.dealer do exerciseCmd inv SubmitSwapQuote with price = 100.0
+  quote <- submit w.dealer do
+    exerciseCmd inv SubmitSwapQuote with
+      price = 100.0
+      validUntil = addRelTime now (minutes 5)
   prop <- submit w.requester do exerciseCmd quote AcceptSwapQuote
   pending <- submit w.requester do
     exerciseCmd prop CommitRequesterLeg with requesterHoldingCid = reqH
@@ -182,4 +193,57 @@ registryListsAssets = do
   submit w.operator do exerciseCmd reg RequireListed with asset = w.cbtc
   bogus <- pure (AssetId with admin = w.operator, symbol = "FAKE")
   submitMustFail w.operator do exerciseCmd reg RequireListed with asset = bogus
+  pure ()
+
+
+-- ---- TEST: a quote submitted after the RFQ window closes is REFUSED ----------
+-- This is the proof that expiry is enforced by the ledger, not by the UI. The
+-- dealer holds a valid invitation and submits a well-formed price -- and the
+-- transaction still fails, because the request has expired.
+swapRejectsLateQuote : Script ()
+swapRejectsLateQuote = do
+  w <- setup
+  now <- getTime
+  rfq <- submit w.requester do
+    createCmd SwapRfq with
+      requester = w.requester; operator = w.operator
+      offerAsset = w.cbtc; offerAmount = 1.0
+      wantAsset = w.cc; invited = [w.dealer]
+      expiresAt = addRelTime now (minutes 5)
+  inv <- submit w.requester do exerciseCmd rfq InviteDealer with dealer = w.dealer
+
+  -- the window closes
+  passTime (minutes 6)
+
+  -- the dealer tries to price it anyway
+  submitMustFail w.dealer do
+    exerciseCmd inv SubmitSwapQuote with
+      price = 100.0
+      validUntil = addRelTime now (minutes 30)
+  pure ()
+
+-- ---- TEST: a quote that is no longer firm cannot be accepted -----------------
+swapRejectsStaleQuote : Script ()
+swapRejectsStaleQuote = do
+  w <- setup
+  now <- getTime
+  rfq <- submit w.requester do
+    createCmd SwapRfq with
+      requester = w.requester; operator = w.operator
+      offerAsset = w.cbtc; offerAmount = 1.0
+      wantAsset = w.cc; invited = [w.dealer]
+      expiresAt = addRelTime now (minutes 30)
+  inv <- submit w.requester do exerciseCmd rfq InviteDealer with dealer = w.dealer
+
+  -- the dealer's price is firm for only two minutes
+  quote <- submit w.dealer do
+    exerciseCmd inv SubmitSwapQuote with
+      price = 100.0
+      validUntil = addRelTime now (minutes 2)
+
+  -- the requester dawdles
+  passTime (minutes 3)
+
+  -- ...and the ledger refuses to let them lift a stale price
+  submitMustFail w.requester do exerciseCmd quote AcceptSwapQuote
   pure ()
