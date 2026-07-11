@@ -99,7 +99,10 @@
   /* fields */
   .fld{display:block;margin-bottom:8px}
   .fld>span{display:block;font:600 9px/1 ui-monospace,monospace;letter-spacing:.13em;text-transform:uppercase;color:var(--dim);margin-bottom:4px}
-  input{width:100%;padding:7px 9px;background:var(--bg);border:1px solid var(--line2);border-radius:var(--rad);color:var(--text);font:500 12px/1.2 ui-monospace,monospace}
+  input,select{width:100%;padding:7px 9px;background:var(--bg);border:1px solid var(--line2);border-radius:var(--rad);color:var(--text);font:500 12px/1.2 ui-monospace,monospace}
+  select{appearance:none;-webkit-appearance:none;cursor:pointer;background-image:linear-gradient(45deg,transparent 50%,var(--dim) 50%),linear-gradient(135deg,var(--dim) 50%,transparent 50%);background-position:calc(100% - 14px) 50%,calc(100% - 9px) 50%;background-size:5px 5px,5px 5px;background-repeat:no-repeat;padding-right:26px}
+  select:focus,input:focus{outline:none;border-color:var(--accent)}
+  select option{background:var(--panel,#0e1420);color:var(--text)}
   input::placeholder{color:var(--dim)}
   .r2{display:grid;grid-template-columns:1fr 1fr;gap:7px}
   .btn{width:100%;padding:8px 11px;border:1px solid var(--accentline);border-radius:var(--rad);background:var(--accentbg);color:var(--accent);font:600 11px/1 inherit;letter-spacing:.02em;transition:.13s}
@@ -151,6 +154,287 @@
   .redfoot b{color:var(--accent);font-weight:600}
   @media(prefers-reduced-motion:reduce){.redrow .blk{transition:none}.tape .run{animation:none}.live{animation:none}}
 
+  /* login + portal */
+  .login{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+  .lcard{width:100%;max-width:520px}
+  .lhead{text-align:center;margin-bottom:26px}
+  .lhead .lg{font:700 30px/1 ui-monospace,monospace;letter-spacing:.30em;color:var(--text)}
+  .lhead .ls{margin-top:9px;font:600 9px/1 ui-monospace,monospace;letter-spacing:.22em;text-transform:uppercase;color:var(--dim)}
+  .lgrid{display:grid;gap:10px}
+  .lrole{display:flex;align-items:center;gap:13px;padding:14px 15px;background:var(--bg2);border:1px solid var(--line);border-radius:var(--rad);cursor:pointer;transition:border-color .12s,background .12s;text-align:left;width:100%}
+  .lrole:hover{border-color:var(--accentline);background:var(--bg3)}
+  .lrole .dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
+  .lrole .nm{font:600 13px/1.2 ui-monospace,monospace;color:var(--text)}
+  .lrole .ds{margin-top:3px;font:400 11px/1.35 -apple-system,system-ui,sans-serif;color:var(--mute)}
+  .lnote{margin-top:20px;text-align:center;font:400 11px/1.5 -apple-system,system-ui,sans-serif;color:var(--dim)}
+  .pbar{display:flex;align-items:center;justify-content:space-between;padding:9px 16px;background:var(--bg2);border-bottom:1px solid var(--line)}
+  .pwho{display:flex;align-items:center;gap:9px;font:600 11px/1 ui-monospace,monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--text)}
+  .pwho .dot{width:8px;height:8px;border-radius:50%}
+  .pgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:12px;align-items:start}
+  @media(max-width:900px){.pgrid{grid-template-columns:1fr}}
+  /* ---------- login ---------- */
+  .lgn{min-height:100vh;display:grid;place-items:center;padding:48px 24px;position:relative;overflow:hidden}
+  /* the eclipse: a true corona — dark disc, light bleeding around its edge */
+  .lgn-corona{position:absolute;top:-18vh;left:50%;transform:translateX(-50%);
+    width:min(760px,120vw);aspect-ratio:1;border-radius:50%;pointer-events:none;
+    background:
+      radial-gradient(circle at 50% 50%, transparent 44%, rgba(157,116,255,.30) 46%, rgba(157,116,255,.06) 52%, transparent 62%),
+      radial-gradient(circle at 50% 50%, rgba(157,116,255,.10) 0%, transparent 46%);
+    filter:blur(26px);opacity:.75;animation:corona 14s ease-in-out infinite}
+  @keyframes corona{0%,100%{opacity:.6;transform:translateX(-50%) scale(1)}
+                    50%{opacity:.85;transform:translateX(-50%) scale(1.03)}}
+  .lgn-inner{position:relative;width:100%;max-width:940px}
+
+  .lgn-head{text-align:center;margin-bottom:34px}
+  .lgn-head h1{margin:0;font:650 24px/1 ui-sans-serif,system-ui,sans-serif;
+    letter-spacing:.46em;text-indent:.46em;color:var(--text)}
+  .lgn-thesis{margin:16px 0 0;font:400 15px/1.5 ui-sans-serif,system-ui,sans-serif;color:var(--mute)}
+  .lgn-thesis span{color:var(--text);font-weight:500}
+  .lgn-meta{display:inline-flex;align-items:center;gap:8px;margin-top:16px;
+    font:500 10.5px/1 ui-monospace,monospace;letter-spacing:.06em;color:var(--dim)}
+  .lgn-off{color:var(--mute)}
+
+  .lgn-eyebrow{font:600 9.5px/1 ui-monospace,monospace;letter-spacing:.2em;
+    text-transform:uppercase;color:var(--dim);margin-bottom:11px;text-align:center}
+
+  /* three roles, side by side — nothing scrolls */
+  /* three roles — with material, not flat divs */
+  .lgn-roles{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  @media(max-width:760px){.lgn-roles{grid-template-columns:1fr}}
+
+  .lgn-role{position:relative;display:flex;flex-direction:column;align-items:flex-start;
+    padding:22px 20px 20px;text-align:left;color:inherit;cursor:pointer;overflow:hidden;
+    border-radius:5px;border:1px solid var(--line);
+    /* surface: a real gradient, lighter at the top where light lands */
+    background:linear-gradient(180deg, #171D29 0%, #12161F 100%);
+    /* material: inner top highlight + a grounded shadow */
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,.055),
+      inset 0 -1px 0 rgba(0,0,0,.32),
+      0 1px 2px rgba(0,0,0,.35),
+      0 6px 18px rgba(0,0,0,.28);
+    transition:transform .18s cubic-bezier(.2,.7,.3,1), box-shadow .18s, border-color .18s}
+
+  /* a hairline of colour along the top edge — the role's identity, not a dot */
+  .lgn-role::before{content:"";position:absolute;inset:0 0 auto 0;height:2px;
+    background:var(--rc);opacity:.55;transition:opacity .18s}
+
+  .lgn-role:hover{transform:translateY(-3px);border-color:var(--line2);
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,.08),
+      inset 0 -1px 0 rgba(0,0,0,.32),
+      0 2px 4px rgba(0,0,0,.4),
+      0 16px 34px rgba(0,0,0,.42)}
+  .lgn-role:hover::before{opacity:1}
+  .lgn-role:active{transform:translateY(-1px);transition-duration:.08s}
+
+  /* the requester initiates — give it weight */
+  .lgn-role.lead{background:linear-gradient(180deg, #1A1930 0%, #14131F 100%)}
+  .lgn-role.lead:hover{border-color:var(--accentline)}
+
+  .lgn-nm{font:600 15px/1.2 ui-sans-serif,system-ui,sans-serif;color:var(--text);margin-bottom:8px}
+  .lgn-ds{font:400 12px/1.6 ui-sans-serif,system-ui,sans-serif;color:var(--mute);min-height:38px}
+  .lgn-role .lgn-sees{margin-top:16px;padding-top:13px;border-top:1px solid rgba(255,255,255,.05);
+    font:500 10.5px/1 ui-monospace,monospace;letter-spacing:.04em;color:var(--dim);
+    transition:color .18s}
+  .lgn-role:hover .lgn-sees{color:var(--mute)}
+
+  /* what the venue settles — real assets, real icons */
+  .lgn-assets{display:flex;align-items:center;justify-content:center;gap:16px;
+    margin-top:26px;padding-top:20px;border-top:1px solid var(--line)}
+  .lgn-al{font:600 9px/1 ui-monospace,monospace;letter-spacing:.2em;text-transform:uppercase;color:var(--dim)}
+  .lgn-a{display:inline-flex;align-items:center;gap:6px;
+    font:600 10.5px/1 ui-monospace,monospace;letter-spacing:.06em;color:var(--mute)}
+
+  .lgn-foot{margin-top:22px;text-align:center}
+  .lgn-foot p{margin:0 0 12px;font:400 11.5px/1.6 ui-sans-serif,system-ui,sans-serif;color:var(--dim);
+    max-width:440px;margin-left:auto;margin-right:auto}
+  .lgn-ops{background:none;border:0;color:var(--dim);font:600 9.5px/1 ui-monospace,monospace;
+    letter-spacing:.16em;text-transform:uppercase;padding:6px;transition:color .16s}
+  .lgn-ops:hover{color:var(--mute)}
+  @media(prefers-reduced-motion:reduce){.lgn-corona{animation:none}}
+
+  /* ---------- portal shell ---------- */
+  .prt{min-height:100vh;background:var(--bg)}
+  .prt-bar{display:flex;align-items:center;justify-content:space-between;gap:16px;height:50px;padding:0 20px;
+    border-bottom:1px solid var(--line);background:var(--bg);position:sticky;top:0;z-index:20}
+  .prt-id{display:flex;align-items:center;gap:9px;min-width:0}
+  .prt-dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto}
+  .prt-nm{font:600 11.5px/1 ui-monospace,monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--text)}
+  .prt-pid{font:500 10.5px/1 ui-monospace,monospace;color:var(--dim);padding-left:10px;border-left:1px solid var(--line2)}
+  .prt-right{display:flex;align-items:center;gap:12px}
+  .prt-net{display:flex;align-items:center;gap:7px;font:500 10.5px/1 ui-monospace,monospace;color:var(--mute)}
+  .prt-off{color:var(--dim)}
+  .prt-trust{font:600 8.5px/1 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;padding:4px 7px;border-radius:3px}
+  .prt-trust.op{color:var(--amber);background:var(--amberbg);border:1px solid var(--amberline)}
+  .prt-trust.sg{color:var(--accent);background:var(--accentbg);border:1px solid var(--accentline)}
+  .prt-out{background:none;border:1px solid var(--line2);border-radius:var(--rad);color:var(--mute);
+    padding:6px 11px;font:600 10px/1 ui-monospace,monospace;letter-spacing:.1em;text-transform:uppercase;transition:.14s}
+  .prt-out:hover{background:var(--hover);color:var(--text)}
+  .prt-note{padding:9px 20px;font:500 11.5px/1.4 ui-monospace,monospace;border-bottom:1px solid var(--line)}
+  .prt-note.ok{color:var(--accent);background:var(--accentbg)}
+  .prt-note.bad{color:var(--red);background:rgba(240,97,109,.09)}
+
+  /* full-bleed grid */
+  .prt-grid{display:grid;grid-template-columns:minmax(340px,38%) 1fr;gap:16px;
+    max-width:1400px;margin:0 auto;padding:18px 20px 60px;align-items:start}
+  .prt-grid.dlr{grid-template-columns:minmax(380px,46%) 1fr}
+  .prt-col{display:flex;flex-direction:column;gap:16px;min-width:0}
+  @media(max-width:940px){.prt-grid,.prt-grid.dlr{grid-template-columns:1fr}}
+
+  /* module cards — real material */
+  :root{--mod-lift:0 1px 2px rgba(0,0,0,.34), 0 8px 22px rgba(0,0,0,.26)}
+  .mod{position:relative;border:1px solid var(--line);border-radius:5px;overflow:hidden;
+    background:linear-gradient(180deg,#171D29 0%,#12161F 100%);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.05), inset 0 -1px 0 rgba(0,0,0,.3), var(--mod-lift)}
+  .mod-focal{border-color:var(--line2)}
+  .mod-focal::before{content:"";position:absolute;inset:0 0 auto 0;height:2px;
+    background:linear-gradient(90deg,var(--accent),transparent 70%);opacity:.5}
+  .mod-h{display:flex;align-items:center;justify-content:space-between;
+    padding:15px 18px;border-bottom:1px solid rgba(255,255,255,.055)}
+  .mod-h h2{margin:0;font:600 14px/1.2 ui-sans-serif,system-ui,sans-serif;
+    letter-spacing:-.005em;color:var(--text)}
+  .mod-c{font:600 11px/1 ui-monospace,monospace;color:var(--dim);
+    background:rgba(255,255,255,.04);border-radius:20px;padding:3px 8px;min-width:22px;text-align:center}
+  .mod-b{padding:18px}
+  .mod-b.flush{padding:0}
+
+  /* ===== 1c DEALER DESK (three-column) ===== */
+  .dsk{display:grid;grid-template-columns:262px 1fr 360px;gap:16px;
+    padding:16px 20px;max-width:1320px;margin:0 auto;align-items:start}
+  @media(max-width:1080px){.dsk{grid-template-columns:1fr}}
+  .dsk-col{display:flex;flex-direction:column;gap:16px;min-width:0}
+  /* queue rail */
+  .dq{border:1px solid var(--line);border-radius:5px;background:var(--bg2);overflow:hidden}
+  .dq-h{display:flex;align-items:center;justify-content:space-between;padding:11px 14px;
+    border-bottom:1px solid var(--line);font:600 9px/1 ui-monospace,monospace;
+    letter-spacing:.13em;text-transform:uppercase;color:var(--dim)}
+  .dq-c{color:var(--mute)}
+  .dq-i{display:block;width:100%;text-align:left;background:none;border:0;cursor:pointer;
+    padding:11px 14px;border-bottom:1px solid var(--line);border-left:2px solid transparent}
+  .dq-i:last-child{border-bottom:0}
+  .dq-i:hover{background:var(--hover)}
+  .dq-i.on{border-left-color:var(--accent);background:var(--accentbg)}
+  .dq-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+  .dq-id{font:600 10px/1 ui-monospace,monospace;color:var(--mute);letter-spacing:.04em}
+  .dq-t{font:600 10px/1 ui-monospace,monospace;color:var(--dim)}
+  .dq-t.warn{color:var(--amber)}
+  .dq-pair{display:flex;align-items:center;gap:7px;font:600 12px/1 ui-monospace,monospace;color:var(--text)}
+  .dq-arr{color:var(--dim)}
+  .dq-past{opacity:.55}
+  .dq-badge{font:600 8px/1 ui-monospace,monospace;letter-spacing:.1em;text-transform:uppercase;
+    padding:2px 5px;border-radius:3px}
+  .dq-badge.won{color:var(--accent);background:var(--accentbg)}
+  .dq-badge.exp{color:var(--dim);background:var(--hover)}
+  .dq-empty{padding:14px;font:500 11px/1.5 ui-monospace,monospace;color:var(--dim)}
+  /* header REF + countdown pills */
+  .dsk-ref{font:600 10px/1 ui-monospace,monospace;color:var(--mute);letter-spacing:.06em}
+  .dsk-ref b{color:var(--text);font-weight:700;margin-left:5px}
+  .dsk-ref.na b{color:var(--dim)}
+  .dsk-close{display:flex;align-items:center;gap:6px;font:600 9px/1 ui-monospace,monospace;
+    letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+  .dsk-close b{font-size:12px;letter-spacing:.04em;color:var(--text)}
+  .dsk-close.warn b{color:var(--amber)}
+  /* right-rail withholds grid (2x2) */
+  .whg{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);
+    border:1px solid var(--line);border-radius:4px;overflow:hidden}
+  .whg-c{background:var(--bg2);padding:10px 12px}
+  .whg-t{font:600 8px/1 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--dim);margin-bottom:7px}
+  .whg-b{height:9px;border-radius:2px;
+    background:repeating-linear-gradient(135deg,var(--redact) 0 6px,transparent 6px 10px)}
+
+  /* empty states that teach */
+  .void{padding:26px 8px;text-align:center}
+  .void-t{font:500 12.5px/1.4 ui-sans-serif,system-ui,sans-serif;color:var(--mute);margin-bottom:5px}
+  .void-s{font:400 11.5px/1.6 ui-sans-serif,system-ui,sans-serif;color:var(--dim);
+    max-width:280px;margin:0 auto}
+
+  /* the primary action should look like one */
+  .btn.prime{width:100%;padding:12px;border:0;border-radius:4px;
+    background:linear-gradient(180deg,#A883FF,#8B5CF6);color:#0B0714;
+    font:650 11.5px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:.04em;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.28), 0 2px 10px rgba(139,92,246,.3);
+    transition:filter .15s, transform .1s, box-shadow .15s}
+  .btn.prime:hover{filter:brightness(1.08);box-shadow:inset 0 1px 0 rgba(255,255,255,.34), 0 4px 16px rgba(139,92,246,.42)}
+  .btn.prime:active{transform:translateY(1px)}
+  .btn.prime:disabled{opacity:.45;filter:none;box-shadow:none}
+
+  /* redaction that reads as censorship, not a loading bar */
+  .wh{display:flex;align-items:center;gap:11px;margin-bottom:9px}
+  .wh-t{width:44px;flex:none;font:600 8.5px/1 ui-monospace,monospace;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--dim)}
+  .wh-b{flex:1;height:13px;border-radius:2px;position:relative;overflow:hidden;
+    background:rgba(157,116,255,.07);border:1px solid rgba(157,116,255,.13)}
+  .wh-b::after{content:"";position:absolute;inset:2px;
+    background:repeating-linear-gradient(90deg,
+      rgba(157,116,255,.42) 0 11px, transparent 11px 15px,
+      rgba(157,116,255,.42) 15px 22px, transparent 22px 25px,
+      rgba(157,116,255,.42) 25px 33px, transparent 33px 38px)}
+  .wh-f{margin:14px 0 0;font:400 11.5px/1.6 ui-sans-serif,system-ui,sans-serif;color:var(--mute)}
+  .wh-f b{color:var(--accent);font-weight:600}
+
+  /* the ask */
+  .ask{background:var(--bg3);border:1px solid var(--line2);border-radius:4px;padding:20px}
+  .ask + .ask{margin-top:12px}
+  .ask-new{animation:askin .45s cubic-bezier(.2,.7,.3,1)}
+  @keyframes askin{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+  .ask-pair{display:flex;align-items:center;justify-content:center;gap:24px;padding:2px 0 14px}
+  .ask-side{display:flex;flex-direction:column;align-items:center;gap:8px;min-width:82px}
+  .ask-amt{font:650 25px/1 ui-monospace,monospace;font-variant-numeric:tabular-nums;color:var(--text)}
+  .ask-amt.dim{color:var(--dim)}
+  .ask-sym{font:600 9px/1 ui-monospace,monospace;letter-spacing:.16em;text-transform:uppercase;color:var(--mute)}
+  .ask-arr{font:400 16px/1 ui-monospace,monospace;color:var(--dim);padding-bottom:22px}
+  .ask-line{margin:0 0 14px;text-align:center;font:400 12.5px/1.6 ui-sans-serif,system-ui,sans-serif;color:var(--mute)}
+  .ask-line b{color:var(--text);font-weight:600}
+  .ask-act{display:flex;gap:9px}
+  .ask-input{position:relative;flex:1}
+  .ask-input input{padding:11px 48px 11px 12px;font:600 15px/1.1 ui-monospace,monospace;font-variant-numeric:tabular-nums}
+  .ask-unit{position:absolute;right:12px;top:50%;transform:translateY(-50%);pointer-events:none;
+    font:600 9.5px/1 ui-monospace,monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+  .ask-btn{width:auto;flex:0 0 auto;padding:11px 16px;font-size:10.5px}
+  .ask-empty{text-align:center;padding:30px 8px}
+  .ask-mark{font:300 22px/1 ui-monospace,monospace;color:var(--line2);margin-bottom:10px}
+  .ask-empty p{margin:0 0 6px;font:500 13px/1.4 ui-sans-serif,system-ui,sans-serif;color:var(--mute)}
+  .ask-empty span{font:400 11.5px/1.6 ui-sans-serif,system-ui,sans-serif;color:var(--dim)}
+
+  /* quote table states */
+  .qm .waiting{text-align:center;color:var(--dim);font:400 11.5px/1.5 ui-sans-serif,system-ui,sans-serif;height:56px}
+  .qm .bestmk{margin-left:7px;font:600 8px/1 ui-monospace,monospace;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--accent);border:1px solid var(--accentline);border-radius:2px;padding:2px 4px}
+  .btn.award{border-color:var(--accent);background:var(--accent);color:#0c0618}
+  .btn.award:hover{filter:brightness(1.12)}
+
+  /* withheld */
+  .wh{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+  .wh-t{width:42px;flex:none;font:600 8.5px/1 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+  .wh-b{flex:1;height:10px;border-radius:2px;
+    background:repeating-linear-gradient(90deg,var(--redact) 0 6px,transparent 6px 9px)}
+  .wh-f{margin:12px 0 0;font:400 11.5px/1.6 ui-sans-serif,system-ui,sans-serif;color:var(--mute)}
+  .wh-f b{color:var(--accent);font-weight:600}
+
+  /* holdings */
+  .hold{display:flex;flex-wrap:wrap;gap:8px}
+  .hold-i{display:flex;align-items:center;gap:10px;padding:11px 13px;border:1px solid var(--line);
+    border-radius:var(--rad);background:var(--bg3);flex:1;min-width:118px}
+  .hold-a{font:600 15px/1 ui-monospace,monospace;font-variant-numeric:tabular-nums;color:var(--text)}
+  .hold-s{margin-top:3px;font:600 8.5px/1 ui-monospace,monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+  @media(prefers-reduced-motion:reduce){.ask-new{animation:none}}
+
+  /* token icons */
+  .tic{width:18px;height:18px;border-radius:50%;object-fit:cover;flex:0 0 auto;vertical-align:middle}
+  .tic.sm{width:14px;height:14px}
+  .tic.lg{width:40px;height:40px}
+  .tmono{display:inline-flex;align-items:center;justify-content:center;border-radius:50%;background:var(--bg3);color:var(--mute);font:700 8px/1 ui-monospace,monospace;flex:0 0 auto}
+  .apair{display:flex;align-items:center;gap:6px}
+  .aicw{display:flex;align-items:center;gap:7px}
+  /* swap visual in the settlement overlay */
+  .swapviz{display:flex;align-items:center;justify-content:center;gap:18px;margin:14px 0 6px}
+  .swapleg{display:flex;flex-direction:column;align-items:center;gap:7px;min-width:96px}
+  .swapleg .amt2{font:700 15px/1 ui-monospace,monospace;color:var(--text)}
+  .swapleg .sym2{font:600 9px/1 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;color:var(--mute)}
+  .swaparrow{font:700 18px/1 ui-monospace,monospace;color:var(--accent);animation:sarr 1.4s ease-in-out infinite}
+  @keyframes sarr{0%,100%{opacity:.45;transform:translateX(0)}50%{opacity:1;transform:translateX(3px)}}
   /* settlement pipeline */
   .pipe{padding:6px 12px 12px}
   .pstep{display:flex;align-items:center;gap:11px;height:34px;opacity:.3;transition:.4s}
@@ -724,7 +1008,7 @@ function RedactedTape({
     className: "redfoot"
   }, "At the protocol level you cannot see ", /*#__PURE__*/React.createElement("b", null, rival), "'s quotes — not the price, not the count, not whether they exist. Enforced by Canton signatory rules, not app code."));
 }
-function App() {
+function OperatorConsole({ onExit }) {
   const [theme, setTheme] = useState(() => {
     try {
       return localStorage.getItem("umbra-theme") || "dark";
@@ -738,19 +1022,25 @@ function App() {
   const [offset, setOffset] = useState(null);
   const [rfqs, setRfqs] = useState([]);
   const [quotesAll, setQuotesAll] = useState([]);
+  const [swapQuotesAll, setSwapQuotesAll] = useState([]);
   const [d1, setD1] = useState({
     inv: [],
-    q: []
+    q: [],
+    swapInv: [],
+    swapQ: []
   });
   const [d2, setD2] = useState({
     inv: [],
-    q: []
+    q: [],
+    swapInv: [],
+    swapQ: []
   });
   const [pub, setPub] = useState(0);
   const [hold, setHold] = useState({
     requester: {
       cash: [],
-      instruments: []
+      instruments: [],
+      assets: []
     },
     dealer1: {
       cash: [],
@@ -794,31 +1084,39 @@ function App() {
   }, []);
   const refresh = useCallback(async (opts) => {
     try {
-      const [m, rf, qa, i1, i2, qd1, qd2, hr, hd1, hd2, qp, le] = await Promise.all([api("/api/mode"), api("/api/rfqs"), api("/api/quotes?role=requester"), api("/api/invitations?role=dealer1"), api("/api/invitations?role=dealer2"), api("/api/quotes?role=dealer1"), api("/api/quotes?role=dealer2"), api("/api/holdings?role=requester"), api("/api/holdings?role=dealer1"), api("/api/holdings?role=dealer2"), api("/api/quotes?role=public"), api("/api/ledger-end")]);
+      const [m, rf, qa, i1, i2, qd1, qd2, hr, hd1, hd2, qp, le, si1, si2, sq1, sq2, sqa, shr, shd1, shd2] = await Promise.all([api("/api/mode"), api("/api/rfqs"), api("/api/quotes?role=requester"), api("/api/invitations?role=dealer1"), api("/api/invitations?role=dealer2"), api("/api/quotes?role=dealer1"), api("/api/quotes?role=dealer2"), api("/api/holdings?role=requester"), api("/api/holdings?role=dealer1"), api("/api/holdings?role=dealer2"), api("/api/quotes?role=public"), api("/api/ledger-end"), api("/api/swap/invitations?role=dealer1").catch(() => ({})), api("/api/swap/invitations?role=dealer2").catch(() => ({})), api("/api/swap/quotes?role=dealer1").catch(() => ({})), api("/api/swap/quotes?role=dealer2").catch(() => ({})), api("/api/swap/quotes?role=requester").catch(() => ({})), api("/api/swap/holdings?role=requester").catch(() => ({})), api("/api/swap/holdings?role=dealer1").catch(() => ({})), api("/api/swap/holdings?role=dealer2").catch(() => ({}))]);
       if (!(opts && opts.skipMode)) setMode(m.signedMode);
       setParties(m.parties || {});
       setRfqs(rf.rfqs || []);
       setQuotesAll(qa.quotes || []);
       setD1({
         inv: i1.invitations || [],
-        q: qd1.quotes || []
+        q: qd1.quotes || [],
+        swapInv: (si1 && si1.invitations) || [],
+        swapQ: (sq1 && sq1.quotes) || []
       });
       setD2({
         inv: i2.invitations || [],
-        q: qd2.quotes || []
+        q: qd2.quotes || [],
+        swapInv: (si2 && si2.invitations) || [],
+        swapQ: (sq2 && sq2.quotes) || []
       });
+      setSwapQuotesAll((sqa && sqa.quotes) || []);
       setHold({
         requester: {
           cash: hr.cash || [],
-          instruments: hr.instruments || []
+          instruments: hr.instruments || [],
+          assets: (shr && shr.holdings) || []
         },
         dealer1: {
           cash: hd1.cash || [],
-          instruments: hd1.instruments || []
+          instruments: hd1.instruments || [],
+          assets: (shd1 && shd1.holdings) || []
         },
         dealer2: {
           cash: hd2.cash || [],
-          instruments: hd2.instruments || []
+          instruments: hd2.instruments || [],
+          assets: (shd2 && shd2.holdings) || []
         }
       });
       setPub((qp.quotes || []).length);
@@ -867,6 +1165,33 @@ function App() {
       addlog("rfq: " + e.message, "er");
     }
   }
+  async function swapQuote(cid, dealer, price) {
+    try {
+      await post("/api/swap/invitations/" + cid + "/quote", { dealer, price });
+      push("Swap quote submitted");
+      addlog(dealer + " quoted " + price + (mode ? " (self-signed)" : ""), "ok");
+      refresh();
+    } catch (e) {
+      push(e.message, "er");
+      addlog("swap-quote: " + e.message, "er");
+    }
+  }
+  async function createSwapRfq(f) {
+    try {
+      await post("/api/swap/rfq", {
+        offerAsset: f.offerAsset,
+        offerAmount: f.offerAmount,
+        wantAsset: f.wantAsset,
+        invited: ["dealer1", "dealer2"]
+      });
+      push("Swap RFQ created");
+      addlog("SWAP " + f.offerAmount + " " + f.offerAsset.symbol + " \u2192 " + f.wantAsset.symbol + (mode ? " (requester-signed)" : ""), "ok");
+      refresh();
+    } catch (e) {
+      push(e.message, "er");
+      addlog("swap-rfq: " + e.message, "er");
+    }
+  }
   async function invite(cid, dealer) {
     const k = cid + "-" + dealer;
     if (busyInvite[k]) return;
@@ -897,6 +1222,86 @@ function App() {
     } catch (e) {
       push(e.message, "er");
       addlog("quote: " + e.message, "er");
+    }
+  }
+  // Pick a party's AssetHolding of `symbol` with at least `need` units.
+  function pickHolding(role, symbol, need) {
+    const list = (hold[role] && hold[role].assets) || [];
+    const want = Number(need);
+    const match = list
+      .filter(h => h.payload.asset.symbol === symbol && Number(h.payload.amount) >= want)
+      .sort((a, b) => Number(a.payload.amount) - Number(b.payload.amount))[0];
+    return match ? match.contractId : null;
+  }
+
+  // The real venue award: settle the ACTUAL quote a dealer submitted.
+  async function awardSwap(q) {
+    if (awarding) return;
+    setAwarding(true);
+    const p = q.payload;
+    const dealerRole = cleanRole(p.dealer);
+    const offerSym = p.offerAsset.symbol;
+    const wantSym = p.wantAsset.symbol;
+    const steps = [
+      "Requester accepts quote",
+      "Requester commits " + offerSym + " leg",
+      dealerRole + " commits " + wantSym + " leg",
+      "Atomic execute \u2014 both legs swap"
+    ];
+    setPipe({ active: -1, steps });
+    addlog("swap award initiated \u00b7 " + offerSym + " \u2192 " + wantSym + (mode ? " \u00b7 via party signatures" : ""), "");
+    try {
+      // backing holdings must exist on both sides
+      const reqHold = pickHolding("requester", offerSym, p.offerAmount);
+      if (!reqHold) throw new Error("Requester holds no " + offerSym + " \u2265 " + p.offerAmount);
+      const dlrHold = pickHolding(dealerRole, wantSym, p.price);
+      if (!dlrHold) throw new Error(dealerRole + " holds no " + wantSym + " \u2265 " + p.price);
+
+      // 1) accept the dealer's quote -> SwapProposal
+      const a = await post("/api/swap/quotes/" + q.contractId + "/accept", {});
+      setPipe(pp => ({ ...pp, active: 0 }));
+
+      // 2) requester commits its offer leg -> SwapDealerPending
+      const b = await post("/api/swap/proposals/" + a.proposalCid + "/commit-offer", {
+        holdingCid: reqHold
+      });
+      setPipe(pp => ({ ...pp, active: 1 }));
+
+      // 3) dealer commits its want leg -> SwapSettlement
+      const c = await post("/api/swap/pending/" + b.pendingCid + "/commit-want", {
+        dealer: dealerRole,
+        holdingCid: dlrHold
+      });
+      setPipe(pp => ({ ...pp, active: 2 }));
+
+      // 4) operator fires the atomic swap
+      await post("/api/swap/settlements/" + c.settlementCid + "/execute", {
+        dealer: dealerRole
+      });
+      setPipe(pp => ({ ...pp, active: pp.steps.length }));
+
+      const trade = {
+        id: Date.now(),
+        swap: true,
+        offerSym: offerSym,
+        offerAmt: p.offerAmount,
+        wantSym: wantSym,
+        wantAmt: p.price,
+        engine: "CIP-56",
+        signed: mode,
+        ts: new Date().toLocaleTimeString()
+      };
+      setSettled(prev => [trade, ...prev]);
+      setOverlay(trade);
+      push("Swapped " + p.offerAmount + " " + offerSym + " \u2192 " + p.price + " " + wantSym);
+      addlog("atomic swap settled \u00b7 " + p.offerAmount + " " + offerSym + " \u21c4 " + p.price + " " + wantSym, "ok");
+      refresh();
+    } catch (e) {
+      push(e.message, "er");
+      addlog("swap award: " + e.message, "er");
+      setPipe({ active: -1, steps: [] });
+    } finally {
+      setAwarding(false);
     }
   }
   async function award(quoteCid, kind) {
@@ -967,6 +1372,11 @@ function App() {
     className: "v m"
   }, offset != null ? "#" + offset : "…")), /*#__PURE__*/React.createElement("button", {
     className: "icbtn",
+    title: "Sign out",
+    onClick: () => onExit && onExit(),
+    style: { marginRight: 2 }
+  }, "\u23FB"), /*#__PURE__*/React.createElement("button", {
+    className: "icbtn",
     title: "Toggle theme",
     onClick: () => setTheme(t => t === "dark" ? "light" : "dark")
   }, theme === "dark" ? "☀" : "☾"), busyMode ? /*#__PURE__*/React.createElement("div", {
@@ -1010,7 +1420,9 @@ function App() {
     className: "grid"
   }, /*#__PURE__*/React.createElement("div", {
     className: "col"
-  }, /*#__PURE__*/React.createElement(RfqForm, {
+  }, /*#__PURE__*/React.createElement(SwapRfqForm, {
+    onCreate: createSwapRfq
+  }), /*#__PURE__*/React.createElement(RfqForm, {
     onCreate: createRfq
   }), /*#__PURE__*/React.createElement("div", {
     className: "pane"
@@ -1047,6 +1459,48 @@ function App() {
   })), /*#__PURE__*/React.createElement("div", {
     className: "col"
   }, /*#__PURE__*/React.createElement("div", {
+    className: "pane"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ph"
+  }, /*#__PURE__*/React.createElement("h3", null, "Swap Quotes \u00b7 Requester"), /*#__PURE__*/React.createElement("span", {
+    className: "c acc"
+  }, swapQuotesAll.length, " live")), /*#__PURE__*/React.createElement("div", {
+    className: "pb flush"
+  }, swapQuotesAll.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "empty"
+  }, "No swap quotes yet. Create a swap RFQ and invite dealers \u2014 each dealer's price is visible only to you.") : /*#__PURE__*/React.createElement("table", {
+    className: "qm"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null,
+      /*#__PURE__*/React.createElement("th", null, "Dealer"),
+      /*#__PURE__*/React.createElement("th", null, "Pair"),
+      /*#__PURE__*/React.createElement("th", null, "You give"),
+      /*#__PURE__*/React.createElement("th", null, "You get"),
+      /*#__PURE__*/React.createElement("th", null))),
+    /*#__PURE__*/React.createElement("tbody", null,
+      swapQuotesAll.slice().sort((a, b) => Number(b.payload.price) - Number(a.payload.price)).map((q, i) => {
+        const p = q.payload;
+        const isBest = i === 0; // highest want-asset received = best for the requester
+        return /*#__PURE__*/React.createElement("tr", {
+          key: q.contractId,
+          className: isBest ? "best" : ""
+        },
+          /*#__PURE__*/React.createElement("td", null, cleanRole(p.dealer)),
+          /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("span", { className: "apair" },
+            /*#__PURE__*/React.createElement(AssetIcon, { symbol: p.offerAsset.symbol, size: "sm" }),
+            /*#__PURE__*/React.createElement("span", { style: { color: "var(--accent)" } }, "\u2192"),
+            /*#__PURE__*/React.createElement(AssetIcon, { symbol: p.wantAsset.symbol, size: "sm" }))),
+          /*#__PURE__*/React.createElement("td", null, Number(p.offerAmount).toLocaleString(), " ", p.offerAsset.symbol),
+          /*#__PURE__*/React.createElement("td", { className: "px" },
+            Number(p.price).toFixed(2), " ", p.wantAsset.symbol, isBest ? " \u25c2" : ""),
+          /*#__PURE__*/React.createElement("td", { style: { textAlign: "right" } },
+            /*#__PURE__*/React.createElement("button", {
+              className: "btn sm",
+              disabled: awarding,
+              style: { borderColor: "var(--accentline)", color: "var(--accent2)", opacity: awarding ? .5 : 1, cursor: awarding ? "default" : "pointer" },
+              onClick: () => awardSwap(q),
+              "data-tip": "Award this quote \u2014 both assets swap atomically via CIP-56, or neither moves"
+            }, awarding ? "Settling\u2026" : "Award")));
+      }))))), /*#__PURE__*/React.createElement("div", {
     className: "pane"
   }, /*#__PURE__*/React.createElement("div", {
     className: "ph"
@@ -1117,14 +1571,16 @@ function App() {
     name: "dealer1",
     rival: "dealer2",
     data: d1,
-    rivalCount: d2.q.length,
-    onQuote: submitQuote
+    rivalCount: d2.q.length + (d2.swapQ || []).length,
+    onQuote: submitQuote,
+    onSwapQuote: swapQuote
   }), /*#__PURE__*/React.createElement(DealerCard, {
     name: "dealer2",
     rival: "dealer1",
     data: d2,
-    rivalCount: d1.q.length,
-    onQuote: submitQuote
+    rivalCount: d1.q.length + (d1.swapQ || []).length,
+    onQuote: submitQuote,
+    onSwapQuote: swapQuote
   }), /*#__PURE__*/React.createElement("div", {
     className: "pane"
   }, /*#__PURE__*/React.createElement("div", {
@@ -1154,8 +1610,130 @@ function App() {
         /*#__PURE__*/React.createElement("div", { className: "lbl" }, "Bond to Buyer"))),
     /*#__PURE__*/React.createElement("div", { className: "done" },
       /*#__PURE__*/React.createElement("span", { className: "chk" }, "OK"), "Settled Atomically"),
-    /*#__PURE__*/React.createElement("div", { className: "amt" }, "$" + Number(overlay.amount).toLocaleString() + " for " + Number(overlay.qty).toLocaleString() + " units"),
+    overlay.swap
+      ? /*#__PURE__*/React.createElement("div", { className: "swapviz" },
+          /*#__PURE__*/React.createElement("div", { className: "swapleg" },
+            /*#__PURE__*/React.createElement(AssetIcon, { symbol: overlay.offerSym, size: "lg" }),
+            /*#__PURE__*/React.createElement("div", { className: "amt2" }, Number(overlay.offerAmt).toLocaleString()),
+            /*#__PURE__*/React.createElement("div", { className: "sym2" }, overlay.offerSym)),
+          /*#__PURE__*/React.createElement("div", { className: "swaparrow" }, "\u21c4"),
+          /*#__PURE__*/React.createElement("div", { className: "swapleg" },
+            /*#__PURE__*/React.createElement(AssetIcon, { symbol: overlay.wantSym, size: "lg" }),
+            /*#__PURE__*/React.createElement("div", { className: "amt2" }, Number(overlay.wantAmt).toLocaleString()),
+            /*#__PURE__*/React.createElement("div", { className: "sym2" }, overlay.wantSym)))
+      : /*#__PURE__*/React.createElement("div", { className: "amt" }, "$" + Number(overlay.amount).toLocaleString() + " for " + Number(overlay.qty).toLocaleString() + " units"),
     /*#__PURE__*/React.createElement("div", { className: "sub" }, "Both legs moved in one indivisible transaction" + (overlay.signed ? ", each party signed with its own key" : "") + ". Or neither would have."))));
+}
+function AssetIcon({
+  symbol,
+  size
+}) {
+  const SRC = { cBTC: "/assets/cbtc.png", cETH: "/assets/ceth.png", CC: "/assets/cc.png" };
+  const cls = "tic" + (size === "sm" ? " sm" : size === "lg" ? " lg" : "");
+  const src = SRC[symbol];
+  const [bad, setBad] = useState(false);
+  if (!src || bad) {
+    const px = size === "lg" ? 40 : size === "sm" ? 14 : 18;
+    return /*#__PURE__*/React.createElement("span", {
+      className: "tmono",
+      style: { width: px, height: px, fontSize: px < 16 ? 7 : 9 },
+      title: symbol
+    }, (symbol || "?").replace(/^c/, "").slice(0, 3).toUpperCase());
+  }
+  return /*#__PURE__*/React.createElement("img", {
+    className: cls,
+    src: src,
+    alt: symbol,
+    title: symbol,
+    onError: () => setBad(true)
+  });
+}
+function SwapRfqForm({
+  onCreate
+}) {
+  const FALLBACK = [{ symbol: "cBTC" }, { symbol: "cETH" }, { symbol: "CC" }];
+  const [assets, setAssets] = useState(FALLBACK);
+  const [offerSym, setOfferSym] = useState("cBTC");
+  const [wantSym, setWantSym] = useState("cETH");
+  const [amount, setAmount] = useState("1");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const r = await api("/api/swap/registry?role=requester");
+        if (live && r && r.assets && r.assets.length) setAssets(r.assets);
+      } catch (e) { /* registry not seeded / ledger down: keep FALLBACK */ }
+    })();
+    return () => { live = false; };
+  }, []);
+
+  // keep want in sync: if offer now equals want, move want to the first other asset
+  useEffect(() => {
+    if (offerSym === wantSym) {
+      const alt = assets.map(a => a.symbol).find(x => x !== offerSym);
+      if (alt) setWantSym(alt);
+    }
+  }, [offerSym, wantSym, assets]);
+
+  // preload token icons so they swap instantly (no fetch flicker)
+  useEffect(() => {
+    ["/assets/cbtc.png", "/assets/ceth.png", "/assets/cc.png"].forEach(u => {
+      const im = new Image();
+      im.src = u;
+    });
+  }, []);
+
+  const syms = assets.map(a => a.symbol);
+  const findAsset = sym => assets.find(a => a.symbol === sym) || { symbol: sym };
+  const opt = sym => /*#__PURE__*/React.createElement("option", { key: sym, value: sym }, sym);
+
+  return /*#__PURE__*/React.createElement("div", {
+    className: "pane"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ph"
+  }, /*#__PURE__*/React.createElement("h3", null, "New Asset Swap"), /*#__PURE__*/React.createElement("span", {
+    className: "c"
+  }, "any ↔ any")), /*#__PURE__*/React.createElement("div", {
+    className: "pb"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "r2"
+  }, /*#__PURE__*/React.createElement("label", {
+    className: "fld"
+  }, /*#__PURE__*/React.createElement("span", null, "offer asset"), /*#__PURE__*/React.createElement("div", {
+    className: "aicw"
+  }, /*#__PURE__*/React.createElement(AssetIcon, { symbol: offerSym }), /*#__PURE__*/React.createElement("select", {
+    value: offerSym,
+    onChange: e => setOfferSym(e.target.value)
+  }, syms.map(opt)))), /*#__PURE__*/React.createElement("label", {
+    className: "fld"
+  }, /*#__PURE__*/React.createElement("span", null, "offer amount"), /*#__PURE__*/React.createElement("input", {
+    value: amount,
+    onChange: e => setAmount(e.target.value)
+  }))), /*#__PURE__*/React.createElement("label", {
+    className: "fld"
+  }, /*#__PURE__*/React.createElement("span", null, "want asset"), /*#__PURE__*/React.createElement("div", {
+    className: "aicw"
+  }, /*#__PURE__*/React.createElement(AssetIcon, { symbol: wantSym }), /*#__PURE__*/React.createElement("select", {
+    value: wantSym,
+    onChange: e => setWantSym(e.target.value)
+  }, syms.filter(x => x !== offerSym).map(opt)))), /*#__PURE__*/React.createElement("button", {
+    className: "btn prime tip-below",
+    disabled: busy || offerSym === wantSym,
+    onClick: async () => {
+      if (busy) return;
+      setBusy(true);
+      try {
+        await onCreate({
+          offerAsset: findAsset(offerSym),
+          offerAmount: amount,
+          wantAsset: findAsset(wantSym)
+        });
+      } finally { setBusy(false); }
+    },
+    "data-tip": "Request quotes to swap one asset for another \\u2014 dealers compete, winner settles atomically"
+  }, busy ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", { className: "spinr" }), "Creating") : "Create Swap RFQ")));
 }
 function RfqForm({
   onCreate
@@ -1205,7 +1783,8 @@ function DealerCard({
   rival,
   data,
   rivalCount,
-  onQuote
+  onQuote,
+  onSwapQuote
 }) {
   const [prices, setPrices] = useState({});
   const [busyQuote, setBusyQuote] = useState({});
@@ -1219,9 +1798,38 @@ function DealerCard({
     style: {
       color: accent
     }
-  }, data.inv.length, " invite", data.inv.length === 1 ? "" : "s")), /*#__PURE__*/React.createElement("div", {
+  }, (data.inv.length + (data.swapInv || []).length), " invite", (data.inv.length + (data.swapInv || []).length) === 1 ? "" : "s")), /*#__PURE__*/React.createElement("div", {
     className: "pb flush"
-  }, data.inv.length === 0 ? /*#__PURE__*/React.createElement("div", {
+  }, (data.swapInv || []).map(iv => /*#__PURE__*/React.createElement("div", {
+    className: "row",
+    key: iv.contractId
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, /*#__PURE__*/React.createElement("span", { className: "apair" },
+      /*#__PURE__*/React.createElement(AssetIcon, { symbol: iv.payload.offerAsset.symbol, size: "sm" }),
+      Number(iv.payload.offerAmount).toLocaleString() + " " + iv.payload.offerAsset.symbol,
+      /*#__PURE__*/React.createElement("span", { style: { color: "var(--accent)" } }, "\u2192"),
+      /*#__PURE__*/React.createElement(AssetIcon, { symbol: iv.payload.wantAsset.symbol, size: "sm" }),
+      iv.payload.wantAsset.symbol)), /*#__PURE__*/React.createElement("div", {
+    className: "s"
+  }, "swap \u00b7 quote in ", iv.payload.wantAsset.symbol)), /*#__PURE__*/React.createElement("div", {
+    className: "acts"
+  }, /*#__PURE__*/React.createElement("input", {
+    style: { width: 72, padding: "5px 7px" },
+    placeholder: iv.payload.wantAsset.symbol,
+    value: prices[iv.contractId] || "",
+    onChange: e => setPrices(p => ({ ...p, [iv.contractId]: e.target.value }))
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "btn sm tip-below tip-left",
+    disabled: !!busyQuote[iv.contractId],
+    onClick: async () => {
+      if (busyQuote[iv.contractId]) return;
+      setBusyQuote(b => ({ ...b, [iv.contractId]: true }));
+      try { await onSwapQuote(iv.contractId, name, prices[iv.contractId] || "0"); }
+      finally { setBusyQuote(b => { const nb = { ...b }; delete nb[iv.contractId]; return nb; }); }
+    },
+    "data-tip": "Submit your bid privately \u2014 rival dealers can never see it, enforced by the ledger"
+  }, busyQuote[iv.contractId] ? /*#__PURE__*/React.createElement("span", { className: "spinr" }) : "Quote")))), (data.inv.length === 0 && (data.swapInv || []).length === 0) ? /*#__PURE__*/React.createElement("div", {
     className: "empty"
   }, "No invitations yet.") : data.inv.map(iv => /*#__PURE__*/React.createElement("div", {
     className: "row",
@@ -1253,7 +1861,7 @@ function DealerCard({
       finally { setBusyQuote(b => { const nb = { ...b }; delete nb[iv.contractId]; return nb; }); }
     },
     "data-tip": "Submit your bid privately — rival dealers can never see it, enforced by the ledger"
-  }, busyQuote[iv.contractId] ? /*#__PURE__*/React.createElement("span", { className: "spinr" }) : "Quote"))))), data.q.length > 0 && /*#__PURE__*/React.createElement("div", {
+  }, busyQuote[iv.contractId] ? /*#__PURE__*/React.createElement("span", { className: "spinr" }) : "Quote"))))), (data.q.length > 0 || (data.swapQ || []).length > 0) && /*#__PURE__*/React.createElement("div", {
     className: "pb",
     style: {
       paddingTop: 8,
@@ -1264,7 +1872,17 @@ function DealerCard({
     style: {
       marginBottom: 6
     }
-  }, "own quotes"), data.q.map(q => /*#__PURE__*/React.createElement("div", {
+  }, "own quotes"), (data.swapQ || []).map(q => /*#__PURE__*/React.createElement("div", {
+    className: "bal",
+    key: q.contractId,
+    style: { paddingLeft: 0, paddingRight: 0 }
+  }, /*#__PURE__*/React.createElement("span", { className: "apair" },
+      /*#__PURE__*/React.createElement(AssetIcon, { symbol: q.payload.offerAsset.symbol, size: "sm" }),
+      q.payload.offerAmount + " " + q.payload.offerAsset.symbol,
+      /*#__PURE__*/React.createElement("span", { style: { color: "var(--accent)" } }, "\u2192"),
+      /*#__PURE__*/React.createElement(AssetIcon, { symbol: q.payload.wantAsset.symbol, size: "sm" })), /*#__PURE__*/React.createElement("span", {
+    className: "v"
+  }, Number(q.payload.price).toFixed(2), " ", q.payload.wantAsset.symbol))), data.q.map(q => /*#__PURE__*/React.createElement("div", {
     className: "bal",
     key: q.contractId,
     style: {
@@ -1283,18 +1901,26 @@ function Balances({
   h
 }) {
   const cash = h.cash || [],
-    inst = h.instruments || [];
+    inst = h.instruments || [],
+    assets = h.assets || [];
   return /*#__PURE__*/React.createElement("div", {
     className: "pane fillcol"
   }, /*#__PURE__*/React.createElement("div", {
     className: "ph"
   }, /*#__PURE__*/React.createElement("h3", null, title), /*#__PURE__*/React.createElement("span", {
     className: "c"
-  }, cash.length + inst.length)), /*#__PURE__*/React.createElement("div", {
+  }, cash.length + inst.length + assets.length)), /*#__PURE__*/React.createElement("div", {
     className: "pb flush"
-  }, cash.length + inst.length === 0 ? /*#__PURE__*/React.createElement("div", {
+  }, cash.length + inst.length + assets.length === 0 ? /*#__PURE__*/React.createElement("div", {
     className: "empty"
-  }, "No holdings.") : /*#__PURE__*/React.createElement("div", { className: "balscroll" }, cash.map(c => /*#__PURE__*/React.createElement("div", {
+  }, "No holdings.") : /*#__PURE__*/React.createElement("div", { className: "balscroll" }, assets.map(a => /*#__PURE__*/React.createElement("div", {
+    className: "bal",
+    key: a.contractId
+  }, /*#__PURE__*/React.createElement("span", { className: "apair" },
+      /*#__PURE__*/React.createElement(AssetIcon, { symbol: a.payload.asset.symbol, size: "sm" }),
+      a.payload.asset.symbol), /*#__PURE__*/React.createElement("span", {
+    className: "v i"
+  }, Number(a.payload.amount).toLocaleString()))), cash.map(c => /*#__PURE__*/React.createElement("div", {
     className: "bal",
     key: c.contractId
   }, /*#__PURE__*/React.createElement("span", null, c.payload.currency, " cash"), /*#__PURE__*/React.createElement("span", {
@@ -1306,6 +1932,325 @@ function Balances({
     className: "v i"
   }, Number(i.payload.quantity).toLocaleString()))))));
 }
+
+// ---- ROLE META ----
+const ROLES = {
+  requester: { nm: "Requester", ds: "Institutional buyer. Request prices, compare, award.", dot: "var(--accent)" },
+  dealer1:   { nm: "Dealer 1",  ds: "Liquidity provider. Price what you're shown \u2014 nothing else.", dot: "var(--amber)" },
+  dealer2:   { nm: "Dealer 2",  ds: "Liquidity provider. Price what you're shown \u2014 nothing else.", dot: "#6AA6FF" },
+  operator:  { nm: "Venue operations", ds: "Every party at once. For running the venue, not trading on it.", dot: "var(--dim)" }
+};
+
+// ---- LOGIN ----
+function Login({ onPick }) {
+  const [offset, setOffset] = useState(null);
+  const [assets, setAssets] = useState([]);
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const [le, rg] = await Promise.all([
+          api("/api/ledger-end").catch(() => ({})),
+          api("/api/swap/registry?role=requester").catch(() => ({}))
+        ]);
+        if (!live) return;
+        if (le) setOffset(le.offset);
+        const a = (rg && rg.assets && rg.assets.length) ? rg.assets.map(x => x.symbol) : ["cBTC", "cETH", "CC"];
+        setAssets(a);
+      } catch (e) { setAssets(["cBTC", "cETH", "CC"]); }
+    })();
+    return () => { live = false; };
+  }, []);
+
+  const Role = (r, lead) => React.createElement("button", {
+    key: r,
+    className: "lgn-role" + (lead ? " lead" : ""),
+    style: { "--rc": ROLES[r].dot },
+    onClick: () => onPick(r)
+  },
+    React.createElement("span", { className: "lgn-nm" }, ROLES[r].nm),
+    React.createElement("span", { className: "lgn-ds" }, ROLES[r].ds),
+    React.createElement("span", { className: "lgn-sees" }, lead ? "Sees every quote" : "Sees only its own"));
+
+  return React.createElement("div", { className: "lgn" },
+    React.createElement("div", { className: "lgn-corona" }),
+    React.createElement("div", { className: "lgn-inner" },
+
+      React.createElement("div", { className: "lgn-head" },
+        React.createElement("h1", null, "UMBRA"),
+        React.createElement("p", { className: "lgn-thesis" },
+          "Dealers compete. ",
+          React.createElement("span", null, "None of them can see each other.")),
+        React.createElement("div", { className: "lgn-meta" },
+          React.createElement("span", { className: "live" }),
+          "Canton DevNet",
+          offset != null ? React.createElement("span", { className: "lgn-off m" }, "#" + offset) : null)),
+
+      React.createElement("div", { className: "lgn-eyebrow" }, "Sign in as"),
+      React.createElement("div", { className: "lgn-roles" },
+        Role("requester", true), Role("dealer1"), Role("dealer2")),
+
+      React.createElement("div", { className: "lgn-assets" },
+        React.createElement("span", { className: "lgn-al" }, "Settles"),
+        assets.map(sym => React.createElement("span", { className: "lgn-a", key: sym },
+          React.createElement(AssetIcon, { symbol: sym, size: "sm" }),
+          React.createElement("span", null, sym)))),
+
+      React.createElement("div", { className: "lgn-foot" },
+        React.createElement("p", null,
+          "Open two dealers in separate windows. Neither will see the other\u2019s price \u2014 the ledger never sends it."),
+        React.createElement("button", { className: "lgn-ops", onClick: () => onPick("operator") },
+          "Venue operations \u2192"))));
+}
+
+// ---- PORTAL ----
+function PartyPortal({ role, onExit }) {
+  const meta = ROLES[role];
+  const isDealer = role === "dealer1" || role === "dealer2";
+  const [inv, setInv] = useState([]);
+  const [myQuotes, setMyQuotes] = useState([]);
+  const [holdings, setHoldings] = useState([]);
+  const [parties, setParties] = useState({});
+  const [offset, setOffset] = useState(null);
+  const [signed, setSigned] = useState(false);
+  const [price, setPrice] = useState({});
+  const [busy, setBusy] = useState({});
+  const [note, setNote] = useState(null);
+  const [fresh, setFresh] = useState(false);
+  const [history, setHistory] = useState({ settlements: [], rfqs: [] });
+  const [rate, setRate] = useState(null);
+
+  const say = (m, bad) => { setNote({ m, bad }); setTimeout(() => setNote(null), 3400); };
+
+  const load = useCallback(async () => {
+    try {
+      const [si, sq, sh, md, le, hist, rt] = await Promise.all([
+        api("/api/swap/invitations?role=" + role).catch(() => ({})),
+        api("/api/swap/quotes?role=" + role).catch(() => ({})),
+        api("/api/swap/holdings?role=" + role).catch(() => ({})),
+        api("/api/mode").catch(() => ({})),
+        api("/api/ledger-end").catch(() => ({})),
+        api("/api/swap/history?role=" + role).catch(() => ({})),
+        api("/api/market/rate").catch(() => ({}))
+      ]);
+      const nx = (si && si.invitations) || [];
+      setInv(prev => { if (nx.length > prev.length) { setFresh(true); setTimeout(() => setFresh(false), 900); } return nx; });
+      setMyQuotes((sq && sq.quotes) || []);
+      setHoldings((sh && sh.holdings) || []);
+      if (md && md.parties) setParties(md.parties);
+      if (md) setSigned(!!md.signedMode);
+      if (le) setOffset(le.offset);
+      if (hist && hist.ok) setHistory({ settlements: hist.settlements || [], rfqs: hist.rfqs || [] });
+      if (rt && rt.ok) setRate(rt.mid); else setRate(null);
+    } catch (e) {}
+  }, [role]);
+
+  useEffect(() => { load(); const t = setInterval(load, 2500); return () => clearInterval(t); }, [load]);
+
+  async function sendQuote(cid, wantSym) {
+    if (busy[cid]) return;
+    const p = price[cid];
+    if (!p || Number(p) <= 0) { say("Enter a price in " + wantSym, true); return; }
+    setBusy(b => ({ ...b, [cid]: true }));
+    try {
+      await post("/api/swap/invitations/" + cid + "/quote", { dealer: role, price: p });
+      say("Quote sent. Only the buyer can see it.");
+      setPrice(x => { const n = { ...x }; delete n[cid]; return n; });
+      load();
+    } catch (e) { say(e.message, true); }
+    finally { setBusy(b => { const n = { ...b }; delete n[cid]; return n; }); }
+  }
+
+  async function createRfq(f) {
+    try {
+      await post("/api/swap/rfq", {
+        offerAsset: f.offerAsset, offerAmount: f.offerAmount,
+        wantAsset: f.wantAsset, invited: ["dealer1", "dealer2"]
+      });
+      say("Request sent to your dealers.");
+      load();
+    } catch (e) { say(e.message, true); }
+  }
+
+  const pid = parties[role] || "";
+  const sorted = myQuotes.slice().sort((a, b) => Number(b.payload.price) - Number(a.payload.price));
+
+  const Holdings = React.createElement("section", { className: "mod" },
+    React.createElement("div", { className: "mod-h" },
+      React.createElement("h2", null, "Holdings"),
+      React.createElement("span", { className: "mod-c m" }, holdings.length)),
+    React.createElement("div", { className: "mod-b" },
+      holdings.length === 0
+        ? React.createElement("div", { className: "void" },
+            React.createElement("div", { className: "void-t" }, "No assets yet"),
+            React.createElement("div", { className: "void-s" }, "Your cBTC, cETH and CC balances appear here once funded."))
+        : React.createElement("div", { className: "hold" },
+            holdings.map(h => React.createElement("div", { className: "hold-i", key: h.contractId },
+              React.createElement(AssetIcon, { symbol: h.payload.asset.symbol }),
+              React.createElement("div", { className: "hold-t" },
+                React.createElement("div", { className: "hold-a m" }, Number(h.payload.amount).toLocaleString()),
+                React.createElement("div", { className: "hold-s" }, h.payload.asset.symbol)))))));
+
+  return React.createElement("div", { className: "prt" },
+
+    React.createElement("header", { className: "prt-bar" },
+      React.createElement("div", { className: "prt-id" },
+        React.createElement("span", { className: "prt-dot", style: { background: meta.dot } }),
+        React.createElement("span", { className: "prt-nm" }, meta.nm),
+        pid ? React.createElement("span", { className: "prt-pid m" }, short(pid)) : null),
+      React.createElement("div", { className: "prt-right" },
+        React.createElement("span", { className: "prt-net" },
+          React.createElement("span", { className: "live" }),
+          "Canton DevNet",
+          offset != null ? React.createElement("span", { className: "prt-off m" }, "#" + offset) : null),
+        React.createElement("span", { className: "prt-trust " + (signed ? "sg" : "op") }, signed ? "self-signing" : "operator acts"),
+        React.createElement("button", { className: "prt-out", onClick: onExit }, "Sign out"))),
+
+    note ? React.createElement("div", { className: "prt-note " + (note.bad ? "bad" : "ok") }, note.m) : null,
+
+    React.createElement("main", { className: "prt-grid" + (isDealer ? " dlr" : "") },
+
+      // ---------- LEFT ----------
+      React.createElement("div", { className: "prt-col" },
+        isDealer
+          ? React.createElement("section", { className: "mod mod-focal" },
+              React.createElement("div", { className: "mod-h" },
+                React.createElement("h2", null, "Awaiting your price"),
+                React.createElement("span", { className: "mod-c m" }, inv.length)),
+              React.createElement("div", { className: "mod-b" },
+                inv.length === 0
+                  ? React.createElement("div", { className: "ask-empty" },
+                      React.createElement("div", { className: "ask-mark" }, "\u2014"),
+                      React.createElement("p", null, "No one has asked you for a price."),
+                      React.createElement("span", null, "A request appears here only if the buyer invites you. You will never see one sent to another dealer."))
+                  : inv.map(iv => {
+                      const o = iv.payload.offerAsset.symbol, w = iv.payload.wantAsset.symbol;
+                      const amt = Number(iv.payload.offerAmount);
+                      return React.createElement("div", { className: "ask" + (fresh ? " ask-new" : ""), key: iv.contractId },
+                        React.createElement("div", { className: "ask-pair" },
+                          React.createElement("div", { className: "ask-side" },
+                            React.createElement(AssetIcon, { symbol: o, size: "lg" }),
+                            React.createElement("div", { className: "ask-amt m" }, amt.toLocaleString()),
+                            React.createElement("div", { className: "ask-sym" }, o)),
+                          React.createElement("div", { className: "ask-arr" }, "\u2192"),
+                          React.createElement("div", { className: "ask-side" },
+                            React.createElement(AssetIcon, { symbol: w, size: "lg" }),
+                            React.createElement("div", { className: "ask-amt m dim" }, "?"),
+                            React.createElement("div", { className: "ask-sym" }, w))),
+                        React.createElement("p", { className: "ask-line" },
+                          "The buyer gives ", React.createElement("b", null, amt.toLocaleString() + " " + o),
+                          ". What do you pay, in ", React.createElement("b", null, w), "?"),
+                        React.createElement("div", { className: "ask-act" },
+                          React.createElement("div", { className: "ask-input" },
+                            React.createElement("input", {
+                              inputMode: "decimal", placeholder: "0.00",
+                              value: price[iv.contractId] || "",
+                              onChange: e => setPrice(x => ({ ...x, [iv.contractId]: e.target.value })),
+                              onKeyDown: e => { if (e.key === "Enter") sendQuote(iv.contractId, w); }
+                            }),
+                            React.createElement("span", { className: "ask-unit" }, w)),
+                          React.createElement("button", {
+                            className: "btn ask-btn",
+                            disabled: !!busy[iv.contractId],
+                            onClick: () => sendQuote(iv.contractId, w)
+                          }, busy[iv.contractId] ? React.createElement("span", { className: "spinr" }) : "Send private quote")));
+                    })))
+          : React.createElement("section", { className: "mod" },
+              React.createElement("div", { className: "mod-h" },
+                React.createElement("h2", null, "Request a price")),
+              React.createElement("div", { className: "mod-b" },
+                React.createElement(SwapRfqForm, { onCreate: createRfq }))),
+        Holdings),
+
+      // ---------- RIGHT ----------
+      React.createElement("div", { className: "prt-col" },
+
+        React.createElement("section", { className: "mod" },
+          React.createElement("div", { className: "mod-h" },
+            React.createElement("h2", null, isDealer ? "Your quotes" : "Prices quoted to you"),
+            React.createElement("span", { className: "mod-c m" }, myQuotes.length)),
+          React.createElement("div", { className: "mod-b flush" },
+            React.createElement("table", { className: "qm" },
+              React.createElement("thead", null, React.createElement("tr", null,
+                React.createElement("th", null, isDealer ? "Pair" : "Dealer"),
+                React.createElement("th", null, isDealer ? "You pay" : "Pair"),
+                React.createElement("th", null, isDealer ? "You receive" : "You pay"),
+                isDealer ? null : React.createElement("th", null, "You receive"),
+                isDealer ? null : React.createElement("th", null))),
+              React.createElement("tbody", null,
+                sorted.length === 0
+                  ? React.createElement("tr", null, React.createElement("td", {
+                      colSpan: isDealer ? 3 : 5, className: "waiting"
+                    }, isDealer ? "You have not priced anything yet." : "Waiting for quotes \u2014 each dealer is pricing blind, unable to see the others."))
+                  : sorted.map((q, i) => {
+                      const p = q.payload, best = !isDealer && i === 0;
+                      const pairCell = React.createElement("span", { className: "apair" },
+                        React.createElement(AssetIcon, { symbol: p.offerAsset.symbol, size: "sm" }),
+                        React.createElement("span", { style: { color: "var(--dim)" } }, "\u2192"),
+                        React.createElement(AssetIcon, { symbol: p.wantAsset.symbol, size: "sm" }));
+                      const give = React.createElement("span", { className: "m" }, Number(p.offerAmount).toLocaleString() + " " + p.offerAsset.symbol);
+                      const get = React.createElement("span", { className: "m" }, Number(p.price).toFixed(2) + " " + p.wantAsset.symbol);
+                      return isDealer
+                        ? React.createElement("tr", { key: q.contractId },
+                            React.createElement("td", null, pairCell),
+                            React.createElement("td", null, give),
+                            React.createElement("td", { className: "px" }, get))
+                        : React.createElement("tr", { key: q.contractId, className: best ? "best" : "" },
+                            React.createElement("td", null, cleanRole(p.dealer)),
+                            React.createElement("td", null, pairCell),
+                            React.createElement("td", null, give),
+                            React.createElement("td", { className: "px" }, get, best ? React.createElement("span", { className: "bestmk" }, "best") : null),
+                            React.createElement("td", { style: { textAlign: "right" } },
+                              React.createElement("button", { className: "btn sm award" }, "Award")));
+                    }))))),
+
+        isDealer
+          ? React.createElement("section", { className: "mod" },
+              React.createElement("div", { className: "mod-h" },
+                React.createElement("h2", null, "What the ledger withholds")),
+              React.createElement("div", { className: "mod-b" },
+                ["Rival", "Price", "Count"].map(t =>
+                  React.createElement("div", { className: "wh", key: t },
+                    React.createElement("span", { className: "wh-t" }, t),
+                    React.createElement("span", { className: "wh-b" }))),
+                React.createElement("p", { className: "wh-f" },
+                  "Not hidden by this screen. ", React.createElement("b", null, "Never sent to you."),
+                  " Canton discloses a quote only to the buyer who asked for it.")))
+          : React.createElement("section", { className: "mod" },
+              React.createElement("div", { className: "mod-h" },
+                React.createElement("h2", null, "Settlement")),
+              React.createElement("div", { className: "mod-b" },
+                React.createElement("p", { className: "wh-f", style: { paddingTop: 0 } },
+                  "Awarding settles both legs in one transaction. Either the swap completes in full, or ",
+                  React.createElement("b", null, "nothing moves"), "."))))));
+}
+
+// ---------------------------------------------------------------------------
+// APP — owns session identity, routes to Login / Portal / Operator Console.
+// ---------------------------------------------------------------------------
+function App() {
+  const [role, setRole] = useState(() => {
+    try {
+      const u = new URLSearchParams(window.location.search).get("role");
+      if (u && ROLES[u]) return u;
+      return sessionStorage.getItem("umbra-role") || null;
+    } catch { return null; }
+  });
+
+  const pick = (r) => {
+    try { sessionStorage.setItem("umbra-role", r); } catch {}
+    setRole(r);
+  };
+  const exit = () => {
+    try { sessionStorage.removeItem("umbra-role"); } catch {}
+    setRole(null);
+  };
+
+  if (!role) return /*#__PURE__*/React.createElement(Login, { onPick: pick });
+  if (role === "operator") return /*#__PURE__*/React.createElement(OperatorConsole, { onExit: exit });
+  return /*#__PURE__*/React.createElement(PartyPortal, { role: role, onExit: exit });
+}
+
 ReactDOM.createRoot(document.getElementById("root")).render(/*#__PURE__*/React.createElement(App, null));
 </script>
 </body>
