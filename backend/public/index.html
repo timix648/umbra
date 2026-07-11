@@ -325,6 +325,37 @@
   .whg-sub b{color:var(--text);font-weight:600}
   .mod-h .lk{margin-right:7px;opacity:.7}
 
+  /* --- logo is a link, not a Link --- */
+  a.dsk-brand{text-decoration:none;color:inherit}
+  a.dsk-brand:hover b{color:var(--accent)}
+  a.dsk-brand:hover .cx{color:var(--mute)}
+  a.dsk-brand *{text-decoration:none}
+
+  /* --- light contrast --- : the day palette was rendering everything at
+     muted weight. Text must be near-black; only true metadata stays grey. */
+  [data-theme="light"]{
+    --text:#0E1016; --mute:#4B5563; --dim:#8A93A3;
+    --line:rgba(14,16,22,.10); --line2:rgba(14,16,22,.17);
+  }
+  [data-theme="light"] .mod-h h2{color:var(--text)}
+  [data-theme="light"] .ask-line,
+  [data-theme="light"] .wh-f,
+  [data-theme="light"] .void-t,
+  [data-theme="light"] .whg-sub,
+  [data-theme="light"] .rq-blind{color:#333A47}
+  [data-theme="light"] .ask-empty p,
+  [data-theme="light"] .lgn-ds,
+  [data-theme="light"] .lgn-thesis{color:#3A4150}
+  [data-theme="light"] .dq-empty,
+  [data-theme="light"] .ask-empty span,
+  [data-theme="light"] .void-s,
+  [data-theme="light"] .qm .waiting{color:#5C6575}
+  [data-theme="light"] .prt-bar{background:#FFFFFF;border-bottom-color:var(--line)}
+  [data-theme="light"] body{background:#EEF1F6}
+  [data-theme="light"] .whg-c{background:#FFFFFF}
+  [data-theme="light"] .whg-eq{background:rgba(124,77,255,.34)}
+  [data-theme="light"] .icbtn{background:#FFFFFF}
+
   /* holdings value */
   .hl-tot{display:flex;align-items:baseline;justify-content:space-between;padding:0 2px 12px;
     margin-bottom:6px;border-bottom:1px solid var(--line)}
