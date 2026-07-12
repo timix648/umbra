@@ -616,70 +616,6 @@ function assetId(a) {
   return { admin: a.admin, symbol: a.symbol };
 }
 
-// --- dev faucet: mint an AssetHolding for a party (self-issued stand-in) ---
-// body: { role, asset: {admin, symbol}, amount }
-app.post("/api/swap/fund", async (req, res) => {
-  try {
-    const { role = "requester", asset, amount } = req.body;
-    if (!asset || amount == null) throw new Error("need { role, asset:{admin,symbol}, amount }");
-    const party = await partyIdFor(role);
-    const before = new Set((await queryActive(party, "UmbraSwap:AssetHolding")).map(c => c.contractId));
-    await act(role, "swap-fund", [{
-      CreateCommand: {
-        templateId: `#${PKGN}:UmbraSwap:AssetHolding`,
-        createArguments: { owner: party, asset: assetId(asset), amount: String(amount) },
-      },
-    }]);
-    const cid = await pollNewCid(party, "UmbraSwap:AssetHolding", before);
-    res.json({ ok: true, signed: SIGNED_MODE, holdingCid: cid, owner: party, asset: assetId(asset), amount });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// --- create a SwapRfq and invite dealers ---
-// body: { offerAsset:{admin,symbol}, offerAmount, wantAsset:{admin,symbol}, dealers:[role...] }
-app.post("/api/swap/rfq", async (req, res) => {
-  try {
-    const { offerAsset, offerAmount, wantAsset, dealers = ["dealer1", "dealer2"] } = req.body;
-    if (!offerAsset || !wantAsset || offerAmount == null)
-      throw new Error("need { offerAsset, offerAmount, wantAsset, dealers }");
-    const requester = await partyIdFor("requester");
-    const operator = PARTIES.requester; // operator/venue party (namespaced)
-    const dealerParties = [];
-    for (const d of dealers) dealerParties.push(await partyIdFor(d));
-
-    // 1) create the SwapRfq (invited = the dealer parties; that list is the allowlist)
-    const rfqBefore = new Set((await queryActive(requester, "UmbraSwap:SwapRfq")).map(c => c.contractId));
-    await act("requester", "swap-rfq", [{
-      CreateCommand: {
-        templateId: `#${PKGN}:UmbraSwap:SwapRfq`,
-        createArguments: {
-          requester, operator,
-          offerAsset: assetId(offerAsset), offerAmount: String(offerAmount),
-          wantAsset: assetId(wantAsset), invited: dealerParties,
-        },
-      },
-    }]);
-    const rfqCid = await pollNewCid(requester, "UmbraSwap:SwapRfq", rfqBefore);
-
-    // 2) InviteDealer for each dealer -> private SwapInvitation
-    const invitations = [];
-    for (let i = 0; i < dealers.length; i++) {
-      const invBefore = new Set((await queryActive(requester, "UmbraSwap:SwapInvitation")).map(c => c.contractId));
-      await act("requester", "swap-invite", [{
-        ExerciseCommand: {
-          templateId: `#${PKGN}:UmbraSwap:SwapRfq`,
-          contractId: rfqCid, choice: "InviteDealer",
-          choiceArgument: { dealer: dealerParties[i] },
-        },
-      }]);
-      const invCid = await pollNewCid(requester, "UmbraSwap:SwapInvitation", invBefore);
-      invitations.push({ dealer: dealers[i], invitationCid: invCid });
-    }
-    res.json({ ok: true, signed: SIGNED_MODE, rfqCid, invitations });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-
 // ===== UMBRA SWAP ENDPOINTS (spliced) =====
 // ============================================================================
 // UMBRA SWAP — backend API for the unified any-to-any engine (UmbraSwap.daml)
@@ -782,9 +718,9 @@ app.post("/api/swap/fund", async (req, res) => {
     const asset = await resolveAsset(req.body.asset);
     const amount = String(req.body.amount);
     const before = await idSetSwap(owner, "UmbraSwap:AssetHolding");
-    // AssetHolding signatory = owner, asset.admin. Operator holds CanActAs on the
-    // demo parties; asset.admin must also authorize (in demo it is operator-held).
-    await submit("swap-fund", owner, [{
+    // AssetHolding signatory = owner (observer asset.admin), so only the owner's
+    // authority is needed. Use act() so SIGNED_MODE routes through prepare->sign.
+    await act(role, "swap-fund", [{
       CreateCommand: { templateId: `#${PKGN}:UmbraSwap:AssetHolding`,
         createArguments: { owner, asset, amount } } }]);
     const cid = await pollNewCid(owner, "UmbraSwap:AssetHolding", before);
@@ -802,23 +738,45 @@ app.get("/api/swap/holdings", async (req, res) => {
 
 // ---- GRANULAR VENUE FLOW ---------------------------------------------------
 
-// requester creates a swap RFQ (offer asset -> want asset)
+// requester creates a swap RFQ (offer asset -> want asset), then invites the
+// dealers. One private SwapInvitation per dealer -- no dealer sees another's.
+//
+// expiresAt is MANDATORY on SwapRfq and is enforced BY THE LEDGER:
+// SubmitSwapQuote asserts `now < expiresAt`, so a late quote is refused by
+// Canton, not merely hidden by the UI (see swapRejectsLateQuote).
+// Default 15 min; override with body.expiresAt (ISO-8601) or body.ttlMins.
 app.post("/api/swap/rfq", async (req, res) => {
   try {
     const requester = await partyIdFor("requester");
     const operator = await partyIdFor("requester");
     const offerAsset = await resolveAsset(req.body.offerAsset);
     const wantAsset = await resolveAsset(req.body.wantAsset);
+    const roles = req.body.invited || req.body.dealers || ["dealer1", "dealer2"];
     const invited = [];
-    for (const r of (req.body.invited || ["dealer1", "dealer2"]))
-      invited.push(await partyIdFor(r));
-    const result = await act("requester", "swap-rfq", [{
+    for (const r of roles) invited.push(await partyIdFor(r));
+    const expiresAt = req.body.expiresAt ||
+      new Date(Date.now() + Number(req.body.ttlMins || 15) * 60000).toISOString();
+
+    const rfqBefore = await idSetSwap(requester, "UmbraSwap:SwapRfq");
+    await act("requester", "swap-rfq", [{
       CreateCommand: { templateId: `#${PKGN}:UmbraSwap:SwapRfq`,
         createArguments: {
           requester, operator,
           offerAsset, offerAmount: String(req.body.offerAmount),
-          wantAsset, invited } } }]);
-    res.json({ ok: true, signed: SIGNED_MODE, result });
+          wantAsset, invited, expiresAt } } }]);
+    const rfqCid = await pollNewCid(requester, "UmbraSwap:SwapRfq", rfqBefore);
+
+    const invitations = [];
+    for (let i = 0; i < roles.length; i++) {
+      const invBefore = await idSetSwap(requester, "UmbraSwap:SwapInvitation");
+      await act("requester", "swap-invite", [{
+        ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapRfq`,
+          contractId: rfqCid, choice: "InviteDealer",
+          choiceArgument: { dealer: invited[i] } } }]);
+      const invitationCid = await pollNewCid(requester, "UmbraSwap:SwapInvitation", invBefore);
+      invitations.push({ dealer: roles[i], invitationCid });
+    }
+    res.json({ ok: true, signed: SIGNED_MODE, rfqCid, expiresAt, invitations });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -901,11 +859,16 @@ app.post("/api/swap/invitations/:cid/quote", async (req, res) => {
   try {
     const dealerRole = String(req.body.dealer || "").toLowerCase();
     await partyIdFor(dealerRole); // validate
+    // validUntil is MANDATORY on SubmitSwapQuote: how long this dealer's price
+    // stays firm. AcceptSwapQuote asserts `now < validUntil`, so a stale price
+    // cannot be lifted (see swapRejectsStaleQuote). Default 5 min.
+    const validUntil = req.body.validUntil ||
+      new Date(Date.now() + Number(req.body.validMins || 5) * 60000).toISOString();
     const result = await act(dealerRole, "swap-quote", [{
       ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapInvitation`,
         contractId: req.params.cid, choice: "SubmitSwapQuote",
-        choiceArgument: { price: String(req.body.price) } } }]);
-    res.json({ ok: true, signed: SIGNED_MODE, result });
+        choiceArgument: { price: String(req.body.price), validUntil } } }]);
+    res.json({ ok: true, signed: SIGNED_MODE, validUntil, result });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -999,6 +962,10 @@ app.post("/api/swap/award", async (req, res) => {
     const wantAsset = await resolveAsset(req.body.wantAsset);
     const offerAmount = String(req.body.offerAmount);
     const wantAmount = String(req.body.wantAmount);
+    const expiresAt = req.body.expiresAt ||
+      new Date(Date.now() + Number(req.body.ttlMins || 15) * 60000).toISOString();
+    const validUntil = req.body.validUntil ||
+      new Date(Date.now() + Number(req.body.validMins || 5) * 60000).toISOString();
     const steps = [];
 
     // (0) optionally fund both legs (demo)
@@ -1027,7 +994,7 @@ app.post("/api/swap/award", async (req, res) => {
     await act("requester", "swap-rfq", [{
       CreateCommand: { templateId: `#${PKGN}:UmbraSwap:SwapRfq`,
         createArguments: { requester, operator, offerAsset, offerAmount,
-          wantAsset, invited: [dealer] } } }]);
+          wantAsset, invited: [dealer], expiresAt } } }]);
     const rfqCid = await pollNewCid(requester, "UmbraSwap:SwapRfq", b);
     steps.push("created swap RFQ");
 
@@ -1044,7 +1011,7 @@ app.post("/api/swap/award", async (req, res) => {
     await act(dealerRole, "swap-quote", [{
       ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapInvitation`,
         contractId: invCid, choice: "SubmitSwapQuote",
-        choiceArgument: { price: wantAmount } } }]);
+        choiceArgument: { price: wantAmount, validUntil } } }]);
     const quoteCid = await pollNewCid(dealer, "UmbraSwap:SwapQuote", b);
     steps.push(`${dealerRole} quoted ${wantAmount} ${wantAsset.symbol}`);
 
