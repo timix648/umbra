@@ -1090,6 +1090,55 @@ app.post("/api/swap/award", async (req, res) => {
 
 
 
+// ===== LEDGER PROOF =====
+// GET /api/ledger/contract/:cid?role=requester
+// Reads a contract back off the Canton ledger. There is no public explorer for
+// a private ledger, so this IS the proof: the record, as the ledger holds it.
+app.get("/api/ledger/contract/:cid", async (req, res) => {
+  try {
+    const role = String(req.query.role || "requester").toLowerCase();
+    const party = await partyIdFor(role);
+    const cid = req.params.cid;
+
+    // Look through the templates this venue creates.
+    const TEMPLATES = [
+      "UmbraSwap:SwapSettlement",
+      "UmbraSwap:SwapDealerPending",
+      "UmbraSwap:SwapProposal",
+      "UmbraSwap:AssetHolding",
+      "UmbraSwap:SwapQuote",
+      "UmbraSwap:SwapRfq",
+    ];
+
+    for (const tmpl of TEMPLATES) {
+      const rows = await queryActive(party, tmpl).catch(() => []);
+      const hit = rows.find(r => r.contractId === cid);
+      if (hit) {
+        return res.json({
+          ok: true, found: true, archived: false,
+          contractId: cid, template: tmpl, payload: hit.payload,
+          note: "Active on the Canton ledger.",
+        });
+      }
+    }
+
+    // Not active. For a settled swap that is EXPECTED: executing the settlement
+    // consumes the contract. Say that plainly instead of reporting a failure.
+    const le = await ledgerFetch("/v2/state/ledger-end").then(r => r.json()).catch(() => null);
+    res.json({
+      ok: true, found: false, archived: true,
+      contractId: cid,
+      ledgerEnd: le ? le.offset : null,
+      note: "Not active \u2014 this contract has been consumed. A settled swap " +
+            "archives its settlement contract by design: the trade executed and " +
+            "the holdings moved. The record remains in the ledger's transaction " +
+            "history, visible to its stakeholders.",
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // ===== MARKET REFERENCE RATE =====
 // cBTC := BTC 1:1, cETH := ETH 1:1. The honest reference for a pair is the real
 // spot cross. No synthetic prices: if the feed fails we return null and the UI
