@@ -13,7 +13,7 @@ rules. No dealer can see whether a rival was even invited, let alone what they q
 > Canton was built to fix exactly this. **Umbra is the proof.**
 
 **Challenge track:** Private DeFi & Capital Markets
-**Network:** Canton DevNet (FiveNorth validator)
+**Network:** Canton DevNet (Seaport validator)
 **Status:** Live end-to-end on DevNet — privacy, atomic settlement, external-party signing,
 and CIP-56 standard settlement all working against real ledger infrastructure.
 
@@ -21,9 +21,11 @@ and CIP-56 standard settlement all working against real ledger infrastructure.
 
 ## Links
 
-- **Demo video:** https://youtu.be/_KvXxE2QPC4
-- **Live app:** https://um-bra.app/
-- **Contact:** https://x.com/UmbraOnCanton
+- **Demo video:** _link_
+- **Live app:** _link_
+- **Landing page:** _link_
+- **Submission:** _link_
+- **Contact / socials:** _link_
 
 ---
 
@@ -51,7 +53,7 @@ uniquely offers.
 
 ---
 
-## The six guarantees (all proven live on DevNet)
+## The five guarantees (all proven live on DevNet)
 
 | # | Guarantee | How it's enforced |
 |---|-----------|-------------------|
@@ -60,13 +62,9 @@ uniquely offers.
 | P3 | **External-party signing** — no trusted operator | Parties onboarded with their own keys; transactions assembled, signed, and executed under each party's own authority |
 | P4 | **CIP-56 Holding interface** — standards-compliant assets | Holdings implement the Splice `Holding` interface, rendering a standard `HoldingView` |
 | P5 | **CIP-56 allocation-based atomic DvP** — settlement via the token standard | Each party creates its own `Allocation` (signatory = sender); the executor assembles a fully-signed settlement and fires a single atomic `ExecuteTransfer` across both legs |
-| P6 | **Sound settlement** — underfunded trades are rejected, not silently minted | Each allocation leg asserts the holder actually holds enough (`cash.amount >= legAmount`, `inst.quantity >= legQty`) before any transfer; proven by headless `daml test` cases confirming an underfunded buyer or under-delivering dealer cannot settle |
 
 The headline engineering result is **P5**: a working CIP-56 allocation-based atomic swap, in
 both operator mode and trust-no-operator signed mode, on live DevNet.
-
-P5 is also **sound**: the atomic transfer refuses to execute unless each party genuinely holds
-its leg — verified by headless tests, so the guarantee holds even without a live ledger.
 
 ---
 
@@ -99,8 +97,7 @@ umbra/
   daml/
     Umbra.daml         Core market contracts + custom atomic settlement engine
     UmbraDvP.daml      CIP-56 allocation-based atomic DvP (standards-compliant path)
-    UmbraTest.daml     Demo init script + privacy/settlement test scenarios
-    UmbraDvpTest.daml  Headless CIP-56 DvP tests: atomic settlement + soundness guards
+    UmbraTest.daml     Demo init script
   backend/
     server.js          Express API over the Canton JSON Ledger API v2
     token.js           OAuth client-credentials auth + ledger fetch with 401 retry
@@ -123,15 +120,10 @@ umbra/
 
 **`UmbraDvP.daml`** — the CIP-56 allocation-based settlement path (P5):
 
-- `CashAllocation`, `InstrumentAllocation` — each implements the Splice `Allocation` interface, with **signatory = the sending party**, so each party authorizes its own leg. The operator never forges authority. Each execute leg asserts the holder actually holds enough before transferring (P6).
+- `CashAllocation`, `InstrumentAllocation` — each implements the Splice `Allocation` interface, with **signatory = the sending party**, so each party authorizes its own leg. The operator never forges authority.
 - `DvPProposal` -> `DvPDealerAccepted` -> `DvPSettlement` — a propose/accept choreography. Because the final `DvPSettlement` is signed by requester, dealer, **and** executor, its `ExecuteDvP` choice carries enough authority to drive the nested `Allocation_ExecuteTransfer` on both legs atomically. This solves the authority-propagation wall that a naive flat multi-party submission hits.
 
 > **Why the choreography matters:** `Allocation_ExecuteTransfer` requires the authority of executor, sender, **and** receiver. A flat `actAs: [a, b, c]` submission does **not** propagate that authority through a nested interface exercise. The propose/accept flow gathers each party's signature onto a single jointly-signed contract whose choice then carries all the authority required for the atomic transfer.
-
-**`UmbraDvpTest.daml`** — headless proofs for the CIP-56 path:
-
-- `umbraDvpAtomicSettles` — drives the full allocation choreography and asserts both legs move (P5).
-- `umbraDvpRejectsUnderfundedCash` / `umbraDvpRejectsUndeliveredInstrument` — prove an underfunded buyer or under-delivering dealer cannot settle (P6). These run under `daml test`, so the soundness guarantee holds even without a live ledger.
 
 ### Backend (`server.js`)
 
@@ -168,51 +160,26 @@ A single-file React terminal (loaded via CDN — no build step) that renders all
 
 ### 1. Configure environment
 
-Create `backend/.env` (never commit this — it is gitignored):
+Create `backend/.env` (never commit this):
 
 ```
-# Auth (OAuth client-credentials against the DevNet validator)
 AUTH_URL=https://auth.sandbox.fivenorth.io/application/o/token/
 CLIENT_ID=validator-devnet-m2m
 CLIENT_SECRET=your_secret_here
 AUDIENCE=validator-devnet-m2m
 SCOPE=daml_ledger_api
-
-# Ledger
 LEDGER_API=https://ledger-api.validator.devnet.sandbox.fivenorth.io
-LEDGER_USER_ID=your_ledger_user_id
 SYNCHRONIZER_ID=global-domain::1220...
-
-# Package resolution — MUST match the deployed package name
-PACKAGE_NAME=umbra-v2
-PACKAGE_ID=deployed_package_id_optional
-
-# Parties
 REQUESTER=Requester::1220...
 DEALER1=Dealer1::1220...
 DEALER2=Dealer2::1220...
-OBSERVER=Observer::1220...
-
-# Optional
-PORT=4000
-SIGNED_MODE=false
 ```
-
-> **`PACKAGE_NAME=umbra-v2` is required** — the backend resolves all templates by package
-> name (`#umbra-v2:...`). It must match the name in `daml.yaml` and the package deployed to
-> the ledger, or template resolution will fail.
 
 ### 2. Build the Daml model
 
 ```
 export PATH="$HOME/.daml/bin:$PATH"
 daml build
-```
-
-This produces `.daml/dist/umbra-v2-0.1.0.dar`. Run the test suite to verify the guarantees:
-
-```
-daml test
 ```
 
 ### 3. Run the backend (serves the API and the UI)
@@ -231,24 +198,23 @@ node server.js
 
 ---
 
-## Scope
+## Design decisions and honest limitations
 
-Umbra demonstrates the full private-RFQ-to-atomic-settlement lifecycle end to end on
-live DevNet. For the hackathon, holdings are minted as test stand-ins for what would be
-bank-issued tokenized cash and registry-issued tokenized securities in production — the
-atomic settlement logic is identical either way. The focus is the hard part: private
-quoting and standards-compliant atomic DvP, both proven live.
+These are deliberate scoping choices for the hackathon, documented plainly:
+
+- **Demo holdings are minted as stand-ins.** In production the cash leg would be bank-issued tokenized cash and the asset a tokenized security from a real registry; here we mint test holdings to demonstrate the swap mechanics. The atomic-settlement logic is identical either way.
+- **The CIP-56 path re-funds fresh holdings per settlement** rather than settling against the exact pre-funded holdings quoted. The next production step is settling against pre-funded, quote-bound holdings — the settlement primitive is already proven; this is a workflow addition.
+- **Instruments are free-text labels**, not validated against an on-chain securities registry.
+- **Deadlines on allocations are not enforced** in this flow (a fixed settlement reference is used to keep `mkSpec` pure).
+- **Single asset class** demonstrated end-to-end; the model generalizes to multiple.
 
 ## Roadmap
 
-- **Settle against parties' standing balances.** Today each settlement is funded
-  per-trade; the next step binds settlement to persistent balances. Atomic change-return and
-  underfunded-trade rejection are already proven — this extends them to standing balances.
-- **Real issuer parties** for tokenized cash and tokenized securities, replacing minted
-  stand-ins with registry-issued assets.
-- **Full multi-party external-signer execution** via a dedicated executor party.
-- **Loop Wallet / Canton Coin onboarding** for end-to-end self-custody UX.
-- **Configurable dealer panels and persistent settlement history.**
+- Settle against pre-funded, quote-bound holdings (close the re-mint gap).
+- Full multi-party external-signer execution via a dedicated executor party.
+- Real tokenized-cash and tokenized-security registries as issuer parties.
+- Loop Wallet / Canton Coin onboarding for end-to-end self-custody UX.
+- Configurable dealer panels and persistent settlement history.
 
 ---
 
