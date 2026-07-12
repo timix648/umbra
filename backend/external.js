@@ -77,4 +77,32 @@ async function prepareSignExecute(rec, commands, tag = "ext") {
   });
 }
 
-module.exports = { onboardExternalParty, prepareSignExecute };
+// Multi-party prepare -> sign -> execute. Every party signs with its OWN key;
+// the operator still signs nothing. Needed whenever a contract has more than one
+// external signatory (e.g. AssetHolding = signatory owner, asset.admin).
+async function prepareSignExecuteMulti(recs, commands, tag = "extm") {
+  const parties = recs.map((r) => r.partyId);
+  const prep = await jpost("/v2/interactive-submission/prepare", {
+    userId: USER_ID, actAs: parties, commandId: `${tag}-${Date.now()}`,
+    synchronizerId: SYNC, packageIdSelectionPreference: [], commands,
+  });
+  const hash = Buffer.from(prep.preparedTransactionHash, "base64");
+  const signatures = recs.map((rec) => {
+    const priv = crypto.createPrivateKey({
+      key: Buffer.from(rec.privDer, "base64"), format: "der", type: "pkcs8",
+    });
+    const sig = crypto.sign(null, hash, priv).toString("base64");
+    return { party: rec.partyId, signatures: [{
+      format: "SIGNATURE_FORMAT_RAW", signature: sig, signedBy: rec.fingerprint,
+      signingAlgorithmSpec: "SIGNING_ALGORITHM_SPEC_ED25519" }] };
+  });
+  return jpost("/v2/interactive-submission/execute", {
+    preparedTransaction: prep.preparedTransaction,
+    hashingSchemeVersion: prep.hashingSchemeVersion,
+    submissionId: `${tag}-${Date.now()}`, userId: USER_ID,
+    deduplicationPeriod: { Empty: {} },
+    partySignatures: { signatures },
+  });
+}
+
+module.exports = { onboardExternalParty, prepareSignExecute, prepareSignExecuteMulti };

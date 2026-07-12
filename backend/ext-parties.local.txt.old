@@ -1,0 +1,26 @@
+{
+  "extTrader": {
+    "role": "extTrader",
+    "partyId": "extTrader-1782579903261::12204e8389415dfd2961a9dd14fa41f4b3120a4e63fc209d9fb074b2dec41e09f6af",
+    "fingerprint": "12204e8389415dfd2961a9dd14fa41f4b3120a4e63fc209d9fb074b2dec41e09f6af",
+    "privDer": "MC4CAQAwBQYDK2VwBCIEIAQTwUy3YWyB9ZT+aoRaEcjFGL1EWVq3wb8w7ud/zb+q"
+  },
+  "requester": {
+    "role": "requester",
+    "partyId": "requester-1782581404711::1220730fe6d0a90f5fc96763bcdeb8c6a20b0f95abb32ace322d51e0c02f1f5874b6",
+    "fingerprint": "1220730fe6d0a90f5fc96763bcdeb8c6a20b0f95abb32ace322d51e0c02f1f5874b6",
+    "privDer": "MC4CAQAwBQYDK2VwBCIEIJxeMf8BsAlJVPCFWel7mhAp5Xep9b8zxSaDuBAcWURr"
+  },
+  "dealer1": {
+    "role": "dealer1",
+    "partyId": "dealer1-1782581413945::12202a24ca81d0b29017b97a38be5163429bae48006bc2a2b0a196b91d4b57676113",
+    "fingerprint": "12202a24ca81d0b29017b97a38be5163429bae48006bc2a2b0a196b91d4b57676113",
+    "privDer": "MC4CAQAwBQYDK2VwBCIEIBGCOp37zq8F01cZQcIVbPC7xnA1fi7Lx9mNsyJoFI9I"
+  },
+  "dealer2": {
+    "role": "dealer2",
+    "partyId": "dealer2-1782581416569::1220fe91355a743b02b524be8960e6d797ec26754c51af495f470174bf9d099bd801",
+    "fingerprint": "1220fe91355a743b02b524be8960e6d797ec26754c51af495f470174bf9d099bd801",
+    "privDer": "MC4CAQAwBQYDK2VwBCIEIE4ROSPhj2k0VTneyPXO+qmTloIch6sT6HGq6O2izzIr"
+  }
+}

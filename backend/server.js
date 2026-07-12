@@ -1,6 +1,6 @@
 const express = require("express");
 const { ledgerFetch } = require("./token");
-const { onboardExternalParty, prepareSignExecute } = require("./external");
+const { onboardExternalParty, prepareSignExecute, prepareSignExecuteMulti } = require("./external");
 require("dotenv").config();
 
 const app = express();
@@ -213,6 +213,27 @@ async function submit(commandId, actAsParty, commands) {
 // ===========================================================================
 // MODE TOGGLE  -- the showmanship. Flip live, side-by-side, on stage.
 // ===========================================================================
+// Submit a command that needs MORE THAN ONE party's authority.
+// SIGNED: every external party signs with its own key (operator signs nothing).
+// DEMO:   the operator actAs all of them (it holds CanActAs on the demo parties).
+async function actMulti(roles, tag, commands) {
+  const rs = [...new Set(roles.map((r) => String(r || "").toLowerCase()))];
+  if (SIGNED_MODE && rs.every((r) => SIGNING_ROLES.includes(r))) {
+    const recs = [];
+    for (const r of rs) recs.push(await recFor(r));
+    return prepareSignExecuteMulti(recs, commands, tag);
+  }
+  const actAs = [];
+  for (const r of rs) actAs.push(await partyIdFor(r));
+  const body = { commandId: `${tag}-${Date.now()}`, actAs, commands };
+  const resp = await ledgerFetch("/v2/commands/submit-and-wait", {
+    method: "POST", body: JSON.stringify(body),
+  });
+  const text = await resp.text();
+  if (!resp.ok) throw new Error(humanize(`${resp.status} ${text}`));
+  return JSON.parse(text);
+}
+
 async function activePartyMap() {
   const out = { public: PARTIES.public };
   for (const r of SIGNING_ROLES) out[r] = await partyIdFor(r).catch(() => null);
@@ -656,6 +677,14 @@ async function resolveAsset(a) {
   return { admin: hit.admin, symbol: hit.symbol };
 }
 
+// Which signing role is this asset's admin? (funding needs the admin to co-sign)
+async function adminRoleOf(asset) {
+  for (const r of SIGNING_ROLES) {
+    if ((await partyIdFor(r)) === asset.admin) return r;
+  }
+  return null;
+}
+
 const idSetSwap = async (party, tmpl) =>
   new Set((await queryActive(party, tmpl)).map((c) => c.contractId));
 
@@ -679,7 +708,7 @@ app.post("/api/swap/registry/seed", async (req, res) => {
     let regCid;
     if (regs.length === 0) {
       const before = await idSetSwap(operator, "UmbraSwap:AssetRegistry");
-      await submit("swap-reg-create", operator, [{
+      await act("requester", "swap-reg-create", [{
         CreateCommand: { templateId: `#${PKGN}:UmbraSwap:AssetRegistry`,
           createArguments: { operator, participants, assets: [] } } }]);
       regCid = await pollNewCid(operator, "UmbraSwap:AssetRegistry", before);
@@ -690,7 +719,7 @@ app.post("/api/swap/registry/seed", async (req, res) => {
     // list each asset (idempotent on-ledger)
     for (const asset of assets) {
       const before = await idSetSwap(operator, "UmbraSwap:AssetRegistry");
-      await submit("swap-reg-list", operator, [{
+      await act("requester", "swap-reg-list", [{
         ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:AssetRegistry`,
           contractId: regCid, choice: "ListAsset", choiceArgument: { asset } } }]);
       regCid = await pollNewCid(operator, "UmbraSwap:AssetRegistry", before);
@@ -720,7 +749,12 @@ app.post("/api/swap/fund", async (req, res) => {
     const before = await idSetSwap(owner, "UmbraSwap:AssetHolding");
     // AssetHolding signatory = owner (observer asset.admin), so only the owner's
     // authority is needed. Use act() so SIGNED_MODE routes through prepare->sign.
-    await act(role, "swap-fund", [{
+    const adminRole = await adminRoleOf(asset);
+    if (!adminRole) throw new Error(
+      "asset admin " + asset.admin + " is not a signing role \u2014 it cannot co-sign an issuance. " +
+      "Set ASSET_" + asset.symbol.toUpperCase() + "_ADMIN to a party this venue holds a key for, " +
+      "or fund from the issuer's own faucet.");
+    await actMulti([role, adminRole], "swap-fund", [{
       CreateCommand: { templateId: `#${PKGN}:UmbraSwap:AssetHolding`,
         createArguments: { owner, asset, amount } } }]);
     const cid = await pollNewCid(owner, "UmbraSwap:AssetHolding", before);
@@ -936,7 +970,13 @@ app.post("/api/swap/settlements/:cid/execute", async (req, res) => {
     const requester = await partyIdFor("requester");
     const dealer = await partyIdFor(String(req.body.dealer || "dealer1").toLowerCase());
     const executor = await partyIdFor("requester");
-    const execActAs = SIGNED_MODE ? [executor] : [requester, dealer, executor];
+    if (SIGNED_MODE) {
+      await act("requester", "swap-execute", [{
+        ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapSettlement`,
+          contractId: req.params.cid, choice: "ExecuteSwap", choiceArgument: {} } }]);
+      return res.json({ ok: true, signed: true });
+    }
+    const execActAs = [requester, dealer, executor];
     const body = { commandId: `swap-execute-${Date.now()}`,
       actAs: execActAs,
       commands: [{ ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapSettlement`,
@@ -972,14 +1012,22 @@ app.post("/api/swap/award", async (req, res) => {
     let reqHoldingCid, dealerHoldingCid;
     if (req.body.fund !== false) {
       let b = await idSetSwap(requester, "UmbraSwap:AssetHolding");
-      await submit("swap-fund-req", requester, [{
+      const offerAdmin = await adminRoleOf(offerAsset);
+      if (!offerAdmin) throw new Error(
+        offerAsset.symbol + " is issued by " + offerAsset.admin + ", which this venue cannot " +
+        "co-sign for. Fund it from the issuer's faucet instead of minting.");
+      await actMulti(["requester", offerAdmin], "swap-fund-req", [{
         CreateCommand: { templateId: `#${PKGN}:UmbraSwap:AssetHolding`,
           createArguments: { owner: requester, asset: offerAsset, amount: offerAmount } } }]);
       reqHoldingCid = await pollNewCid(requester, "UmbraSwap:AssetHolding", b);
       steps.push(`funded requester ${offerAmount} ${offerAsset.symbol}`);
 
       b = await idSetSwap(dealer, "UmbraSwap:AssetHolding");
-      await submit("swap-fund-dlr", dealer, [{
+      const wantAdmin = await adminRoleOf(wantAsset);
+      if (!wantAdmin) throw new Error(
+        wantAsset.symbol + " is issued by " + wantAsset.admin + ", which this venue cannot " +
+        "co-sign for. Fund it from the issuer's faucet instead of minting.");
+      await actMulti([dealerRole, wantAdmin], "swap-fund-dlr", [{
         CreateCommand: { templateId: `#${PKGN}:UmbraSwap:AssetHolding`,
           createArguments: { owner: dealer, asset: wantAsset, amount: wantAmount } } }]);
       dealerHoldingCid = await pollNewCid(dealer, "UmbraSwap:AssetHolding", b);
@@ -1042,7 +1090,16 @@ app.post("/api/swap/award", async (req, res) => {
     steps.push("dealer committed want leg");
 
     // (7) operator executes atomic swap
-    const execActAs = SIGNED_MODE ? [operator] : [requester, dealer, operator];
+    // ExecuteSwap is `controller operator`, and operator == requester. In SIGNED
+    // mode the operator is an external party, so it must SIGN, not actAs.
+    if (SIGNED_MODE) {
+      await act("requester", "swap-execute", [{
+        ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapSettlement`,
+          contractId: settlementCid, choice: "ExecuteSwap", choiceArgument: {} } }]);
+      steps.push(`executed atomic ${offerAsset.symbol}->${wantAsset.symbol} swap (CIP-56, both legs, self-signed)`);
+      return res.json({ ok: true, signed: true, steps });
+    }
+    const execActAs = [requester, dealer, operator];
     const body = { commandId: `swap-execute-${Date.now()}`, actAs: execActAs,
       commands: [{ ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapSettlement`,
         contractId: settlementCid, choice: "ExecuteSwap", choiceArgument: {} } }] };
