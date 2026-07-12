@@ -172,87 +172,122 @@
   .pwho .dot{width:8px;height:8px;border-radius:50%}
   .pgrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:12px;align-items:start}
   @media(max-width:900px){.pgrid{grid-template-columns:1fr}}
-  /* ---------- login ---------- */
-  .lgn{min-height:100vh;display:grid;place-items:center;padding:48px 24px;position:relative;overflow:hidden}
-  /* the eclipse: a true corona — dark disc, light bleeding around its edge */
-  .lgn-corona{position:absolute;top:-18vh;left:50%;transform:translateX(-50%);
-    width:min(760px,120vw);aspect-ratio:1;border-radius:50%;pointer-events:none;
-    background:
-      radial-gradient(circle at 50% 50%, transparent 44%, rgba(157,116,255,.30) 46%, rgba(157,116,255,.06) 52%, transparent 62%),
-      radial-gradient(circle at 50% 50%, rgba(157,116,255,.10) 0%, transparent 46%);
-    filter:blur(26px);opacity:.75;animation:corona 14s ease-in-out infinite}
-  @keyframes corona{0%,100%{opacity:.6;transform:translateX(-50%) scale(1)}
-                    50%{opacity:.85;transform:translateX(-50%) scale(1.03)}}
-  .lgn-inner{position:relative;width:100%;max-width:940px}
+  /* ---------- login / sign-in ---------- */
+  .sgn{height:100vh;min-height:640px;display:grid;
+    grid-template-columns:minmax(420px,43%) 1fr;overflow:hidden;background:var(--bg)}
+  @media(max-width:1000px){.sgn{grid-template-columns:1fr;height:auto;min-height:100vh;overflow:visible}}
 
-  .lgn-head{text-align:center;margin-bottom:34px}
-  .lgn-head h1{margin:0;font:650 24px/1 ui-sans-serif,system-ui,sans-serif;
-    letter-spacing:.46em;text-indent:.46em;color:var(--text)}
-  .lgn-thesis{margin:16px 0 0;font:400 15px/1.5 ui-sans-serif,system-ui,sans-serif;color:var(--mute)}
-  .lgn-thesis span{color:var(--text);font-weight:500}
-  .lgn-meta{display:inline-flex;align-items:center;gap:8px;margin-top:16px;
-    font:500 10.5px/1 ui-monospace,monospace;letter-spacing:.06em;color:var(--dim)}
-  .lgn-off{color:var(--mute)}
+  /* --- left: the pitch --- */
+  .sgn-l{position:relative;display:flex;flex-direction:column;justify-content:space-between;
+    gap:clamp(12px,2vh,26px);padding:clamp(22px,2.4vw,42px);
+    border-right:1px solid var(--line);background:linear-gradient(180deg,var(--bg2),var(--bg))}
+  @media(max-width:1000px){.sgn-l{border-right:0;border-bottom:1px solid var(--line)}}
+  .sgn-brand{display:inline-flex;align-items:center;gap:clamp(10px,1vw,16px);
+    text-decoration:none;color:inherit}
+  .sgn-brand .mark{width:clamp(30px,2.9vw,44px);height:clamp(30px,2.9vw,44px);flex:0 0 auto;
+    transition:transform .18s}
+  .sgn-brand:hover .mark{transform:rotate(-8deg) scale(1.06)}
+  .sgn-mark{position:relative;display:inline-block;line-height:1}
+  .sgn-mark span{font:800 clamp(30px,3.3vw,47px)/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:.14em}
+  .sgn-mark .gh{position:absolute;left:0;top:0;transform:translate(7px,9px);color:var(--line);z-index:0}
+  .sgn-mark .fg{position:relative;color:var(--text);z-index:1}
+  .sgn-kick{margin-top:12px;font:500 11px/1 ui-monospace,monospace;letter-spacing:.3em;
+    text-transform:uppercase;color:var(--mute)}
+  .sgn-h1{margin:0;font:700 clamp(24px,2.7vw,41px)/1.08 ui-sans-serif,system-ui,sans-serif;
+    letter-spacing:-.02em;color:var(--text)}
+  .sgn-h1 span{color:var(--mute)}
+  .sgn-p{margin:16px 0 0;max-width:46ch;color:var(--mute);
+    font:400 clamp(12.5px,.92vw,14.5px)/1.6 ui-sans-serif,system-ui,sans-serif}
+  .sgn-assets{display:flex;flex-direction:column;gap:clamp(7px,1.1vh,13px)}
+  .sgn-as{display:flex;align-items:center;gap:14px}
+  .sgn-as .tic{width:clamp(38px,3.2vw,50px);height:clamp(38px,3.2vw,50px);
+    box-shadow:inset 0 2px 4px rgba(255,255,255,.18),0 8px 22px rgba(0,0,0,.45)}
+  .sgn-as-s{font:600 clamp(15px,1.25vw,19px)/1 ui-monospace,monospace;color:var(--text);
+    letter-spacing:.02em}
+  .sgn-as-l{font:400 11.5px/1 ui-monospace,monospace;color:var(--mute);margin-top:5px}
+  .sgn-live{display:flex;align-items:center;gap:11px}
+  .sgn-dot{width:9px;height:9px;border-radius:50%;background:var(--accent);
+    animation:sgnBreathe 2.4s ease-in-out infinite}
+  .sgn-lt{font:500 11.5px/1 ui-monospace,monospace;letter-spacing:.24em;
+    text-transform:uppercase;color:var(--mute)}
+  .sgn-eq{display:flex;align-items:flex-end;gap:3px;height:15px}
+  .sgn-eq i{width:2px;height:15px;background:var(--dim);transform-origin:bottom;
+    animation:sgnBar 1.1s ease-in-out infinite}
+  .sgn-eq i:nth-child(2){background:var(--mute);animation-delay:.22s}
+  .sgn-eq i:nth-child(3){animation-delay:.44s}
+  .sgn-off{font:500 11px/1 ui-monospace,monospace;color:var(--dim)}
+  @keyframes sgnBreathe{0%,100%{opacity:.32;transform:scale(.82)}50%{opacity:1;transform:scale(1)}}
+  @keyframes sgnBar{0%,100%{transform:scaleY(.3)}50%{transform:scaleY(1)}}
 
-  .lgn-eyebrow{font:600 9.5px/1 ui-monospace,monospace;letter-spacing:.2em;
-    text-transform:uppercase;color:var(--dim);margin-bottom:11px;text-align:center}
+  /* --- right: the choice --- */
+  .sgn-r{display:flex;flex-direction:column;padding:clamp(20px,2.3vw,40px);
+    gap:clamp(11px,1.3vw,17px);min-width:0}
+  .sgn-eyebrow{font:600 11.5px/1 ui-monospace,monospace;letter-spacing:.32em;
+    text-transform:uppercase;color:var(--dim)}
+  .sgn-req{display:flex;align-items:center;gap:clamp(14px,1.7vw,24px);flex-wrap:wrap;
+    padding-bottom:clamp(12px,1.5vh,19px);border-bottom:1px solid var(--line)}
+  .sgn-req-t{flex:1 1 240px;min-width:210px;display:flex;flex-direction:column;gap:9px}
+  .sgn-tag{font:600 11.5px/1 ui-monospace,monospace;letter-spacing:.22em;text-transform:uppercase}
+  .sgn-nm{font:700 clamp(19px,1.7vw,25px)/1.15 ui-sans-serif,system-ui,sans-serif;
+    letter-spacing:-.01em;color:var(--text)}
+  .sgn-ds{color:var(--mute);font:400 13.5px/1.5 ui-sans-serif,system-ui,sans-serif}
+  .sgn-ds b{color:var(--text);font-weight:600}
+  /* the "you see both" preview -- schematic, carries no price */
+  .sgn-pv{position:relative;overflow:hidden;flex:0 0 auto;width:clamp(170px,14vw,235px);
+    background:var(--bg3);border:1px solid var(--line);border-radius:4px;padding:14px}
+  .sgn-pv-l{position:absolute;top:9px;right:12px;font:600 8.5px/1 ui-monospace,monospace;
+    letter-spacing:.2em;text-transform:uppercase;color:var(--accent)}
+  .sgn-pv-r{display:flex;align-items:center;gap:9px;margin-top:14px}
+  .sgn-pv-r:first-of-type{margin-top:2px}
+  .sgn-pv-d{width:7px;height:7px;border-radius:50%;flex:0 0 auto}
+  .sgn-pv-n{font:500 10px/1 ui-monospace,monospace;width:54px;flex:0 0 auto}
+  .sgn-pv-t{flex:1;height:6px;border-radius:3px;background:var(--bg2);overflow:hidden}
+  .sgn-pv-t i{display:block;height:100%;border-radius:3px}
+  .sgn-sweep{position:absolute;top:0;left:0;width:38%;height:100%;pointer-events:none;
+    background:linear-gradient(90deg,transparent,var(--accentbg),transparent);
+    animation:sgnSweep 3.6s linear infinite}
+  @keyframes sgnSweep{0%{transform:translateX(-130%)}100%{transform:translateX(360%)}}
 
-  /* three roles, side by side — nothing scrolls */
-  /* three roles — with material, not flat divs */
-  .lgn-roles{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
-  @media(max-width:760px){.lgn-roles{grid-template-columns:1fr}}
+  .sgn-btn{cursor:pointer;border:0;font:600 11.5px/1 ui-monospace,monospace;letter-spacing:.16em;
+    text-transform:uppercase;color:#0B0E13;background:var(--accent);padding:15px 24px;border-radius:4px;
+    white-space:nowrap;box-shadow:0 6px 18px rgba(157,116,255,.3);transition:background .16s,transform .08s}
+  .sgn-btn:hover{background:#B08FFF}
+  .sgn-btn:active{transform:translateY(1px)}
 
-  .lgn-role{position:relative;display:flex;flex-direction:column;align-items:flex-start;
-    padding:22px 20px 20px;text-align:left;color:inherit;cursor:pointer;overflow:hidden;
-    border-radius:5px;border:1px solid var(--line);
-    /* surface: a real gradient, lighter at the top where light lands */
-    background:linear-gradient(180deg, #171D29 0%, #12161F 100%);
-    /* material: inner top highlight + a grounded shadow */
-    box-shadow:
-      inset 0 1px 0 rgba(255,255,255,.055),
-      inset 0 -1px 0 rgba(0,0,0,.32),
-      0 1px 2px rgba(0,0,0,.35),
-      0 6px 18px rgba(0,0,0,.28);
-    transition:transform .18s cubic-bezier(.2,.7,.3,1), box-shadow .18s, border-color .18s}
-
-  /* a hairline of colour along the top edge — the role's identity, not a dot */
-  .lgn-role::before{content:"";position:absolute;inset:0 0 auto 0;height:2px;
-    background:var(--rc);opacity:.55;transition:opacity .18s}
-
-  .lgn-role:hover{transform:translateY(-3px);border-color:var(--line2);
-    box-shadow:
-      inset 0 1px 0 rgba(255,255,255,.08),
-      inset 0 -1px 0 rgba(0,0,0,.32),
-      0 2px 4px rgba(0,0,0,.4),
-      0 16px 34px rgba(0,0,0,.42)}
-  .lgn-role:hover::before{opacity:1}
-  .lgn-role:active{transform:translateY(-1px);transition-duration:.08s}
-
-  /* the requester initiates — give it weight */
-  .lgn-role.lead{background:linear-gradient(180deg, #1A1930 0%, #14131F 100%)}
-  .lgn-role.lead:hover{border-color:var(--accentline)}
-
-  .lgn-nm{font:600 15px/1.2 ui-sans-serif,system-ui,sans-serif;color:var(--text);margin-bottom:8px}
-  .lgn-ds{font:400 12px/1.6 ui-sans-serif,system-ui,sans-serif;color:var(--mute);min-height:38px}
-  .lgn-role .lgn-sees{margin-top:16px;padding-top:13px;border-top:1px solid rgba(255,255,255,.05);
-    font:500 10.5px/1 ui-monospace,monospace;letter-spacing:.04em;color:var(--dim);
-    transition:color .18s}
-  .lgn-role:hover .lgn-sees{color:var(--mute)}
-
-  /* what the venue settles — real assets, real icons */
-  .lgn-assets{display:flex;align-items:center;justify-content:center;gap:16px;
-    margin-top:26px;padding-top:20px;border-top:1px solid var(--line)}
-  .lgn-al{font:600 9px/1 ui-monospace,monospace;letter-spacing:.2em;text-transform:uppercase;color:var(--dim)}
-  .lgn-a{display:inline-flex;align-items:center;gap:6px;
-    font:600 10.5px/1 ui-monospace,monospace;letter-spacing:.06em;color:var(--mute)}
-
-  .lgn-foot{margin-top:22px;text-align:center}
-  .lgn-foot p{margin:0 0 12px;font:400 11.5px/1.6 ui-sans-serif,system-ui,sans-serif;color:var(--dim);
-    max-width:440px;margin-left:auto;margin-right:auto}
-  .lgn-ops{background:none;border:0;color:var(--dim);font:600 9.5px/1 ui-monospace,monospace;
-    letter-spacing:.16em;text-transform:uppercase;padding:6px;transition:color .16s}
-  .lgn-ops:hover{color:var(--mute)}
-  @media(prefers-reduced-motion:reduce){.lgn-corona{animation:none}}
+  .sgn-dealers{flex:1;display:grid;grid-template-columns:1fr 74px 1fr;min-height:0}
+  @media(max-width:1000px){.sgn-dealers{grid-template-columns:1fr;gap:16px}}
+  .sgn-card{display:flex;flex-direction:column;justify-content:space-between;gap:13px;
+    background:linear-gradient(180deg,var(--bg2),var(--bg3));border:1px solid var(--line);
+    border-top:3px solid var(--dc);border-radius:5px;padding:clamp(18px,1.9vw,25px);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.04),0 12px 34px rgba(0,0,0,.42)}
+  .sgn-box{background:var(--bg3);border:1px solid var(--line);border-radius:4px;padding:15px}
+  .sgn-box-l{font:600 8.5px/1 ui-monospace,monospace;letter-spacing:.2em;text-transform:uppercase;
+    color:var(--dim);margin-bottom:11px}
+  .sgn-rule{height:1px;background:var(--line);margin:14px 0}
+  .sgn-note{font:500 10px/1 ui-monospace,monospace;color:var(--dim);margin-top:9px}
+  .sgn-obtn{display:block;width:100%;cursor:pointer;text-align:center;background:transparent;
+    font:600 11.5px/1 ui-monospace,monospace;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--dc);border:1px solid var(--dc);padding:14px 20px;border-radius:4px;
+    transition:background .16s,transform .08s}
+  .sgn-obtn:hover{background:var(--dcbg)}
+  .sgn-obtn:active{transform:translateY(1px)}
+  .sgn-wall{position:relative;display:flex;align-items:center;justify-content:center}
+  @media(max-width:1000px){.sgn-wall{display:none}}
+  .sgn-wall::before{content:"";position:absolute;top:6%;bottom:6%;left:50%;width:1px;
+    background:linear-gradient(180deg,transparent,var(--line2) 18%,var(--line2) 82%,transparent)}
+  .sgn-wall span{position:relative;writing-mode:vertical-rl;transform:rotate(180deg);
+    font:500 10px/1 ui-monospace,monospace;letter-spacing:.42em;text-transform:uppercase;
+    color:var(--dim);background:var(--bg);padding:16px 0}
+  .sgn-foot{display:flex;flex-direction:column;gap:7px;min-height:22px}
+  .sgn-foot p{margin:0;color:var(--mute);font:400 13px/1.5 ui-sans-serif,system-ui,sans-serif}
+  .sgn-foot b{color:var(--accent);font-weight:600}
+  .sgn-ops{align-self:flex-start;background:none;border:0;color:var(--dim);
+    font:600 9.5px/1 ui-monospace,monospace;letter-spacing:.16em;text-transform:uppercase;
+    padding:6px 0;cursor:pointer;transition:color .16s}
+  .sgn-ops:hover{color:var(--mute)}
+  @media(prefers-reduced-motion:reduce){
+    .sgn-dot,.sgn-eq i,.sgn-sweep{animation:none}
+  }
 
   /* ---------- portal shell ---------- */
   .prt{min-height:100vh;background:var(--bg)}
@@ -749,6 +784,7 @@
   .tic{width:18px;height:18px;border-radius:50%;object-fit:cover;flex:0 0 auto;vertical-align:middle}
   .tic.sm{width:14px;height:14px}
   .tic.lg{width:40px;height:40px}
+  .tic.xl{width:72px;height:72px}
   .tmono{display:inline-flex;align-items:center;justify-content:center;border-radius:50%;background:var(--bg3);color:var(--mute);font:700 8px/1 ui-monospace,monospace;flex:0 0 auto}
   .apair{display:flex;align-items:center;gap:6px}
   .aicw{display:flex;align-items:center;gap:7px}
@@ -2286,46 +2322,115 @@ function Login({ onPick }) {
     return () => { live = false; };
   }, []);
 
-  const Role = (r, lead) => React.createElement("button", {
-    key: r,
-    className: "lgn-role" + (lead ? " lead" : ""),
-    style: { "--rc": ROLES[r].dot },
-    onClick: () => onPick(r)
-  },
-    React.createElement("span", { className: "lgn-nm" }, ROLES[r].nm),
-    React.createElement("span", { className: "lgn-ds" }, ROLES[r].ds),
-    React.createElement("span", { className: "lgn-sees" }, lead ? "Sees every quote" : "Sees only its own"));
+  // A dealer card. The counterparty row reuses the desk's equalizer motif:
+  // pulsing bars = a live signal the ledger is withholding from this dealer.
+  const Dealer = (r, sym) => {
+    const c = ROLES[r].dot;
+    return React.createElement("div", {
+      className: "sgn-card",
+      style: { "--dc": c, "--dcbg": r === "dealer1" ? "var(--amberbg)" : "rgba(106,166,255,.12)" }
+    },
+      React.createElement("div", null,
+        React.createElement("div", { className: "sgn-tag", style: { color: c } }, ROLES[r].nm),
+        React.createElement("div", { className: "sgn-nm", style: { marginTop: 9 } }, "Liquidity provider"),
+        React.createElement("div", { className: "sgn-ds", style: { marginTop: 5 } },
+          "Sees ", React.createElement("b", null, "only"), " its own quotes.")),
 
-  return React.createElement("div", { className: "lgn" },
-    React.createElement("div", { className: "lgn-corona" }),
-    React.createElement("div", { className: "lgn-inner" },
+      React.createElement("div", { className: "sgn-box" },
+        React.createElement("div", { className: "sgn-box-l" }, "Your quote"),
+        React.createElement("div", { className: "sgn-pv-r", style: { marginTop: 0 } },
+          React.createElement("span", { className: "sgn-pv-d", style: { background: c } }),
+          React.createElement("span", { className: "sgn-pv-n", style: { color: c } }, sym),
+          React.createElement("span", { className: "sgn-pv-t" },
+            React.createElement("i", { style: { width: r === "dealer1" ? "66%" : "52%", background: c } }))),
+        React.createElement("div", { className: "sgn-rule" }),
+        React.createElement("div", { className: "sgn-box-l" }, "Counterparty"),
+        React.createElement("div", { className: "whg-b" },
+          [0,1,2,3,4,5,6].map(k => React.createElement("i", { key: k }))),
+        React.createElement("div", { className: "sgn-note" }, "withheld by ledger \u00b7 not on your feed")),
 
-      React.createElement("div", { className: "lgn-head" },
-        React.createElement("h1", null, "UMBRA"),
-        React.createElement("p", { className: "lgn-thesis" },
-          "Dealers compete. ",
-          React.createElement("span", null, "None of them can see each other.")),
-        React.createElement("div", { className: "lgn-meta" },
-          React.createElement("span", { className: "live" }),
-          "Canton DevNet",
-          offset != null ? React.createElement("span", { className: "lgn-off m" }, "#" + offset) : null)),
+      React.createElement("button", { className: "sgn-obtn", onClick: () => onPick(r) },
+        "Sign in as " + ROLES[r].nm));
+  };
 
-      React.createElement("div", { className: "lgn-eyebrow" }, "Sign in as"),
-      React.createElement("div", { className: "lgn-roles" },
-        Role("requester", true), Role("dealer1"), Role("dealer2")),
+  return React.createElement("div", { className: "sgn" },
 
-      React.createElement("div", { className: "lgn-assets" },
-        React.createElement("span", { className: "lgn-al" }, "Settles"),
-        assets.map(sym => React.createElement("span", { className: "lgn-a", key: sym },
-          React.createElement(AssetIcon, { symbol: sym, size: "sm" }),
-          React.createElement("span", null, sym)))),
+    // ---------- LEFT: the pitch ----------
+    React.createElement("div", { className: "sgn-l" },
 
-      React.createElement("div", { className: "lgn-foot" },
+      React.createElement("div", null,
+        React.createElement("a", { className: "sgn-brand", href: "/", title: "Back to umbra" },
+          React.createElement(Umbrella, null),
+          React.createElement("span", { className: "sgn-mark" },
+            React.createElement("span", { className: "gh" }, "UMBRA"),
+            React.createElement("span", { className: "fg" }, "UMBRA"))),
+        React.createElement("div", { className: "sgn-kick" }, "Private OTC Block Venue")),
+
+      React.createElement("div", null,
+        React.createElement("h1", { className: "sgn-h1" },
+          "Dealers compete.",
+          React.createElement("br", null),
+          React.createElement("span", null, "None of them can see"),
+          React.createElement("br", null),
+          React.createElement("span", null, "each other.")),
+        React.createElement("p", { className: "sgn-p" },
+          "A buyer privately asks several dealers to price a block. Each dealer is cryptographically blind to the others \u2014 a rival's quote is never delivered to a competing dealer, because the ledger itself withholds it. The winning trade settles atomically.")),
+
+      React.createElement("div", { className: "sgn-assets" },
+        assets.map(sym => React.createElement("div", { className: "sgn-as", key: sym },
+          React.createElement(AssetIcon, { symbol: sym }),
+          React.createElement("div", null,
+            React.createElement("div", { className: "sgn-as-s" }, sym),
+            React.createElement("div", { className: "sgn-as-l" }, ASSET_LONG(sym)))))),
+
+      React.createElement("div", { className: "sgn-live" },
+        React.createElement("span", { className: "sgn-dot" }),
+        React.createElement("span", { className: "sgn-lt" }, "Canton ledger \u00b7 live"),
+        React.createElement("span", { className: "sgn-eq" },
+          React.createElement("i", null), React.createElement("i", null), React.createElement("i", null)),
+        offset != null ? React.createElement("span", { className: "sgn-off" }, "#" + offset) : null)),
+
+    // ---------- RIGHT: the choice ----------
+    React.createElement("div", { className: "sgn-r" },
+
+      React.createElement("div", { className: "sgn-eyebrow" }, "Sign in as"),
+
+      React.createElement("div", { className: "sgn-req" },
+        React.createElement("div", { className: "sgn-req-t" },
+          React.createElement("div", { className: "sgn-tag", style: { color: "var(--accent)" } }, "Requester"),
+          React.createElement("div", { className: "sgn-nm" }, "Institutional buyer"),
+          React.createElement("div", { className: "sgn-ds" },
+            "Sees ", React.createElement("b", null, "every"), " quote \u2014 both dealers, side by side.")),
+
+        React.createElement("div", { className: "sgn-pv" },
+          React.createElement("div", { className: "sgn-pv-l" }, "Visible to you"),
+          React.createElement("div", { className: "sgn-pv-r" },
+            React.createElement("span", { className: "sgn-pv-d", style: { background: "var(--amber)" } }),
+            React.createElement("span", { className: "sgn-pv-n", style: { color: "var(--amber)" } }, "DEALER 01"),
+            React.createElement("span", { className: "sgn-pv-t" },
+              React.createElement("i", { style: { width: "66%", background: "var(--amber)" } }))),
+          React.createElement("div", { className: "sgn-pv-r" },
+            React.createElement("span", { className: "sgn-pv-d", style: { background: "#6AA6FF" } }),
+            React.createElement("span", { className: "sgn-pv-n", style: { color: "#6AA6FF" } }, "DEALER 02"),
+            React.createElement("span", { className: "sgn-pv-t" },
+              React.createElement("i", { style: { width: "48%", background: "#6AA6FF" } }))),
+          React.createElement("span", { className: "sgn-sweep" })),
+
+        React.createElement("button", { className: "sgn-btn", onClick: () => onPick("requester") }, "Sign in")),
+
+      React.createElement("div", { className: "sgn-dealers" },
+        Dealer("dealer1", "cBTC"),
+        React.createElement("div", { className: "sgn-wall" },
+          React.createElement("span", null, "No line of sight")),
+        Dealer("dealer2", "cETH")),
+
+      React.createElement("div", { className: "sgn-foot" },
         React.createElement("p", null,
-          "Open two dealers in separate windows. Neither will see the other\u2019s price \u2014 the ledger never sends it."),
-        React.createElement("button", { className: "lgn-ops", onClick: () => onPick("operator") },
+          React.createElement("b", null, "\u25c6"), "\u00a0 Open two dealers in separate windows \u2014 neither will find the other's price. The winning trade settles atomically."),
+        React.createElement("button", { className: "sgn-ops", onClick: () => onPick("operator") },
           "Venue operations \u2192"))));
 }
+
 
 // real notional. usd map comes from the price feed; CC has no price -> null.
 const usdOf = (usd, sym, amt) => {
@@ -2353,7 +2458,7 @@ const ThemeBtn = ({ theme, flip }) => React.createElement("button", {
 
 const DEALER_NAMES = { dealer1: "Meridian Capital", dealer2: "Halcyon Markets" };
 const DEALER_NAME = p => DEALER_NAMES[cleanRole(p)] || cleanRole(p) || "Dealer";
-const ASSET_LONGS = { cBTC: "Bitcoin · Canton", cETH: "Ethereum · Canton", CC: "Canton Coin" };
+const ASSET_LONGS = { cBTC: "Bitcoin", cETH: "Ethereum", CC: "Canton Coin" };
 const ASSET_LONG = sym => ASSET_LONGS[sym] || sym;
 
 function RequesterDesk(P) {
