@@ -385,6 +385,92 @@
   [data-theme="light"] .qm .up{color:#15803D}
   [data-theme="light"] .prt-note.ok{color:var(--accent2)}
 
+  /* ===== SETTLEMENT VAULT ===== */
+  .vl-ovl{position:fixed;inset:0;z-index:400;display:grid;place-items:center;
+    background:rgba(6,8,12,.78);backdrop-filter:blur(4px);animation:vlin .22s ease-out}
+  @keyframes vlin{from{opacity:0}to{opacity:1}}
+  .vl-stage{--spd:1;--reject:#CF6A62;width:min(430px,92vw)}
+  .vl-panel{background:var(--bg2);border:1px solid var(--line2);border-radius:6px;
+    padding:26px 26px 20px;box-shadow:0 30px 90px rgba(0,0,0,.6);text-align:center;
+    animation:umbraIntro calc(640ms / var(--spd)) cubic-bezier(.2,.7,.2,1) both}
+  @keyframes umbraIntro{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+  .vl-eyb{font:600 9px/1 ui-monospace,monospace;letter-spacing:.22em;text-transform:uppercase;
+    color:var(--accent);margin-bottom:22px}
+  [data-phase="reverted"] .vl-eyb{color:var(--reject)}
+
+  /* the two leaves + the seam between them */
+  .vl-legs{position:relative;padding:6px 0 10px}
+  .vl-leaf{display:flex;align-items:center;gap:14px;padding:14px 16px;text-align:left;
+    background:var(--bg3);border:1px solid var(--line2);border-radius:4px}
+  .vl-lt{flex:1;min-width:0}
+  .vl-amt{font:650 20px/1 ui-monospace,monospace;font-variant-numeric:tabular-nums;color:var(--text)}
+  .vl-sym{margin-top:4px;font:600 9px/1 ui-monospace,monospace;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--mute)}
+  .vl-dir{font:500 9.5px/1 ui-monospace,monospace;color:var(--dim);white-space:nowrap}
+  .vl-seam{position:absolute;left:8px;right:8px;top:50%;height:2px;border-radius:2px;
+    transform:translateY(-50%);z-index:2}
+
+  /* leaves closing: equal, opposite, identical curve — that is atomicity */
+  [data-role="legTop"],[data-role="legBottom"]{
+    transition:transform calc(760ms / var(--spd)) cubic-bezier(.72,0,.16,1)}
+  [data-phase="idle"] [data-role="legTop"]{transform:translateY(-13px)}
+  [data-phase="idle"] [data-role="legBottom"]{transform:translateY(13px)}
+
+  [data-role="seam"]{transition:opacity calc(500ms / var(--spd)) ease,background calc(500ms / var(--spd)) ease}
+  [data-phase="idle"] [data-role="seam"],[data-phase="settling"] [data-role="seam"]{opacity:.35;background:var(--line)}
+  [data-phase="settled"] [data-role="seam"]{opacity:1;background:#2B3550}
+  [data-phase="sealed"] [data-role="seam"]{opacity:1;
+    animation:umbraWeld calc(560ms / var(--spd)) cubic-bezier(.4,0,.2,1) forwards}
+  @keyframes umbraWeld{
+    0%{transform:translateY(-50%) scaleX(.7);background:#33285a;box-shadow:none}
+    24%{transform:translateY(-50%) scaleX(1);background:var(--accent);box-shadow:0 0 16px 1px rgba(157,116,255,.5)}
+    60%{transform:translateY(-50%) scaleX(1);background:var(--accent);box-shadow:0 0 9px 0 rgba(157,116,255,.22)}
+    100%{transform:translateY(-50%) scaleX(1);background:#2B3550;box-shadow:none}}
+
+  /* the door seats home */
+  [data-phase="sealed"] [data-role="legs"]{animation:umbraThunk calc(280ms / var(--spd)) cubic-bezier(.3,0,.3,1)}
+  @keyframes umbraThunk{0%{transform:translateY(0)}34%{transform:translateY(2px)}100%{transform:translateY(0)}}
+
+  /* REFUSED — rejected at contact, both leaves recoil. nothing moved. */
+  [data-phase="reverted"] [data-role="legTop"]{animation:umbraRejectTop calc(460ms / var(--spd)) cubic-bezier(.2,.78,.24,1) forwards}
+  [data-phase="reverted"] [data-role="legBottom"]{animation:umbraRejectBottom calc(460ms / var(--spd)) cubic-bezier(.2,.78,.24,1) forwards}
+  @keyframes umbraRejectTop{0%{transform:translateY(0)}46%{transform:translateY(-17px)}100%{transform:translateY(-13px)}}
+  @keyframes umbraRejectBottom{0%{transform:translateY(0)}46%{transform:translateY(17px)}100%{transform:translateY(13px)}}
+  [data-phase="reverted"] [data-role="seam"]{animation:umbraSeamReject calc(520ms / var(--spd)) cubic-bezier(.4,0,.2,1) forwards}
+  @keyframes umbraSeamReject{
+    0%{transform:translateY(-50%) scaleX(1);background:var(--reject);box-shadow:0 0 14px 1px rgba(207,106,98,.45);opacity:1}
+    40%{transform:translateY(-50%) scaleX(1);background:var(--reject);box-shadow:0 0 7px 0 rgba(207,106,98,.2);opacity:1}
+    100%{transform:translateY(-50%) scaleX(1);background:var(--line);box-shadow:none;opacity:.3}}
+
+  .vl-say{margin:16px 0 0;font:400 12.5px/1.6 ui-sans-serif,system-ui,sans-serif;color:var(--mute)}
+  .vl-say b{color:var(--text);font-weight:650}
+  .vl-say b.rj{color:var(--reject)}
+
+  /* the receipt unrolls once it resolves */
+  [data-role="receipt-ok"],[data-role="receipt-reverted"]{max-height:0;opacity:0;overflow:hidden;
+    transition:max-height calc(580ms / var(--spd)) cubic-bezier(.3,.7,.2,1),opacity calc(420ms / var(--spd)) ease}
+  [data-phase="settled"] [data-role="receipt-ok"]{max-height:280px;opacity:1;margin-top:18px}
+  [data-phase="reverted"] [data-role="receipt-reverted"]{max-height:280px;opacity:1;margin-top:18px}
+  .vl-rc{text-align:left;border-top:1px solid var(--line)}
+  .vl-rr{display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:9px 0;
+    opacity:0;transform:translateY(6px);
+    transition:opacity calc(360ms / var(--spd)) ease,transform calc(360ms / var(--spd)) cubic-bezier(.3,.7,.2,1)}
+  [data-phase="settled"] .vl-rr,[data-phase="reverted"] .vl-rr{opacity:1;transform:none}
+  [data-phase="settled"] .vl-rr:nth-child(1),[data-phase="reverted"] .vl-rr:nth-child(1){transition-delay:calc(70ms / var(--spd))}
+  [data-phase="settled"] .vl-rr:nth-child(2),[data-phase="reverted"] .vl-rr:nth-child(2){transition-delay:calc(130ms / var(--spd))}
+  [data-phase="settled"] .vl-rr:nth-child(3),[data-phase="reverted"] .vl-rr:nth-child(3){transition-delay:calc(190ms / var(--spd))}
+  [data-phase="settled"] .vl-rr:nth-child(4){transition-delay:calc(250ms / var(--spd))}
+  .vl-rr span{font:600 8.5px/1 ui-monospace,monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+  .vl-rr b{font:600 11.5px/1 ui-sans-serif,system-ui,sans-serif;color:var(--text);text-align:right}
+  .vl-x{margin-top:18px;width:100%;padding:10px;border:1px solid var(--line2);border-radius:4px;
+    background:transparent;color:var(--mute);font:600 10px/1 ui-monospace,monospace;
+    letter-spacing:.14em;text-transform:uppercase;transition:.14s}
+  .vl-x:hover{background:var(--hover);color:var(--text)}
+  @media(prefers-reduced-motion:reduce){
+    .vl-stage *{animation:none !important;transition:none !important}
+    [data-phase] [data-role="legTop"],[data-phase] [data-role="legBottom"]{transform:none !important}}
+
+  /* ===== SETTLEMENT VAULT END ===== */
   /* ===== REQUESTER DESK ===== */
   .rqk{display:grid;grid-template-columns:1fr 380px;gap:18px;padding:18px 44px;width:100%;
     align-items:stretch;height:calc(100vh - 50px);overflow:hidden}
@@ -2480,6 +2566,80 @@ function RequesterDesk(P) {
             }))) : null)));
 }
 
+// SETTLEMENT — the vault weld.
+// Two leaves, one per asset, close equal-and-opposite (same duration, same
+// curve): that IS atomicity. They meet at a seam, the seam WELDS, and the
+// assembly thunks home. One piece now. Irreversible.
+// If the ledger refuses the trade, the door is rejected at contact and both
+// leaves recoil to rest. Nothing moved. That is P6, made physical.
+function SettlementVault({ trade, onClose }) {
+  const [phase, setPhase] = useState("idle");
+  const failed = !!(trade && trade.failed);
+
+  useEffect(() => {
+    if (!trade) return;
+    const t = [];
+    t.push(setTimeout(() => setPhase("settling"), 40));
+    t.push(setTimeout(() => setPhase(failed ? "reverted" : "sealed"), 820));
+    if (!failed) t.push(setTimeout(() => setPhase("settled"), 1380));
+    return () => t.forEach(clearTimeout);
+  }, [trade, failed]);
+
+  if (!trade) return null;
+
+  const leaf = (sym, amt, side) => React.createElement("div", {
+    className: "vl-leaf", "data-role": side === "top" ? "legTop" : "legBottom"
+  },
+    React.createElement(AssetIcon, { symbol: sym, size: "lg" }),
+    React.createElement("div", { className: "vl-lt" },
+      React.createElement("div", { className: "vl-amt m" }, Number(amt).toLocaleString()),
+      React.createElement("div", { className: "vl-sym" }, sym)),
+    React.createElement("div", { className: "vl-dir" },
+      side === "top" ? "to " + (trade.dealerName || "the dealer") : "to you"));
+
+  const row = (k, v, mono) => React.createElement("div", { className: "vl-rr", "data-role": "rrow" },
+    React.createElement("span", null, k),
+    React.createElement("b", { className: mono ? "m" : "" }, v));
+
+  return React.createElement("div", { className: "vl-ovl", onClick: onClose },
+    React.createElement("div", {
+      id: "umbra-stage", "data-phase": phase,
+      className: "vl-stage", onClick: e => e.stopPropagation()
+    },
+      React.createElement("div", { className: "vl-panel", "data-role": "panel" },
+
+        React.createElement("div", { className: "vl-eyb" },
+          failed ? "Settlement refused" : "Atomic settlement \u00b7 CIP-56"),
+
+        React.createElement("div", { className: "vl-legs", "data-role": "legs" },
+          leaf(trade.offerSym, trade.offerAmt, "top"),
+          React.createElement("div", { className: "vl-seam", "data-role": "seam" }),
+          leaf(trade.wantSym, trade.wantAmt, "bottom")),
+
+        React.createElement("div", { className: "vl-say" },
+          phase === "settled"
+            ? React.createElement(React.Fragment, null,
+                React.createElement("b", null, "Settled."),
+                " Both legs moved in one indivisible transaction.")
+            : phase === "reverted"
+              ? React.createElement(React.Fragment, null,
+                  React.createElement("b", { className: "rj" }, "Reverted."),
+                  " The ledger refused the trade. ", React.createElement("b", null, "Nothing moved."))
+              : "Committing both legs\u2026"),
+
+        React.createElement("div", { className: "vl-rc", "data-role": "receipt-ok" },
+          row("Engine", "CIP-56 allocation", false),
+          trade.cid ? row("Contract", short(trade.cid), true) : null,
+          trade.offset != null ? row("Ledger", "#" + trade.offset, true) : null,
+          row("Trust", trade.signed ? "each party self-signed" : "operator submitted", false)),
+
+        React.createElement("div", { className: "vl-rc", "data-role": "receipt-reverted" },
+          row("Reason", trade.reason || "a leg could not be covered", false),
+          row("Moved", "nothing \u2014 the swap is all-or-none", false)),
+
+        React.createElement("button", { className: "vl-x", onClick: onClose }, "Close"))));
+}
+
 // ---- PORTAL ----
 function DealerDesk(P) {
   const { meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, usd, price, setPrice, busy, sendQuote, fresh } = P;
@@ -2683,6 +2843,7 @@ function PartyPortal({ role, onExit }) {
   const [awarding, setAwarding] = useState(false);
   const [awardStep, setAwardStep] = useState(null);
   const [usd, setUsd] = useState(null);
+  const [vault, setVault] = useState(null);
   const [rateNote, setRateNote] = useState(null);
   const pairRef = useRef(null);
 
@@ -2766,9 +2927,24 @@ function PartyPortal({ role, onExit }) {
       const c = await post("/api/swap/pending/" + b.pendingCid + "/commit-want", { dealer: dealerRole, holdingCid: theirs });
       setAwardStep("Settling\u2026");
       await post("/api/swap/settlements/" + c.settlementCid + "/execute", { dealer: dealerRole });
-      say("Settled \u2014 " + p.offerAmount + " " + offerSym + " \u21c4 " + p.price + " " + wantSym);
+      setVault({
+        offerSym, offerAmt: p.offerAmount,
+        wantSym, wantAmt: p.price,
+        dealerName: DEALER_NAME(p.dealer),
+        cid: c.settlementCid, offset, signed
+      });
       load();
-    } catch (e) { say(e.message, true); }
+    } catch (e) {
+      // The ledger refusing a trade is not an error to be toasted away \u2014 it is
+      // the soundness guarantee doing its job. Show it.
+      setVault({
+        failed: true, reason: e.message,
+        offerSym, offerAmt: p.offerAmount,
+        wantSym, wantAmt: p.price,
+        dealerName: DEALER_NAME(p.dealer),
+        signed
+      });
+    }
     finally { setAwarding(false); setAwardStep(null); }
   }
 
@@ -2791,11 +2967,13 @@ function PartyPortal({ role, onExit }) {
     price, setPrice, busy, sendQuote, fresh
   });
 
-  return RequesterDesk({
-    meta, signed, onExit, note,
-    rfqs, quotes: myQuotes, holdings, rate, series, usd, rateNote,
-    onCreate: createRfq, onAward: awardQuote, awarding, awardStep
-  });
+  return React.createElement(React.Fragment, null,
+    RequesterDesk({
+      meta, signed, onExit, note,
+      rfqs, quotes: myQuotes, holdings, rate, series, usd, rateNote,
+      onCreate: createRfq, onAward: awardQuote, awarding, awardStep
+    }),
+    React.createElement(SettlementVault, { trade: vault, onClose: () => setVault(null) }));
 
   const Holdings = React.createElement("section", { className: "mod" },
     React.createElement("div", { className: "mod-h" },
