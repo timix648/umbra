@@ -2009,7 +2009,8 @@ function AssetIcon({
   });
 }
 function SwapRfqForm({
-  onCreate
+  onCreate,
+  onPair
 }) {
   const FALLBACK = [{ symbol: "cBTC" }, { symbol: "cETH" }, { symbol: "CC" }];
   const [assets, setAssets] = useState(FALLBACK);
@@ -2044,6 +2045,14 @@ function SwapRfqForm({
       im.src = u;
     });
   }, []);
+
+  // tell the desk which pair is being composed, so the market reference can
+  // follow it before the RFQ exists on the ledger.
+  useEffect(() => {
+    if (onPair && offerSym && wantSym && offerSym !== wantSym) {
+      onPair({ base: offerSym, quote: wantSym });
+    }
+  }, [offerSym, wantSym, onPair]);
 
   const syms = assets.map(a => a.symbol);
   const findAsset = sym => assets.find(a => a.symbol === sym) || { symbol: sym };
@@ -2463,7 +2472,7 @@ const ASSET_LONG = sym => ASSET_LONGS[sym] || sym;
 
 function RequesterDesk(P) {
   const { meta, signed, onExit, note, rfqs, quotes, holdings, rate, series, usd, rateNote,
-          onCreate, onAward, awarding, awardStep } = P;
+          onCreate, onAward, awarding, awardStep, onPair } = P;
   const [theme, flipTheme] = useTheme();
 
   const [now, setNow] = React.useState(Date.now());
@@ -2557,7 +2566,7 @@ function RequesterDesk(P) {
           ? React.createElement("section", { className: "mod mod-focal" },
               React.createElement("div", { className: "mod-h" }, React.createElement("h2", null, "New request")),
               React.createElement("div", { className: "mod-b" },
-                React.createElement(SwapRfqForm, { onCreate: async (f) => { await onCreate(f); setComposing(false); } })))
+                React.createElement(SwapRfqForm, { onPair, onCreate: async (f) => { await onCreate(f); setComposing(false); } })))
           : null,
 
         rfq ? React.createElement("section", { className: "mod mod-focal rq-head" },
@@ -3034,6 +3043,8 @@ function PartyPortal({ role, onExit }) {
   const [vault, setVault] = useState(null);
   const [rateNote, setRateNote] = useState(null);
   const pairRef = useRef(null);
+  const formPairRef = useRef(null);
+  const onPair = useCallback(p => { formPairRef.current = p; }, []);
 
   const say = (m, bad) => { setNote({ m, bad }); setTimeout(() => setNote(null), 3400); };
 
@@ -3067,7 +3078,10 @@ function PartyPortal({ role, onExit }) {
       const liveRfq = (rq && rq.rfqs && rq.rfqs[0]) || null;
       const liveInv = nx[0] || null;
       const src = liveRfq ? liveRfq.payload : (liveInv ? liveInv.payload : null);
-      pairRef.current = src ? { base: src.offerAsset.symbol, quote: src.wantAsset.symbol } : null;
+      // a live request wins; otherwise price whatever the form is composing.
+      pairRef.current = src
+        ? { base: src.offerAsset.symbol, quote: src.wantAsset.symbol }
+        : formPairRef.current;
     } catch (e) {}
   }, [role]);
 
@@ -3158,7 +3172,7 @@ function PartyPortal({ role, onExit }) {
   return React.createElement(React.Fragment, null,
     RequesterDesk({
       meta, signed, onExit, note,
-      rfqs, quotes: myQuotes, holdings, rate, series, usd, rateNote,
+      rfqs, quotes: myQuotes, holdings, rate, series, usd, rateNote, onPair,
       onCreate: createRfq, onAward: awardQuote, awarding, awardStep
     }),
     React.createElement(SettlementVault, { trade: vault, role, onClose: () => setVault(null) }));
