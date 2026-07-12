@@ -470,6 +470,41 @@
     .vl-stage *{animation:none !important;transition:none !important}
     [data-phase] [data-role="legTop"],[data-phase] [data-role="legBottom"]{transform:none !important}}
 
+  /* the proof link on the receipt */
+  .vl-link{background:none;border:0;padding:0;cursor:pointer;
+    font:600 11.5px/1 ui-monospace,monospace;color:var(--accent2);
+    display:inline-flex;align-items:center;gap:5px;transition:color .14s}
+  .vl-link:hover{color:var(--accent);text-decoration:underline}
+  .vl-ext{font-size:9px;opacity:.7}
+
+  /* the ledger record itself */
+  .lp-ovl{position:fixed;inset:0;z-index:500;display:grid;place-items:center;
+    background:rgba(6,8,12,.86);backdrop-filter:blur(5px);padding:24px}
+  .lp{width:min(620px,94vw);max-height:80vh;display:flex;flex-direction:column;
+    background:var(--bg2);border:1px solid var(--line2);border-radius:6px;
+    box-shadow:0 30px 90px rgba(0,0,0,.65)}
+  .lp-h{display:flex;align-items:center;justify-content:space-between;
+    padding:16px 18px;border-bottom:1px solid var(--line)}
+  .lp-eyb{font:600 9px/1 ui-monospace,monospace;letter-spacing:.2em;
+    text-transform:uppercase;color:var(--accent)}
+  .lp-x{background:none;border:0;color:var(--dim);font-size:20px;line-height:1;
+    cursor:pointer;padding:0 4px}
+  .lp-x:hover{color:var(--text)}
+  .lp-cid{padding:13px 18px;border-bottom:1px solid var(--line);
+    font:500 11px/1.5 ui-monospace,monospace;color:var(--mute);word-break:break-all}
+  .lp-b{padding:18px;overflow:auto}
+  .lp-b.bad{color:var(--red)}
+  .lp-tag{display:inline-block;font:600 8.5px/1 ui-monospace,monospace;letter-spacing:.14em;
+    text-transform:uppercase;padding:4px 8px;border-radius:3px;margin-bottom:12px;
+    color:var(--dim);background:var(--hover);border:1px solid var(--line2)}
+  .lp-tag.ok{color:var(--accent);background:var(--accentbg);border-color:var(--accentline)}
+  .lp-t{font:600 11px/1 ui-monospace,monospace;color:var(--mute);margin-bottom:12px}
+  .lp-j{margin:0;padding:14px;background:var(--bg);border:1px solid var(--line);
+    border-radius:4px;font:500 11px/1.65 ui-monospace,monospace;color:var(--text);
+    white-space:pre-wrap;word-break:break-word;max-height:42vh;overflow:auto}
+  .lp-n{margin:0;font:400 12.5px/1.7 ui-sans-serif,system-ui,sans-serif;color:var(--mute)}
+  .lp-le{margin-top:14px;font:500 11px/1 ui-monospace,monospace;color:var(--dim)}
+
   /* ===== SETTLEMENT VAULT END ===== */
   /* ===== REQUESTER DESK ===== */
   .rqk{display:grid;grid-template-columns:1fr 380px;gap:18px;padding:18px 44px;width:100%;
@@ -2566,14 +2601,53 @@ function RequesterDesk(P) {
             }))) : null)));
 }
 
+// Reads a contract back off the ledger. Canton is private — there is no public
+// explorer, and that is the point. So the proof is the record itself.
+function LedgerProof({ cid, role, onClose }) {
+  const [st, setSt] = useState({ loading: true });
+  useEffect(() => {
+    let on = true;
+    api("/api/ledger/contract/" + encodeURIComponent(cid) + "?role=" + (role || "requester"))
+      .then(r => { if (on) setSt({ loading: false, r }); })
+      .catch(e => { if (on) setSt({ loading: false, err: e.message }); });
+    return () => { on = false; };
+  }, [cid, role]);
+
+  const r = st.r;
+  return React.createElement("div", { className: "lp-ovl", onClick: onClose },
+    React.createElement("div", { className: "lp", onClick: e => e.stopPropagation() },
+      React.createElement("div", { className: "lp-h" },
+        React.createElement("span", { className: "lp-eyb" }, "On the Canton ledger"),
+        React.createElement("button", { className: "lp-x", onClick: onClose }, "\u00d7")),
+      React.createElement("div", { className: "lp-cid m" }, cid),
+      st.loading
+        ? React.createElement("div", { className: "lp-b" }, "Reading the ledger\u2026")
+        : st.err
+          ? React.createElement("div", { className: "lp-b bad" }, st.err)
+          : React.createElement("div", { className: "lp-b" },
+              r.found
+                ? React.createElement(React.Fragment, null,
+                    React.createElement("div", { className: "lp-tag ok" }, "Active"),
+                    React.createElement("div", { className: "lp-t m" }, r.template),
+                    React.createElement("pre", { className: "lp-j" },
+                      JSON.stringify(r.payload, null, 2)))
+                : React.createElement(React.Fragment, null,
+                    React.createElement("div", { className: "lp-tag" }, "Consumed"),
+                    React.createElement("p", { className: "lp-n" }, r.note),
+                    r.ledgerEnd != null
+                      ? React.createElement("div", { className: "lp-le m" }, "Ledger end #", r.ledgerEnd)
+                      : null)))));
+}
+
 // SETTLEMENT — the vault weld.
 // Two leaves, one per asset, close equal-and-opposite (same duration, same
 // curve): that IS atomicity. They meet at a seam, the seam WELDS, and the
 // assembly thunks home. One piece now. Irreversible.
 // If the ledger refuses the trade, the door is rejected at contact and both
 // leaves recoil to rest. Nothing moved. That is P6, made physical.
-function SettlementVault({ trade, onClose }) {
+function SettlementVault({ trade, onClose, role }) {
   const [phase, setPhase] = useState("idle");
+  const [proof, setProof] = useState(null);
   const failed = !!(trade && trade.failed);
 
   useEffect(() => {
@@ -2629,7 +2703,13 @@ function SettlementVault({ trade, onClose }) {
 
         React.createElement("div", { className: "vl-rc", "data-role": "receipt-ok" },
           row("Engine", "CIP-56 allocation", false),
-          trade.cid ? row("Contract", short(trade.cid), true) : null,
+          trade.cid ? React.createElement("div", { className: "vl-rr", "data-role": "rrow" },
+            React.createElement("span", null, "Contract"),
+            React.createElement("button", {
+              className: "vl-link m",
+              onClick: () => setProof(trade.cid),
+              title: "Read this contract back off the Canton ledger"
+            }, short(trade.cid), React.createElement("span", { className: "vl-ext" }, "\u2197"))) : null,
           trade.offset != null ? row("Ledger", "#" + trade.offset, true) : null,
           row("Trust", trade.signed ? "each party self-signed" : "operator submitted", false)),
 
@@ -2637,7 +2717,10 @@ function SettlementVault({ trade, onClose }) {
           row("Reason", trade.reason || "a leg could not be covered", false),
           row("Moved", "nothing \u2014 the swap is all-or-none", false)),
 
-        React.createElement("button", { className: "vl-x", onClick: onClose }, "Close"))));
+        React.createElement("button", { className: "vl-x", onClick: onClose }, "Close")),
+      proof ? React.createElement(LedgerProof, {
+        cid: proof, role, onClose: () => setProof(null)
+      }) : null));
 }
 
 // ---- PORTAL ----
@@ -2973,7 +3056,7 @@ function PartyPortal({ role, onExit }) {
       rfqs, quotes: myQuotes, holdings, rate, series, usd, rateNote,
       onCreate: createRfq, onAward: awardQuote, awarding, awardStep
     }),
-    React.createElement(SettlementVault, { trade: vault, onClose: () => setVault(null) }));
+    React.createElement(SettlementVault, { trade: vault, role, onClose: () => setVault(null) }));
 
   const Holdings = React.createElement("section", { className: "mod" },
     React.createElement("div", { className: "mod-h" },
