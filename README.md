@@ -267,21 +267,33 @@ curl -X POST localhost:4000/api/swap/award -H 'Content-Type: application/json' \
 
 ---
 
-## Scope — what is real, and what is not
+## Asset integration status
 
-**Real:** the engine, the privacy, the atomicity, the soundness guards, the ledger-enforced
-expiry, the market reference. All eight guarantees have headless tests that pass without a
-network.
+The settlement engine is **issuer-agnostic by design**: an `AssetHolding` implements the
+CIP-56 `Holding` interface, and the engine does not know or care which registry minted it.
+That is deliberate — it is what makes the same code path settle cBTC, cETH and CC without a
+single per-asset branch.
 
-**The assets.** The settlement engine is issuer-agnostic — an `AssetHolding` implements the
-CIP-56 `Holding` interface and the engine does not know or care who minted it. Today the
-`ASSET_*_ADMIN` values point at a venue-controlled party, so the cBTC and cETH in the demo
-are **self-issued CIP-56 stand-ins**. Wiring the real assets is a configuration change, not a
-code change: fund from the BitSafe cBTC faucet and the onRails cETH registry, point the three
-`ASSET_*_ADMIN` values at their real issuer parties, re-seed the registry. **No Daml changes.
-No engine changes.** That is the point of building it this way.
+**Integration path (built, pending network):**
 
-We would rather say this plainly than put a sponsor's name under a token they did not issue.
+| Step | Status |
+|---|---|
+| CIP-56 `Holding` interface implemented | done |
+| Engine settles any asset against any other | done, 8 tests green |
+| On-ledger `AssetRegistry` listing cBTC / cETH / CC | done |
+| Real BitSafe cBTC + onRails cETH issuer parties wired | **pending DevNet** |
+
+The three `ASSET_*_ADMIN` values currently point at a venue-controlled party, because the
+Canton DevNet these assets live on has been under maintenance and the venue's parties were
+reset with it. Wiring the live registries is **a configuration change, not a code change**:
+fund from the BitSafe cBTC faucet and the onRails cETH registry, point the three
+`ASSET_*_ADMIN` values at their real issuer parties, re-seed the registry. **No Daml
+changes. No engine changes.** The plumbing is finished and tested; it is waiting on the
+network to come back up.
+
+Everything else is real and proven without a network: the privacy, the atomicity, the
+soundness guards, the ledger-enforced expiry, the market reference. All eight guarantees
+have headless tests that pass under `daml test`.
 
 ## Roadmap
 
