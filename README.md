@@ -2,91 +2,124 @@
 
 **A private, non-custodial OTC venue for institutional block trades — built on Canton.**
 
-Umbra is a dark request-for-quote (RFQ) venue where a buyer privately solicits competing
-quotes from multiple dealers and settles the winning trade as a single, atomic
-delivery-versus-payment (DvP) swap. Competing dealers are **cryptographically blind to one
-another** — not by application logic, but by Canton's sub-transaction privacy and signatory
-rules. No dealer can see whether a rival was even invited, let alone what they quoted.
+Umbra is a dark request-for-quote (RFQ) venue. A buyer privately asks several dealers to
+price a block. The dealers are **cryptographically blind to one another** — a rival's quote
+is never *sent* to a competing dealer; Canton's sub-transaction privacy withholds it at the
+ledger, not the frontend. The winning trade settles as a single **atomic delivery-versus-payment
+swap**: both legs move, or neither does.
 
-> Every public blockchain leaks block trades. Order flow, counterparties, and size are
-> visible to anyone — which is precisely why institutions cannot use them for real size.
-> Canton was built to fix exactly this. **Umbra is the proof.**
+> Every public blockchain leaks block trades. Order flow, counterparties, and size are visible
+> to anyone — which is precisely why institutions cannot use them for real size. Canton was
+> built to fix exactly this. **Umbra is the proof.**
 
-**Challenge track:** Private DeFi & Capital Markets
-**Network:** Canton DevNet (Seaport validator)
-**Status:** Live end-to-end on DevNet — privacy, atomic settlement, external-party signing,
-and CIP-56 standard settlement all working against real ledger infrastructure.
+**HackCanton League S2** · Financial Applications: DeFi, Exchanges & Prediction Markets
+Targeting the **cBTC** (BitSafe) and **cETH** (onRails) asset challenges with a single venue.
 
 ---
 
 ## Links
 
-- **Demo video:** _link_
-- **Live app:** _link_
-- **Landing page:** _link_
-- **Submission:** _link_
-- **Contact / socials:** _link_
+- **Live app:** https://um-bra.app/
+- **Contact:** https://x.com/UmbraOnCanton
+
+---
+
+## What makes this different
+
+Umbra already existed as a single-asset RFQ venue with atomic CIP-56 settlement. For
+HackCanton it was rebuilt around a **unified any-to-any settlement engine**, and four things
+were added that most venues do not have:
+
+**1. Any asset for any asset.** cBTC, cETH and CC are all ordinary CIP-56 assets. There is
+no "cash leg" and no "instrument leg" — a swap is `leg A ↔ leg B`, whatever they are. So
+**cBTC ↔ cETH settles directly**, with no stablecoin in the middle. One code path, no
+per-asset branches.
+
+**2. Expiry the ledger actually enforces.** An RFQ has an `expiresAt`; a quote has a
+`validUntil`. A dealer who quotes after the window closes is **refused by the ledger**, and a
+requester cannot lift a price that is no longer firm. This is not a greyed-out button — it is
+a Daml `assertMsg` against `getTime()`, and there are tests that prove it.
+
+**3. Privacy you can verify yourself.** Every read endpoint is role-scoped. Run these
+against a live venue with two dealers quoting:
+
+```bash
+curl "$UMBRA/api/swap/quotes?role=dealer1"   # only dealer1's own quote
+curl "$UMBRA/api/swap/quotes?role=dealer2"   # only dealer2's own quote
+curl "$UMBRA/api/swap/quotes?role=public"    # nothing at all
+```
+
+The claim is testable, not asserted.
+
+**4. Honest numbers, or none.** The market reference is a real BTC/ETH cross from a live
+price feed. There is **no bid/ask spread shown**, because a public spot feed gives a mid only
+and fabricating a spread in a trading venue is worse than showing nothing. Any pair involving
+CC returns `—` with a stated reason: CC has no reliable public price. If a value is not real,
+Umbra says so.
 
 ---
 
 ## Why this can only work on Canton
 
-Umbra is not a trading app that happens to be on Canton. It is a venue that **cannot
-meaningfully exist anywhere else**, because it depends on three Canton-native properties:
+1. **Sub-transaction privacy.** A `SwapQuote` is disclosed only to its stakeholders — the
+   requester and the quoting dealer. Dealer 1's price is not merely hidden from Dealer 2; it
+   is **never sent to them**. On a transparent chain this venue cannot exist.
 
-1. **Sub-transaction privacy.** On a transparent chain, every quote is public to all
-   participants. On Canton, a `Quote` contract is only disclosed to its stakeholders
-   (the requester and the quoting dealer). Dealer 1's quote is invisible to Dealer 2 at the
-   ledger level — the data is never sent to them. This is enforced by the protocol, not hidden
-   by a frontend.
+2. **Atomic multi-party settlement.** Both legs move in one indivisible transaction. No
+   settlement risk, no escrow, no moment where one side has delivered and the other has not.
 
-2. **Atomic, multi-party settlement.** The cash leg and the asset leg move in one indivisible
-   transaction, or neither moves. There is no settlement risk, no escrow intermediary, and no
-   moment where one party has delivered and the other has not.
-
-3. **Self-custody with no trusted operator.** In signed mode, each party signs with its own
-   external key. The venue operator coordinates the workflow but **cannot forge a party's
-   authority or move their assets**. Umbra is a venue, never a custodian.
-
-A public-orderbook DEX clone fights the chain it runs on. Umbra uses the one thing Canton
-uniquely offers.
+3. **Self-custody, no trusted operator.** In signed mode each party signs with its own
+   external key. The venue coordinates; it can never forge a party's authority or move their
+   assets. Umbra is a venue, never a custodian.
 
 ---
 
-## The five guarantees (all proven live on DevNet)
+## The eight guarantees
 
-| # | Guarantee | How it's enforced |
-|---|-----------|-------------------|
-| P1 | **No information leakage** — dealers are blind to each other | Canton signatory/observer rules; rival quotes are never disclosed to the ledger query of a competing dealer |
-| P2 | **Atomic DvP** — both legs settle or neither does | Custom settlement engine: cash is locked on accept, then swapped against the asset in a single transaction |
-| P3 | **External-party signing** — no trusted operator | Parties onboarded with their own keys; transactions assembled, signed, and executed under each party's own authority |
-| P4 | **CIP-56 Holding interface** — standards-compliant assets | Holdings implement the Splice `Holding` interface, rendering a standard `HoldingView` |
-| P5 | **CIP-56 allocation-based atomic DvP** — settlement via the token standard | Each party creates its own `Allocation` (signatory = sender); the executor assembles a fully-signed settlement and fires a single atomic `ExecuteTransfer` across both legs |
+| # | Guarantee | How it is enforced |
+|---|-----------|--------------------|
+| P1 | **No information leakage** — dealers are blind to each other | Canton signatory/observer rules; a rival's quote is never disclosed to a competing dealer's ledger view |
+| P2 | **Atomic DvP** — both legs settle or neither does | One `ExecuteSwap` fires `Allocation_ExecuteTransfer` on both legs in a single transaction |
+| P3 | **External-party signing** — no trusted operator | Parties onboarded with their own keys; prepare/sign/execute under each party's own authority |
+| P4 | **CIP-56 Holding interface** | `AssetHolding` implements the Splice `Holding` interface |
+| P5 | **CIP-56 allocation-based atomic DvP** | Each party creates its own `AssetAllocation` (signatory = sender); a jointly-signed settlement fires one atomic transfer across both legs |
+| P6 | **Sound settlement** — underfunded trades are refused, not silently minted | Each allocation asserts the holder genuinely holds enough before any transfer |
+| **P7** | **Expiry is ledger-enforced** — a late quote is refused | `SubmitSwapQuote` asserts `now < rfq.expiresAt`. Not a UI timer — a protocol rule |
+| **P8** | **Firmness is ledger-enforced** — a stale price cannot be lifted | `AcceptSwapQuote` asserts `now < quote.validUntil` |
 
-The headline engineering result is **P5**: a working CIP-56 allocation-based atomic swap, in
-both operator mode and trust-no-operator signed mode, on live DevNet.
+Every guarantee has a headless test. `daml test` proves them without a network:
+
+```
+swapCbtcForCeth          ok   <- the headline cross-asset swap
+swapCbtcForCc            ok
+swapCethForCc            ok
+swapReturnsChange        ok
+swapRejectsUnderfunded   ok   <- P6
+swapRejectsLateQuote     ok   <- P7
+swapRejectsStaleQuote    ok   <- P8
+registryListsAssets      ok
+```
 
 ---
 
 ## How a trade flows
 
 ```
-Requester                 Umbra venue                Dealer 1        Dealer 2
-    |                          |                          |              |
-    |-- create RFQ ----------->|                          |              |
-    |-- invite D1, D2 -------->|---- invitation --------->|              |
-    |                          |---- invitation -------------------------->|
-    |                          |<--- private quote -------|              |
-    |                          |<--- private quote --------------------------|
-    |   (sees BOTH quotes)     |   (D1 cannot see D2's quote, or vice versa)
-    |-- award / CIP-56 ------->|                          |              |
-    |                          |==== atomic DvP swap =====|              |
-    |   cash --> dealer,  asset --> requester,  in ONE indivisible transaction
+Requester                    Umbra                  Dealer 1        Dealer 2
+    |                          |                        |               |
+    |-- SwapRfq -------------->|                        |               |
+    |   (offer 2 cBTC, want cETH, expires in 15m)       |               |
+    |-- invite ---------------->---- invitation ------->|               |
+    |                          |---- invitation ------------------------>|
+    |                          |<--- private quote -----|               |
+    |                          |<--- private quote --------------------- |
+    |   sees BOTH              |   D1 cannot see D2's quote. Or that it exists.
+    |-- award (hold 1.5s) ---->|                        |               |
+    |                          |==== atomic swap =======|               |
+    |   2 cBTC -> dealer,  71.3 cETH -> requester,  ONE indivisible transaction
 ```
 
-The requester chooses which dealers to invite — this is relationship-based block trading, by
-design. The privacy that matters is **dealer-to-dealer blindness**: it stops inter-dealer
-information leakage, which is what gives the requester honest, competitive pricing.
+A dealer may also **decline** — the requester sees who has not priced, but never why.
 
 ---
 
@@ -95,126 +128,169 @@ information leakage, which is what gives the requester honest, competitive prici
 ```
 umbra/
   daml/
-    Umbra.daml         Core market contracts + custom atomic settlement engine
-    UmbraDvP.daml      CIP-56 allocation-based atomic DvP (standards-compliant path)
-    UmbraTest.daml     Demo init script
+    UmbraSwap.daml       The unified any-to-any engine  <- the HackCanton build
+    UmbraSwapTest.daml   8 headless proofs (P1-P8)
+    Umbra.daml           Legacy single-asset engine (Encode; kept as fallback)
+    UmbraDvP.daml        Legacy CIP-56 DvP path
+    UmbraTest.daml / UmbraDvpTest.daml
   backend/
-    server.js          Express API over the Canton JSON Ledger API v2
-    token.js           OAuth client-credentials auth + ledger fetch with 401 retry
-    external.js        External-party onboarding + prepare/sign/execute (signed mode)
+    server.js            Express over the Canton JSON Ledger API v2
+    token.js             OAuth client-credentials + ledger fetch
+    external.js          External-party onboarding, prepare/sign/execute
     public/
-      landing.html     Marketing landing page  (/)
-      index.html       The live trading terminal (React via CDN)  (/app)
-  vendor/              Vendored Splice CIP-56 interface DARs (v1.0.99)
+      landing.html       /
+      index.html         /app  — the terminal (React via CDN, no build step)
+      assets/            Official cBTC, cETH and Canton Coin marks
+  vendor/                Vendored Splice CIP-56 interface DARs
 ```
 
-### On-ledger model (Daml)
+### The engine — `daml/UmbraSwap.daml`
 
-**`Umbra.daml`** — the core venue and the custom settlement engine:
+| Template | Role |
+|---|---|
+| `AssetId {admin, symbol}` | An asset is an issuer plus a symbol. Nothing else. |
+| `AssetRegistry` | Operator-curated tradeable set, **on-ledger**, not backend config |
+| `AssetHolding {owner, asset, amount}` | **One** generic holding. Implements CIP-56 `Holding` |
+| `AssetAllocation` | **One** generic allocation. `signatory sender` — each party commits its own leg. Asserts sufficiency before transferring |
+| `SwapRfq` → `SwapInvitation` → `SwapQuote` | The private RFQ chain. Carries `expiresAt` / `validUntil` |
+| `SwapProposal` → `SwapDealerPending` → `SwapSettlement` | The two-leg choreography |
 
-- `CashHolding`, `InstrumentHolding` — tokenized cash and securities, implementing the CIP-56 `Holding` interface (P4).
-- `Rfq` — a request for quote, signed by the requester.
-- `RfqInvitation` — a dealer's invitation to quote (`Invite` / `DeclineInvitation`).
-- `Quote` — a dealer's private bid (`SubmitQuote`), visible only to requester + that dealer (P1).
-- `SettlementInstruction` — created on `AcceptQuote` (which locks the requester's cash by archiving it); `Settle` then performs the atomic swap (P2).
+**The hard part — authority propagation.** `Allocation_ExecuteTransfer` requires the combined
+authority of **executor, sender and receiver**. A flat multi-party submission does *not*
+propagate that authority through a nested interface exercise. Umbra solves it with a
+propose/accept choreography: each party creates its own allocation under its own authority,
+then a chain of accepts gathers all three signatures onto a **single jointly-signed
+settlement contract**, whose `ExecuteSwap` choice then carries enough authority to fire both
+legs at once. This is the wall every CIP-56 DvP implementation hits.
 
-**`UmbraDvP.daml`** — the CIP-56 allocation-based settlement path (P5):
-
-- `CashAllocation`, `InstrumentAllocation` — each implements the Splice `Allocation` interface, with **signatory = the sending party**, so each party authorizes its own leg. The operator never forges authority.
-- `DvPProposal` -> `DvPDealerAccepted` -> `DvPSettlement` — a propose/accept choreography. Because the final `DvPSettlement` is signed by requester, dealer, **and** executor, its `ExecuteDvP` choice carries enough authority to drive the nested `Allocation_ExecuteTransfer` on both legs atomically. This solves the authority-propagation wall that a naive flat multi-party submission hits.
-
-> **Why the choreography matters:** `Allocation_ExecuteTransfer` requires the authority of executor, sender, **and** receiver. A flat `actAs: [a, b, c]` submission does **not** propagate that authority through a nested interface exercise. The propose/accept flow gathers each party's signature onto a single jointly-signed contract whose choice then carries all the authority required for the atomic transfer.
-
-### Backend (`server.js`)
-
-A thin Express layer over the Canton JSON Ledger API v2. It does not hold keys to user assets and is non-custodial by design. Selected endpoints:
+### Backend
 
 | Method | Endpoint | Purpose |
-|--------|----------|---------|
-| POST | `/api/mode` | Toggle operator / signed (trust-no-operator) mode |
-| POST | `/api/rfqs` | Create an RFQ |
-| POST | `/api/rfqs/:cid/invite` | Invite a dealer |
-| POST | `/api/invitations/:cid/quote` | Submit a private quote |
-| GET  | `/api/quotes?role=...` | Role-scoped quote view (proves P1: dealers see only their own) |
-| POST | `/api/quotes/:cid/accept` | Lock cash, create settlement instruction |
-| POST | `/api/settlements/:cid/settle` | Custom atomic DvP swap (P2) |
-| POST | `/api/award` | One-call custom atomic settlement |
-| POST | `/api/dvp/award` | One-call CIP-56 allocation-based atomic settlement (P5) |
-| GET  | `/api/holdings?role=...` | Holdings / balances per party |
+|---|---|---|
+| POST | `/api/swap/registry/seed` | List tradeable assets on-ledger |
+| POST | `/api/swap/rfq` | Create a swap RFQ (offer asset → want asset, with a window) |
+| POST | `/api/swap/rfqs/:cid/invite` | Invite a dealer |
+| GET | `/api/swap/invitations?role=` | **Role-scoped** — a dealer sees only its own |
+| POST | `/api/swap/invitations/:cid/quote` | Submit a private, time-limited price |
+| GET | `/api/swap/quotes?role=` | **Role-scoped — this is the privacy proof** |
+| POST | `/api/swap/quotes/:cid/accept` | Award — begins the choreography |
+| POST | `/api/swap/proposals/:cid/commit-offer` | Requester commits its leg |
+| POST | `/api/swap/pending/:cid/commit-want` | Dealer commits its leg |
+| POST | `/api/swap/settlements/:cid/execute` | **The atomic swap** |
+| GET | `/api/swap/holdings?role=` | Balances |
+| GET | `/api/market/rate?base=X&quote=Y` | Real BTC/ETH cross. `null` + a reason when there is no honest price |
+| GET | `/api/ledger/contract/:cid` | Read a contract back off Canton — the proof it happened |
 
-Key helpers: `cleanupRfq` (archives an RFQ and its quotes/invitations after settlement), `pollNewCid` (handles asynchronous signed-mode commits), and `partyIdFor` / `roleOfParty` (operator- vs. external-party identity mapping).
+### Frontend
 
-### Frontend (`backend/public/index.html`)
+Three surfaces, one file, no build step.
 
-A single-file React terminal (loaded via CDN — no build step) that renders all four party views side by side so the privacy asymmetry is visible: the requester sees every quote, each dealer sees only its own (rival quotes show as redaction bars), and a public observer sees nothing. A settlement overlay animates the atomic swap as the climax of a trade.
+**Dealer desk.** A request queue, and one focal ask: *"The buyer gives 2 cBTC. What do you
+pay, in cETH?"* Quick-fill pricing off the real mid (`Ref` / `±0.10%`), implied rate, and a
+panel — **"The ledger withholds"** — where a rival's price, count and existence render as
+pulsing redaction bars. *Blind by construction. Quote freely.*
+
+**Requester desk.** The blind block auction. Quotes arrive ranked, priced in **basis points
+against the live mid**, each with its own firmness countdown. Awarding requires **pressing
+and holding** — settlement is irreversible, and the interface makes you feel it.
+
+**The settlement vault.** Two leaves, one per asset, close **equal and opposite on an
+identical curve** — that *is* atomicity. They weld at the seam; the door thunks home. One
+piece now. And if the ledger **refuses** the trade, the door is rejected at contact and both
+leaves recoil. *Nothing moved.* The receipt carries the real contract ID and ledger offset —
+click it and Umbra reads the record back off Canton.
 
 ---
 
 ## Running locally
 
-### Prerequisites
+**Prerequisites:** Node.js 20+, Daml SDK 3.4.11, credentials for a Canton DevNet validator.
 
-- Node.js v20+
-- Daml SDK 3.4.11
-- Access credentials for a Canton DevNet validator (ledger-API scope)
-
-### 1. Configure environment
-
-Create `backend/.env` (never commit this):
+### 1. `backend/.env`
 
 ```
 AUTH_URL=https://auth.sandbox.fivenorth.io/application/o/token/
 CLIENT_ID=validator-devnet-m2m
-CLIENT_SECRET=your_secret_here
+CLIENT_SECRET=...
 AUDIENCE=validator-devnet-m2m
 SCOPE=daml_ledger_api
+
 LEDGER_API=https://ledger-api.validator.devnet.sandbox.fivenorth.io
+LEDGER_USER_ID=...
 SYNCHRONIZER_ID=global-domain::1220...
+
+# templates are resolved BY NAME — this must match daml.yaml
+PACKAGE_NAME=umbra-v2
+
 REQUESTER=Requester::1220...
 DEALER1=Dealer1::1220...
 DEALER2=Dealer2::1220...
+OBSERVER=Observer::1220...
+
+# asset issuers (see Scope below)
+ASSET_CBTC_ADMIN=...
+ASSET_CETH_ADMIN=...
+ASSET_CC_ADMIN=...
+
+PORT=4000
+SIGNED_MODE=false
 ```
 
-### 2. Build the Daml model
+### 2. Build and prove
 
-```
+```bash
 export PATH="$HOME/.daml/bin:$PATH"
-daml build
+daml build          # -> .daml/dist/umbra-v2-0.2.0.dar
+daml test           # 8 swap proofs + the legacy suites
 ```
 
-### 3. Run the backend (serves the API and the UI)
+### 3. Run
 
-```
-cd backend
-npm install
-node server.js
+```bash
+cd backend && npm install && node server.js
 ```
 
-### 4. Open the app
+- Terminal: `http://localhost:4000/app`
+- Two dealers, two windows: `?role=dealer1` and `?role=dealer2` — separate sessions,
+  and neither can see the other's price.
 
-- Landing page: http://localhost:4000/
-- Trading terminal: http://localhost:4000/app
-- Health check: http://localhost:4000/health
+### 4. Seed and swap
+
+```bash
+curl -X POST localhost:4000/api/swap/registry/seed -H 'Content-Type: application/json' \
+  -d '{"assets":[{"symbol":"cBTC"},{"symbol":"cETH"},{"symbol":"CC"}]}'
+
+curl -X POST localhost:4000/api/swap/award -H 'Content-Type: application/json' \
+  -d '{"dealer":"dealer1","offerAsset":{"symbol":"cBTC"},"offerAmount":"2",
+       "wantAsset":{"symbol":"cETH"},"wantAmount":"71.3","fund":true}'
+```
 
 ---
 
-## Design decisions and honest limitations
+## Scope — what is real, and what is not
 
-These are deliberate scoping choices for the hackathon, documented plainly:
+**Real:** the engine, the privacy, the atomicity, the soundness guards, the ledger-enforced
+expiry, the market reference. All eight guarantees have headless tests that pass without a
+network.
 
-- **Demo holdings are minted as stand-ins.** In production the cash leg would be bank-issued tokenized cash and the asset a tokenized security from a real registry; here we mint test holdings to demonstrate the swap mechanics. The atomic-settlement logic is identical either way.
-- **The CIP-56 path re-funds fresh holdings per settlement** rather than settling against the exact pre-funded holdings quoted. The next production step is settling against pre-funded, quote-bound holdings — the settlement primitive is already proven; this is a workflow addition.
-- **Instruments are free-text labels**, not validated against an on-chain securities registry.
-- **Deadlines on allocations are not enforced** in this flow (a fixed settlement reference is used to keep `mkSpec` pure).
-- **Single asset class** demonstrated end-to-end; the model generalizes to multiple.
+**The assets.** The settlement engine is issuer-agnostic — an `AssetHolding` implements the
+CIP-56 `Holding` interface and the engine does not know or care who minted it. Today the
+`ASSET_*_ADMIN` values point at a venue-controlled party, so the cBTC and cETH in the demo
+are **self-issued CIP-56 stand-ins**. Wiring the real assets is a configuration change, not a
+code change: fund from the BitSafe cBTC faucet and the onRails cETH registry, point the three
+`ASSET_*_ADMIN` values at their real issuer parties, re-seed the registry. **No Daml changes.
+No engine changes.** That is the point of building it this way.
+
+We would rather say this plainly than put a sponsor's name under a token they did not issue.
 
 ## Roadmap
 
-- Settle against pre-funded, quote-bound holdings (close the re-mint gap).
-- Full multi-party external-signer execution via a dedicated executor party.
-- Real tokenized-cash and tokenized-security registries as issuer parties.
-- Loop Wallet / Canton Coin onboarding for end-to-end self-custody UX.
-- Configurable dealer panels and persistent settlement history.
+- **Wire the real BitSafe cBTC and onRails cETH registries** (a config change, as above).
+- **Wallet-based signing** via the Canton dApp SDK and a Wallet Gateway, so a dealer connects
+  their own wallet rather than the venue acting for them. Signed mode already gives the trust
+  property; this gives it a front door.
+- **Standing balances** — settlement is funded per-trade today; bind it to persistent balances.
+- **Quote history with outcomes** — won / passed / expired, derived from settlement records.
 
 ---
 
