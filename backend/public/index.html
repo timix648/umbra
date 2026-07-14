@@ -547,6 +547,14 @@
   @media(max-width:1080px){.rqk{grid-template-columns:1fr;height:auto;overflow:visible}}
 
   /* holdings chips in the header */
+  .rq-total{display:flex;align-items:center;gap:8px;padding:5px 11px;
+    border:1px solid var(--line2);border-radius:999px;background:var(--bg3)}
+  .rq-total span{font:600 9px/1 ui-monospace,monospace;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--dim)}
+  .rq-total b{font:700 12px/1 ui-monospace,monospace;color:var(--text)}
+  @media(max-width:900px){.rq-total{display:none}}
+  .hl-v{margin-left:auto;text-align:right}
+  .hl-u{font:500 10px/1 ui-monospace,monospace;color:var(--mute);margin-top:4px}
   .rq-chips{display:flex;gap:7px}
   .rq-chip{display:flex;align-items:center;gap:6px;padding:5px 10px;border:1px solid var(--line2);
     border-radius:20px;background:var(--bg2);font:600 10.5px/1 ui-monospace,monospace}
@@ -2442,6 +2450,29 @@ function Login({ onPick }) {
 
 
 // real notional. usd map comes from the price feed; CC has no price -> null.
+// Holdings come off the ledger as CONTRACTS, not balances -- three cBTC
+// contracts is still one cBTC balance. Aggregate per symbol before showing a
+// number to a human, or the header reads "1 cBTC" and "9 cBTC" side by side.
+const aggHoldings = (hs) => {
+  const m = new Map();
+  for (const h of (hs || [])) {
+    const sym = h.payload.asset.symbol;
+    m.set(sym, (m.get(sym) || 0) + Number(h.payload.amount));
+  }
+  return Array.from(m, ([symbol, amount]) => ({ symbol, amount }));
+};
+
+// Total portfolio value at live rates. null when NOTHING can be priced -- we
+// never sum a partial book and present it as a total.
+const totalUsd = (usd, hs) => {
+  let t = 0, any = false;
+  for (const h of (hs || [])) {
+    const v = usdOf(usd, h.payload.asset.symbol, h.payload.amount);
+    if (v != null) { t += v; any = true; }
+  }
+  return any ? t : null;
+};
+
 const usdOf = (usd, sym, amt) => {
   const p = usd && usd[sym];
   if (!p || !isFinite(Number(amt))) return null;
@@ -2509,11 +2540,19 @@ function RequesterDesk(P) {
              warn: ms < 60000, dead: false };
   }
 
-  const rfq = rfqs[0] || null;                      // the live request
-  const live = rfq ? quotes.filter(q => !fmt(q.payload.validUntil).dead) : [];
+  // An expired request is DEAD, not "live". The ledger already refuses a late
+  // quote; the UI must stop contradicting it -- and must stop pinning both the
+  // response count and the market reference to a request that is over.
+  const rfq = rfqs.find(r => !fmt(r.payload.expiresAt).dead) || null;
+  // Quotes ANSWERING THIS REQUEST. rfqCid is an exact link (umbra-v5); a quote
+  // predating it falls back to being counted only while still firm.
+  const mine = rfq
+    ? quotes.filter(q => !q.payload.rfqCid || q.payload.rfqCid === rfq.contractId)
+    : [];
+  const live = mine.filter(q => !fmt(q.payload.validUntil).dead);
   const ranked = live.slice().sort((a, b) => Number(b.payload.price) - Number(a.payload.price));
   const invited = rfq ? (rfq.payload.invited || []) : [];
-  const quotedBy = new Set(quotes.map(q => cleanRole(q.payload.dealer)));
+  const quotedBy = new Set(live.map(q => cleanRole(q.payload.dealer)));
 
   // real market maths — mid comes from the ledgerless price feed; no invented spread
   const offerAmt = rfq ? Number(rfq.payload.offerAmount) : 0;
@@ -2531,15 +2570,6 @@ function RequesterDesk(P) {
 
   const cd = rfq ? fmt(rfq.payload.expiresAt) : null;
 
-  const chip = (h) => {
-    const v = fmtUsd(usdOf(usd, h.payload.asset.symbol, h.payload.amount));
-    return React.createElement("div", { className: "rq-chip", key: h.contractId,
-      title: v ? h.payload.asset.symbol + " \u00b7 " + v : h.payload.asset.symbol },
-      React.createElement(AssetIcon, { symbol: h.payload.asset.symbol, size: "sm" }),
-      React.createElement("b", { className: "m" }, Number(h.payload.amount).toLocaleString()),
-      React.createElement("span", null, h.payload.asset.symbol));
-  };
-
   return React.createElement("div", { className: "prt" },
 
     React.createElement("header", { className: "prt-bar" },
@@ -2549,7 +2579,10 @@ function RequesterDesk(P) {
           React.createElement("b", null, "UMBRA"),
           React.createElement("span", { className: "cx" }, "Blind block auction \u00b7 Requester"))),
       React.createElement("div", { className: "prt-right" },
-        React.createElement("div", { className: "rq-chips" }, holdings.map(chip)),
+        React.createElement("div", { className: "rq-total tip-below tip-left",
+          "data-tip": "Total value of your holdings at live market rates. CC has no public price, so it is excluded." },
+          React.createElement("span", null, "Portfolio"),
+          React.createElement("b", { className: "m" }, fmtUsd(totalUsd(usd, holdings)) || "\u2014")),
         rfq ? React.createElement("button", { className: "btn sm", onClick: () => setComposing(c => !c) },
           composing ? "Close" : "New request") : null,
         React.createElement(ThemeBtn, { theme, flip: flipTheme }),
@@ -2594,7 +2627,7 @@ function RequesterDesk(P) {
               React.createElement("div", { className: "rq-stats" },
                 React.createElement("div", { className: "rq-stat" },
                   React.createElement("div", { className: "rq-lab" }, "Responded"),
-                  React.createElement("div", { className: "rq-sv m" }, quotes.length, " / ", invited.length || "\u2014")),
+                  React.createElement("div", { className: "rq-sv m" }, live.length, " / ", invited.length || "\u2014")),
                 React.createElement("div", { className: "rq-stat" },
                   React.createElement("div", { className: "rq-lab" }, "Best vs mkt"),
                   React.createElement("div", { className: "rq-sv m " + (bestBps == null ? "" : bestBps >= 0 ? "up" : "dn") },
@@ -2694,12 +2727,14 @@ function RequesterDesk(P) {
                   React.createElement("div", { className: "void-t" }, "No assets yet"),
                   React.createElement("div", { className: "void-s" }, "Your balances appear here once funded."))
               : React.createElement("div", { className: "hl" },
-                  holdings.map(h => React.createElement("div", { className: "hl-r", key: h.contractId },
-                    React.createElement(AssetIcon, { symbol: h.payload.asset.symbol }),
+                  aggHoldings(holdings).map(h => React.createElement("div", { className: "hl-r", key: h.symbol },
+                    React.createElement(AssetIcon, { symbol: h.symbol }),
                     React.createElement("div", { className: "hl-n" },
-                      React.createElement("div", { className: "hl-s" }, h.payload.asset.symbol),
-                      React.createElement("div", { className: "hl-x" }, ASSET_LONG(h.payload.asset.symbol))),
-                    React.createElement("div", { className: "hl-a m" }, Number(h.payload.amount).toLocaleString())))))),
+                      React.createElement("div", { className: "hl-s" }, h.symbol),
+                      React.createElement("div", { className: "hl-x" }, ASSET_LONG(h.symbol))),
+                    React.createElement("div", { className: "hl-v" },
+                      React.createElement("div", { className: "hl-a m" }, h.amount.toLocaleString()),
+                      React.createElement("div", { className: "hl-u m" }, fmtUsd(usdOf(usd, h.symbol, h.amount)) || "\u2014"))))))),
 
         rfq ? React.createElement("section", { className: "mod" },
           React.createElement("div", { className: "mod-h" },
@@ -3186,12 +3221,15 @@ function PartyPortal({ role, onExit }) {
         ? React.createElement("div", { className: "void" },
             React.createElement("div", { className: "void-t" }, "No assets yet"),
             React.createElement("div", { className: "void-s" }, "Your cBTC, cETH and CC balances appear here once funded."))
-        : React.createElement("div", { className: "hold" },
-            holdings.map(h => React.createElement("div", { className: "hold-i", key: h.contractId },
-              React.createElement(AssetIcon, { symbol: h.payload.asset.symbol }),
-              React.createElement("div", { className: "hold-t" },
-                React.createElement("div", { className: "hold-a m" }, Number(h.payload.amount).toLocaleString()),
-                React.createElement("div", { className: "hold-s" }, h.payload.asset.symbol)))))));
+        : React.createElement("div", { className: "hl" },
+            aggHoldings(holdings).map(h => React.createElement("div", { className: "hl-r", key: h.symbol },
+              React.createElement(AssetIcon, { symbol: h.symbol }),
+              React.createElement("div", { className: "hl-n" },
+                React.createElement("div", { className: "hl-s" }, h.symbol),
+                React.createElement("div", { className: "hl-x" }, ASSET_LONG(h.symbol))),
+              React.createElement("div", { className: "hl-v" },
+                React.createElement("div", { className: "hl-a m" }, h.amount.toLocaleString()),
+                React.createElement("div", { className: "hl-u m" }, fmtUsd(usdOf(usd, h.symbol, h.amount)) || "\u2014")))))));
 
   return React.createElement("div", { className: "prt" },
 
