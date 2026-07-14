@@ -221,9 +221,13 @@ template SwapRfq
       controller requester
       do
         assertMsg "dealer already invited" (dealer `elem` invited)
+        -- `self` is this SwapRfq's own contract id. Threading it down the chain
+        -- means a quote can be attributed to the request it answers -- exactly,
+        -- not by guessing from matching amounts.
         create SwapInvitation with
           requester; operator; dealer
           offerAsset; offerAmount; wantAsset; expiresAt
+          rfqCid = self
 
     choice CancelRfq : ()
       controller requester
@@ -241,6 +245,7 @@ template SwapInvitation
     offerAmount : Decimal
     wantAsset   : AssetId
     expiresAt   : Time
+    rfqCid      : ContractId SwapRfq   -- the request this invitation answers
   where
     signatory requester
     observer dealer
@@ -262,6 +267,7 @@ template SwapInvitation
         create SwapQuote with
           requester; operator; dealer
           offerAsset; offerAmount; wantAsset; price; validUntil
+          rfqCid
 
     choice DeclineInvitation : ()
       controller dealer
@@ -280,6 +286,7 @@ template SwapQuote
     wantAsset   : AssetId
     price       : Decimal     -- total wantAsset the dealer pays for the offer
     validUntil  : Time        -- the dealer's price is firm until this moment
+    rfqCid      : ContractId SwapRfq   -- the request this quote answers
   where
     signatory dealer
     observer requester
