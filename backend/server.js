@@ -1,3 +1,10 @@
+// WSL2 has no IPv6 route, but DNS returns AAAA records for coingecko and the
+// 5North auth host. Node >=17 resolves `verbatim` -- it tries IPv6 FIRST and
+// hangs until timeout. curl survives via Happy Eyeballs; Node does not. This
+// produced a full day of phantom "outages": ETIMEDOUT, 405, "fetch failed",
+// against hosts that were provably up. Must run before any socket opens.
+require("dns").setDefaultResultOrder("ipv4first");
+
 const express = require("express");
 const { ledgerFetch } = require("./token");
 const { onboardExternalParty, prepareSignExecute, prepareSignExecuteMulti } = require("./external");
@@ -848,6 +855,31 @@ async function queryHistory(party, templateModuleEntity) {
 // GET settled + expired swap history for a role.
 // Returns the raw update entries; the UI derives outcome (settled/expired) from
 // whether a SwapSettlement was created. Empty until a real swap completes.
+// /v2/updates/flats returns UPDATE ENVELOPES, not contracts:
+//   { update: { Transaction: { value: { events: [ { CreatedEvent: {...} } ] } } } }
+// Flatten them into the same { contractId, payload } shape the rest of the app
+// already speaks, and carry the ledger coordinates (offset, createdAt) through --
+// those ARE the proof a trade happened, and the book shows them.
+function flattenUpdates(items) {
+  const out = [];
+  for (const it of (items || [])) {
+    const tx = it && it.update && it.update.Transaction && it.update.Transaction.value;
+    if (!tx) continue;
+    for (const ev of (tx.events || [])) {
+      const ce = ev && ev.CreatedEvent;
+      if (!ce) continue;                       // archives carry no createArgument
+      out.push({
+        contractId: ce.contractId,
+        offset: ce.offset,
+        createdAt: ce.createdAt,
+        updateId: tx.updateId,
+        payload: ce.createArgument
+      });
+    }
+  }
+  return out.sort((a, b) => (Number(b.offset) || 0) - (Number(a.offset) || 0));
+}
+
 app.get("/api/swap/history", async (req, res) => {
   try {
     const role = req.query.role || "requester";
@@ -856,7 +888,9 @@ app.get("/api/swap/history", async (req, res) => {
       queryHistory(party, "UmbraSwap:SwapSettlement").catch(() => []),
       queryHistory(party, "UmbraSwap:SwapRfq").catch(() => [])
     ]);
-    res.json({ ok: true, role, settlements, rfqs });
+    res.json({ ok: true, role,
+      settlements: flattenUpdates(settlements),
+      rfqs: flattenUpdates(rfqs) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1188,10 +1222,19 @@ const mkt = { usd: null, at: 0, series: [] };
 // this at commit time, historical USD value is simply not recoverable.
 async function refMidFor(baseSym, quoteSym) {
   try {
-    const usd = await marketUsd();
+    // One retry. A cold cache or a blipped fetch would otherwise stamp `None`
+    // onto an IMMUTABLE record -- claiming "no market reference existed" when
+    // really we just asked at a bad moment. A false absence is still false.
+    let usd;
+    try { usd = await marketUsd(); }
+    catch (e1) { await new Promise(r => setTimeout(r, 600)); usd = await marketUsd(); }
     const b = usd[baseSym], q = usd[quoteSym];
     if (!b || !q) return null;
-    return String(b / q);
+    // Daml Decimal is Numeric 10 -- at most 10 decimal places. A raw float
+    // ratio has ~14 and the ledger REFUSES it ("cannot represent ... without
+    // loss of precision") rather than silently rounding. So we round here,
+    // deliberately and visibly, to the precision the ledger accepts.
+    return (b / q).toFixed(10);
   } catch (e) { return null; }
 }
 const MKT_TTL = 30000;
