@@ -547,6 +547,22 @@
   @media(max-width:1080px){.rqk{grid-template-columns:1fr;height:auto;overflow:visible}}
 
   /* holdings chips in the header */
+  .bk{display:flex;flex-direction:column}
+  .bk-r{display:grid;grid-template-columns:auto 1fr auto auto;gap:14px;align-items:center;
+    padding:13px 18px;border-bottom:1px solid var(--line)}
+  .bk-r:last-child{border-bottom:0}
+  .bk-p{display:flex;align-items:center;gap:6px}
+  .bk-arr{color:var(--dim);font-size:11px}
+  .bk-t{min-width:0}
+  .bk-l1{font:600 12px/1 ui-monospace,monospace;color:var(--text)}
+  .bk-l2{font:500 10px/1 ui-monospace,monospace;color:var(--dim);margin-top:6px}
+  .bk-x{text-align:right}
+  .bk-rate{font:700 13px/1 ui-monospace,monospace;color:var(--text)}
+  .bk-ref{font:500 10px/1 ui-monospace,monospace;color:var(--mute);margin-top:6px}
+  .bk-b{font:700 10px/1 ui-monospace,monospace;padding:4px 7px;border-radius:3px;white-space:nowrap}
+  .bk-b.up{color:var(--accent);background:var(--accentbg)}
+  .bk-b.dn{color:var(--amber);background:var(--amberbg)}
+  .bk-b.na{color:var(--dim);background:var(--hover)}
   .rq-total{display:flex;align-items:center;gap:8px;padding:5px 11px;
     border:1px solid var(--line2);border-radius:999px;background:var(--bg3)}
   .rq-total span{font:600 9px/1 ui-monospace,monospace;letter-spacing:.14em;
@@ -2449,7 +2465,7 @@ function Login({ onPick }) {
 }
 
 
-// real notional. usd map comes from the price feed; CC has no price -> null.
+// real notional. usd map comes from the price feed (cBTC, cETH and CC all priced).
 // Holdings come off the ledger as CONTRACTS, not balances -- three cBTC
 // contracts is still one cBTC balance. Aggregate per symbol before showing a
 // number to a human, or the header reads "1 cBTC" and "9 cBTC" side by side.
@@ -2503,7 +2519,12 @@ const ASSET_LONG = sym => ASSET_LONGS[sym] || sym;
 
 function RequesterDesk(P) {
   const { meta, signed, onExit, note, rfqs, quotes, holdings, rate, series, usd, rateNote,
-          onCreate, onAward, awarding, awardStep, onPair } = P;
+          onCreate, onAward, awarding, awardStep, onPair, history, composedPair } = P;
+  const settled = (history && history.settlements) || [];
+  // the pair the reference is actually for: a live RFQ if present, else the form
+  const refPair = rfqs && rfqs[0]
+    ? { base: rfqs[0].payload.offerAsset.symbol, quote: rfqs[0].payload.wantAsset.symbol }
+    : (composedPair || { base: "cBTC", quote: "cETH" });
   const [theme, flipTheme] = useTheme();
 
   const [now, setNow] = React.useState(Date.now());
@@ -2580,7 +2601,7 @@ function RequesterDesk(P) {
           React.createElement("span", { className: "cx" }, "Blind block auction \u00b7 Requester"))),
       React.createElement("div", { className: "prt-right" },
         React.createElement("div", { className: "rq-total tip-below tip-left",
-          "data-tip": "Total value of your holdings at live market rates. CC has no public price, so it is excluded." },
+          "data-tip": "Total value of your holdings at live market rates." },
           React.createElement("span", null, "Portfolio"),
           React.createElement("b", { className: "m" }, fmtUsd(totalUsd(usd, holdings)) || "\u2014")),
         rfq ? React.createElement("button", { className: "btn sm", onClick: () => setComposing(c => !c) },
@@ -2699,19 +2720,26 @@ function RequesterDesk(P) {
                       React.createElement("span", { className: "rq-pn" }, DEALER_NAME(d)),
                       React.createElement("span", { className: "rq-pb" }, "awaiting"),
                       React.createElement("span", { className: "rq-pt" }, "has not priced this block"))))
-              : null))),
+              : null)),
+
+        React.createElement("section", { className: "mod" },
+          React.createElement("div", { className: "mod-h" },
+            React.createElement("h2", null, "Your book"),
+            React.createElement("span", { className: "mod-c m" }, settled.length)),
+          React.createElement("div", { className: "mod-b flush" },
+            React.createElement(TradeBook, { settled })))),
 
       React.createElement("div", { className: "dsk-col" },
 
         React.createElement("section", { className: "mod" },
           React.createElement("div", { className: "mod-h" },
             React.createElement("h2", null, "Market reference"),
-            rfq ? React.createElement("span", { className: "mr-pair m" },
-              rfq.payload.offerAsset.symbol, " / ", rfq.payload.wantAsset.symbol) : null),
+            React.createElement("span", { className: "mr-pair m" },
+              refPair.quote, " / ", refPair.base)),
           React.createElement("div", { className: "mod-b" },
             React.createElement("div", { className: "mr-mid m" },
               rate != null ? Number(rate).toFixed(2) : "\u2014",
-              rfq ? React.createElement("span", null, rfq.payload.wantAsset.symbol + " / " + rfq.payload.offerAsset.symbol) : null),
+              React.createElement("span", null, refPair.quote + " / " + refPair.base)),
             spark,
             React.createElement("div", { className: "mr-foot" },
               React.createElement("span", { className: "live" }),
@@ -2720,7 +2748,7 @@ function RequesterDesk(P) {
         React.createElement("section", { className: "mod" },
           React.createElement("div", { className: "mod-h" },
             React.createElement("h2", null, "Holdings"),
-            React.createElement("span", { className: "mod-c m" }, holdings.length)),
+            React.createElement("span", { className: "mod-c m" }, aggHoldings(holdings).length)),
           React.createElement("div", { className: "mod-b" },
             holdings.length === 0
               ? React.createElement("div", { className: "void" },
@@ -2873,6 +2901,44 @@ function SettlementVault({ trade, onClose, role }) {
 }
 
 // ---- PORTAL ----
+function TradeBook({ settled }) {
+  if (!settled || settled.length === 0)
+    return React.createElement("div", { className: "void" },
+      React.createElement("div", { className: "void-t" }, "No settled trades"),
+      React.createElement("div", { className: "void-s" },
+        "A completed swap appears here with the mark it printed against."));
+  return React.createElement("div", { className: "bk" },
+    settled.map(t => {
+      const p = t.payload || {};
+      if (!p.offerAsset || !p.wantAsset) return null;
+      const o = p.offerAsset.symbol, w = p.wantAsset.symbol;
+      const amt = Number(p.offerAmount), px = Number(p.price);
+      const rate = amt > 0 ? px / amt : null;
+      const ref = (p.refMid == null) ? null : Number(p.refMid);
+      const bps = (ref && rate) ? Math.round(((rate - ref) / ref) * 10000) : null;
+      const when = t.createdAt ? new Date(t.createdAt) : null;
+      return React.createElement("div", { className: "bk-r", key: t.contractId },
+        React.createElement("div", { className: "bk-p" },
+          React.createElement(AssetIcon, { symbol: o, size: "sm" }),
+          React.createElement("span", { className: "bk-arr" }, "\u2192"),
+          React.createElement(AssetIcon, { symbol: w, size: "sm" })),
+        React.createElement("div", { className: "bk-t" },
+          React.createElement("div", { className: "bk-l1 m" },
+            amt.toLocaleString() + " " + o + "  \u2192  " + px.toLocaleString() + " " + w),
+          React.createElement("div", { className: "bk-l2 m" },
+            (when ? when.toLocaleString() : "\u2014") + "  \u00b7  #" + (t.offset || "\u2014"))),
+        React.createElement("div", { className: "bk-x" },
+          React.createElement("div", { className: "bk-rate m" }, rate == null ? "\u2014" : rate.toFixed(4)),
+          React.createElement("div", { className: "bk-ref m" },
+            ref == null ? "no mark on record" : "ref " + ref.toFixed(4))),
+        React.createElement("span", {
+          className: "bk-b tip-left " + (bps == null ? "na" : bps >= 0 ? "up" : "dn"),
+          "data-tip": bps == null ? "No market reference was recorded for this trade."
+            : "Executed rate vs the mid stamped on-ledger at commit."
+        }, bps == null ? "\u2014" : (bps >= 0 ? "+" : "") + bps + " bps"));
+    }));
+}
+
 function DealerDesk(P) {
   const { meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, usd, price, setPrice, busy, sendQuote, fresh } = P;
   const [theme, flipTheme] = useTheme();
@@ -3078,15 +3144,19 @@ function PartyPortal({ role, onExit }) {
   const [vault, setVault] = useState(null);
   const [rateNote, setRateNote] = useState(null);
   const pairRef = useRef(null);
-  const formPairRef = useRef(null);
-  const onPair = useCallback(p => { formPairRef.current = p; }, []);
+  const [composedPair, setComposedPair] = useState({ base: "cBTC", quote: "cETH" });
+  const onPair = useCallback(p => { setComposedPair(p); }, []);
 
   const say = (m, bad) => { setNote({ m, bad }); setTimeout(() => setNote(null), 3400); };
 
   const load = useCallback(async () => {
     try {
-      // the reference must be for the pair actually in play, not a fixed default
-      const pr = pairRef.current;
+      // Decide the pair to price THIS tick, fresh -- a live request wins, else
+      // whatever the form is composing. (Previously this read a ref written at
+      // the END of the last tick, so the rate always lagged a poll and, on first
+      // mount, fell back to the endpoint's default pair and never moved.)
+      const liveNow = pairRef.current;                 // set at end of prior tick from a live RFQ/inv
+      const pr = liveNow || composedPair;              // else the pair the form is composing
       const rateQ = pr ? ("?base=" + pr.base + "&quote=" + pr.quote) : "";
       const [si, sq, sh, md, le, hist, rt, rq] = await Promise.all([
         api("/api/swap/invitations?role=" + role).catch(() => ({})),
@@ -3109,16 +3179,16 @@ function PartyPortal({ role, onExit }) {
       if (rt && rt.ok) { setRate(rt.mid); setSeries(rt.series || []); setUsd(rt.usd || null); setRateNote(rt.note || null); }
       else { setRate(null); setSeries([]); setRateNote(null); }
       if (rq && rq.rfqs) setRfqs(rq.rfqs);
-      // remember which pair to price next tick
+      // Cache the live-request pair (or null) for next tick's top-read. When null,
+      // the top falls back to composedPair, so composing the form updates the rate.
       const liveRfq = (rq && rq.rfqs && rq.rfqs[0]) || null;
       const liveInv = nx[0] || null;
       const src = liveRfq ? liveRfq.payload : (liveInv ? liveInv.payload : null);
-      // a live request wins; otherwise price whatever the form is composing.
       pairRef.current = src
         ? { base: src.offerAsset.symbol, quote: src.wantAsset.symbol }
-        : formPairRef.current;
+        : null;
     } catch (e) {}
-  }, [role]);
+  }, [role, composedPair]);
 
   useEffect(() => { load(); const t = setInterval(load, 2500); return () => clearInterval(t); }, [load]);
 
@@ -3207,7 +3277,7 @@ function PartyPortal({ role, onExit }) {
   return React.createElement(React.Fragment, null,
     RequesterDesk({
       meta, signed, onExit, note,
-      rfqs, quotes: myQuotes, holdings, rate, series, usd, rateNote, onPair,
+      rfqs, quotes: myQuotes, holdings, rate, series, usd, rateNote, onPair, history, composedPair,
       onCreate: createRfq, onAward: awardQuote, awarding, awardStep
     }),
     React.createElement(SettlementVault, { trade: vault, role, onClose: () => setVault(null) }));
