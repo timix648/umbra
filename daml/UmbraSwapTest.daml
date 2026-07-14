@@ -78,7 +78,7 @@ runSwap w offerAsset offerAmt wantAsset wantAmt reqHolding dealerHolding = do
   pending <- submit w.requester do
     exerciseCmd prop CommitRequesterLeg with requesterHoldingCid = reqHolding
   settlement <- submit w.dealer do
-    exerciseCmd pending CommitDealerLeg with dealerHoldingCid = dealerHolding
+    exerciseCmd pending CommitDealerLeg with dealerHoldingCid = dealerHolding; refMid = None
   -- Operator executes; the settlement is signed by requester + dealer, so the
   -- nested Allocation_ExecuteTransfer on both legs has the authority it needs.
   submitMulti [w.operator] [w.requester, w.dealer] do exerciseCmd settlement ExecuteSwap
@@ -168,7 +168,7 @@ swapRejectsUnderfunded = do
   pending <- submit w.requester do
     exerciseCmd prop CommitRequesterLeg with requesterHoldingCid = reqH
   settlement <- submit w.dealer do
-    exerciseCmd pending CommitDealerLeg with dealerHoldingCid = dlrH
+    exerciseCmd pending CommitDealerLeg with dealerHoldingCid = dlrH; refMid = None
   -- The dealer's leg can't cover 100 CC from a 99 CC holding -> whole tx aborts.
   submitMultiMustFail [w.operator] [w.requester, w.dealer] do exerciseCmd settlement ExecuteSwap
   pure ()
