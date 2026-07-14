@@ -547,23 +547,6 @@
   @media(max-width:1080px){.rqk{grid-template-columns:1fr;height:auto;overflow:visible}}
 
   /* holdings chips in the header */
-  /* the book */
-  .bk{display:flex;flex-direction:column}
-  .bk-r{display:grid;grid-template-columns:auto 1fr auto auto;gap:14px;align-items:center;
-    padding:13px 18px;border-bottom:1px solid var(--line)}
-  .bk-r:last-child{border-bottom:0}
-  .bk-p{display:flex;align-items:center;gap:6px}
-  .bk-arr{color:var(--dim);font-size:11px}
-  .bk-t{min-width:0}
-  .bk-l1{font:600 12px/1 ui-monospace,monospace;color:var(--text)}
-  .bk-l2{font:500 10px/1 ui-monospace,monospace;color:var(--dim);margin-top:6px}
-  .bk-x{text-align:right}
-  .bk-rate{font:700 13px/1 ui-monospace,monospace;color:var(--text)}
-  .bk-ref{font:500 10px/1 ui-monospace,monospace;color:var(--mute);margin-top:6px}
-  .bk-b{font:700 10px/1 ui-monospace,monospace;padding:4px 7px;border-radius:3px;white-space:nowrap}
-  .bk-b.up{color:var(--accent);background:var(--accentbg)}
-  .bk-b.dn{color:var(--amber);background:var(--amberbg)}
-  .bk-b.na{color:var(--dim);background:var(--hover)}
   .rq-total{display:flex;align-items:center;gap:8px;padding:5px 11px;
     border:1px solid var(--line2);border-radius:999px;background:var(--bg3)}
   .rq-total span{font:600 9px/1 ui-monospace,monospace;letter-spacing:.14em;
@@ -2520,8 +2503,7 @@ const ASSET_LONG = sym => ASSET_LONGS[sym] || sym;
 
 function RequesterDesk(P) {
   const { meta, signed, onExit, note, rfqs, quotes, holdings, rate, series, usd, rateNote,
-          onCreate, onAward, awarding, awardStep, onPair, history } = P;
-  const settled = (history && history.settlements) || [];
+          onCreate, onAward, awarding, awardStep, onPair } = P;
   const [theme, flipTheme] = useTheme();
 
   const [now, setNow] = React.useState(Date.now());
@@ -2719,13 +2701,6 @@ function RequesterDesk(P) {
                       React.createElement("span", { className: "rq-pt" }, "has not priced this block"))))
               : null))),
 
-        React.createElement("section", { className: "mod" },
-          React.createElement("div", { className: "mod-h" },
-            React.createElement("h2", null, "Your book"),
-            React.createElement("span", { className: "mod-c m" }, settled.length)),
-          React.createElement("div", { className: "mod-b flush" },
-            React.createElement(TradeBook, { settled }))),
-
       React.createElement("div", { className: "dsk-col" },
 
         React.createElement("section", { className: "mod" },
@@ -2898,53 +2873,6 @@ function SettlementVault({ trade, onClose, role }) {
 }
 
 // ---- PORTAL ----
-// THE BOOK -- trades that actually settled, read back off Canton.
-// Every row carries its ledger offset. On a private ledger there is no public
-// explorer, so the offset IS the receipt: it is where this trade lives.
-// `refMid` is the market reference STAMPED ON-LEDGER at commit, signed by both
-// parties -- not a price looked up now and back-dated. Where it is null, the
-// feed genuinely had nothing for that pair, and we say so rather than invent.
-function TradeBook({ settled }) {
-  if (!settled || settled.length === 0)
-    return React.createElement("div", { className: "void" },
-      React.createElement("div", { className: "void-t" }, "No settled trades"),
-      React.createElement("div", { className: "void-s" },
-        "A completed swap appears here with the mark it printed against."));
-
-  return React.createElement("div", { className: "bk" },
-    settled.map(t => {
-      const p = t.payload || {};
-      if (!p.offerAsset || !p.wantAsset) return null;
-      const o = p.offerAsset.symbol, w = p.wantAsset.symbol;
-      const amt = Number(p.offerAmount), px = Number(p.price);
-      const rate = amt > 0 ? px / amt : null;
-      const ref = (p.refMid == null) ? null : Number(p.refMid);
-      const bps = (ref && rate) ? Math.round(((rate - ref) / ref) * 10000) : null;
-      const when = t.createdAt ? new Date(t.createdAt) : null;
-      return React.createElement("div", { className: "bk-r", key: t.contractId },
-        React.createElement("div", { className: "bk-p" },
-          React.createElement(AssetIcon, { symbol: o, size: "sm" }),
-          React.createElement("span", { className: "bk-arr" }, "\u2192"),
-          React.createElement(AssetIcon, { symbol: w, size: "sm" })),
-        React.createElement("div", { className: "bk-t" },
-          React.createElement("div", { className: "bk-l1 m" },
-            amt.toLocaleString() + " " + o + "  \u2192  " + px.toLocaleString() + " " + w),
-          React.createElement("div", { className: "bk-l2 m" },
-            (when ? when.toLocaleString() : "\u2014") + "  \u00b7  #" + (t.offset || "\u2014"))),
-        React.createElement("div", { className: "bk-x" },
-          React.createElement("div", { className: "bk-rate m" },
-            rate == null ? "\u2014" : rate.toFixed(4)),
-          React.createElement("div", { className: "bk-ref m" },
-            ref == null ? "no mark on record" : "ref " + ref.toFixed(4))),
-        React.createElement("span", {
-          className: "bk-b " + (bps == null ? "na" : bps >= 0 ? "up" : "dn"),
-          "data-tip": bps == null
-            ? "No market reference was recorded for this trade."
-            : "Executed rate vs the mid stamped on-ledger at commit."
-        }, bps == null ? "\u2014" : (bps >= 0 ? "+" : "") + bps + " bps"));
-    }));
-}
-
 function DealerDesk(P) {
   const { meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, usd, price, setPrice, busy, sendQuote, fresh } = P;
   const [theme, flipTheme] = useTheme();
@@ -2979,21 +2907,11 @@ function DealerDesk(P) {
         React.createElement("span", { className: "dq-arr" }, "\u2192"),
         React.createElement(AssetIcon, { symbol: w, size: "sm" })));
   };
-  const pastItem = (st, won) => {
-    const p = st.payload || {};
-    const o = p.offerAsset && p.offerAsset.symbol;
-    const w = p.wantAsset && p.wantAsset.symbol;
-    return React.createElement("div", { className: "dq-i dq-past", key: st.contractId },
+  const pastItem = (st, won) =>
+    React.createElement("div", { className: "dq-i dq-past", key: st.contractId || Math.random() },
       React.createElement("div", { className: "dq-top" },
         React.createElement("span", { className: "dq-id" }, short(st.contractId || "").toUpperCase()),
-        React.createElement("span", { className: "dq-badge " + (won ? "won" : "exp") }, won ? "settled" : "expired")),
-      (o && w) ? React.createElement("div", { className: "dq-pair" },
-        React.createElement(AssetIcon, { symbol: o, size: "sm" }),
-        React.createElement("span", null, Number(p.offerAmount).toLocaleString()),
-        React.createElement("span", { className: "dq-arr" }, "\u2192"),
-        React.createElement(AssetIcon, { symbol: w, size: "sm" }),
-        React.createElement("span", null, Number(p.price).toLocaleString())) : null);
-  };
+        React.createElement("span", { className: "dq-badge " + (won ? "won" : "exp") }, won ? "settled" : "expired")));
 
   const queueCount = inv.length + settled.length;
 
@@ -3128,21 +3046,13 @@ function DealerDesk(P) {
               ? React.createElement("div", { className: "void" },
                   React.createElement("div", { className: "void-t" }, "No assets yet"),
                   React.createElement("div", { className: "void-s" }, "Your balances appear here once funded."))
-              : React.createElement("div", { className: "hl" },
-                  aggHoldings(holdings).map(h => React.createElement("div", { className: "hl-r", key: h.symbol },
-                    React.createElement(AssetIcon, { symbol: h.symbol }),
-                    React.createElement("div", { className: "hl-n" },
-                      React.createElement("div", { className: "hl-s" }, h.symbol),
-                      React.createElement("div", { className: "hl-x" }, ASSET_LONG(h.symbol))),
-                    React.createElement("div", { className: "hl-v" },
-                      React.createElement("div", { className: "hl-a m" }, h.amount.toLocaleString()),
-                      React.createElement("div", { className: "hl-u m" }, fmtUsd(usdOf(usd, h.symbol, h.amount)) || "\u2014"))))))),
-        React.createElement("section", { className: "mod" },
-          React.createElement("div", { className: "mod-h" },
-            React.createElement("h2", null, "Your book"),
-            React.createElement("span", { className: "mod-c m" }, settled.length)),
-          React.createElement("div", { className: "mod-b flush" },
-            React.createElement(TradeBook, { settled }))))));
+              : React.createElement("div", { className: "hold" },
+                  holdings.map(h => React.createElement("div", { className: "hold-i", key: h.contractId },
+                    React.createElement(AssetIcon, { symbol: h.payload.asset.symbol }),
+                    React.createElement("div", { className: "hold-t" },
+                      React.createElement("div", { className: "hold-a m" }, Number(h.payload.amount).toLocaleString()),
+                      React.createElement("div", { className: "hold-s" }, h.payload.asset.symbol))))))),
+        null)));
 }
 
 function PartyPortal({ role, onExit }) {
@@ -3297,7 +3207,7 @@ function PartyPortal({ role, onExit }) {
   return React.createElement(React.Fragment, null,
     RequesterDesk({
       meta, signed, onExit, note,
-      rfqs, quotes: myQuotes, holdings, rate, series, usd, rateNote, onPair, history,
+      rfqs, quotes: myQuotes, holdings, rate, series, usd, rateNote, onPair,
       onCreate: createRfq, onAward: awardQuote, awarding, awardStep
     }),
     React.createElement(SettlementVault, { trade: vault, role, onClose: () => setVault(null) }));
