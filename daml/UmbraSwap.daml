@@ -215,7 +215,7 @@ template SwapRfq
 
     -- Invite a dealer to quote (creates a private invitation visible only to
     -- that dealer and the requester).
-    choice InviteDealer : ContractId SwapInvitation
+    nonconsuming choice InviteDealer : ContractId SwapInvitation
       with
         dealer : Party
       controller requester
@@ -353,6 +353,10 @@ template SwapDealerPending
     choice CommitDealerLeg : ContractId SwapSettlement
       with
         dealerHoldingCid : ContractId AssetHolding
+        -- The market reference at the moment of commit. Optional and honest:
+        -- None when the pair has no public price (CC) or the feed is down. We
+        -- record the absence rather than invent a mark.
+        refMid : Optional Decimal
       controller dealer
       do
         wantAllocCid <- create AssetAllocation with
@@ -361,6 +365,8 @@ template SwapDealerPending
           holdingCid = dealerHoldingCid; legId = "want-leg"
         create SwapSettlement with
           requester; operator; dealer
+          offerAsset; offerAmount; wantAsset; price
+          refMid
           offerAllocCid; wantAllocCid
 
 
@@ -372,6 +378,14 @@ template SwapSettlement
     requester    : Party
     operator     : Party
     dealer       : Party
+    -- The trade, on the record. Previously the settlement held only pointers to
+    -- two allocations, which are consumed on execution -- so a settled swap left
+    -- no readable trace of WHAT was traded. The book needs this.
+    offerAsset   : AssetId
+    offerAmount  : Decimal
+    wantAsset    : AssetId
+    price        : Decimal
+    refMid       : Optional Decimal
     offerAllocCid : ContractId AssetAllocation
     wantAllocCid  : ContractId AssetAllocation
   where

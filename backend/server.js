@@ -951,11 +951,18 @@ app.post("/api/swap/pending/:cid/commit-want", async (req, res) => {
   try {
     const dealerRole = String(req.body.dealer || "").toLowerCase();
     const dealer = await partyIdFor(dealerRole);
+    // Read the pending contract to learn its own pair. The SERVER stamps the
+    // mark from its own price feed -- the client never supplies the number.
+    const pend = (await queryActive(dealer, "UmbraSwap:SwapDealerPending"))
+      .find(c => c.contractId === req.params.cid);
+    const refMid = pend
+      ? await refMidFor(pend.payload.offerAsset.symbol, pend.payload.wantAsset.symbol)
+      : null;
     const before = await idSetSwap(dealer, "UmbraSwap:SwapSettlement");
     await act(dealerRole, "swap-commit-want", [{
       ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapDealerPending`,
         contractId: req.params.cid, choice: "CommitDealerLeg",
-        choiceArgument: { dealerHoldingCid: req.body.holdingCid } } }]);
+        choiceArgument: { dealerHoldingCid: req.body.holdingCid, refMid } } }]);
     const settlementCid = await pollNewCid(dealer, "UmbraSwap:SwapSettlement", before);
     res.json({ ok: true, signed: SIGNED_MODE, settlementCid });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1082,10 +1089,11 @@ app.post("/api/swap/award", async (req, res) => {
 
     // (6) dealer commits want leg -> settlement
     b = await idSetSwap(dealer, "UmbraSwap:SwapSettlement");
+    const awardRefMid = await refMidFor(offerAsset.symbol, wantAsset.symbol);
     await act(dealerRole, "swap-commit-want", [{
       ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapDealerPending`,
         contractId: pendingCid, choice: "CommitDealerLeg",
-        choiceArgument: { dealerHoldingCid } } }]);
+        choiceArgument: { dealerHoldingCid, refMid: awardRefMid } } }]);
     const settlementCid = await pollNewCid(dealer, "UmbraSwap:SwapSettlement", b);
     steps.push("dealer committed want leg");
 
@@ -1167,8 +1175,25 @@ app.get("/api/ledger/contract/:cid", async (req, res) => {
 // cBTC := BTC 1:1, cETH := ETH 1:1. The honest reference for a pair is the real
 // spot cross. No synthetic prices: if the feed fails we return null and the UI
 // shows "--". A fabricated mid in a trading venue is worse than none.
-const CG = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd";
+// Price the ACTUAL bridged assets where they are listed, not proxies:
+//   cBTC -> BitSafe's own CoinGecko listing (it trades at a small premium to BTC)
+//   CC   -> canton-network
+//   cETH -> no Canton listing exists, so we use ETH (it is 1:1 wrapped)
+const CG = "https://api.coingecko.com/api/v3/simple/price?ids=bitsafe-bridged-wrapped-bitcoin-canton,canton-network,ethereum,bitcoin&vs_currencies=usd";
 const mkt = { usd: null, at: 0, series: [] };
+
+// The mid for a pair AT THIS MOMENT, as a Daml Decimal string -- or null (Daml
+// None) when there is no public price. Stamped onto a settlement so the book can
+// later show a TRUE mark. CoinGecko only ever gives us "now"; without recording
+// this at commit time, historical USD value is simply not recoverable.
+async function refMidFor(baseSym, quoteSym) {
+  try {
+    const usd = await marketUsd();
+    const b = usd[baseSym], q = usd[quoteSym];
+    if (!b || !q) return null;
+    return String(b / q);
+  } catch (e) { return null; }
+}
 const MKT_TTL = 30000;
 
 async function marketUsd() {
@@ -1176,7 +1201,12 @@ async function marketUsd() {
   const r = await fetch(CG, { headers: { accept: "application/json" } });
   if (!r.ok) throw new Error("price feed " + r.status);
   const j = await r.json();
-  const usd = { cBTC: j.bitcoin && j.bitcoin.usd, cETH: j.ethereum && j.ethereum.usd, CC: null };
+  const CB = j["bitsafe-bridged-wrapped-bitcoin-canton"];
+  const usd = {
+    cBTC: (CB && CB.usd) || (j.bitcoin && j.bitcoin.usd),   // real cBTC, else BTC
+    cETH: j.ethereum && j.ethereum.usd,                     // no cETH listing; 1:1 wrapped
+    CC:   j["canton-network"] && j["canton-network"].usd,
+  };
   if (!usd.cBTC || !usd.cETH) throw new Error("incomplete price feed");
   mkt.usd = usd; mkt.at = Date.now();
   mkt.series.push(usd.cBTC / usd.cETH);
@@ -1206,7 +1236,7 @@ app.get("/api/market/rate", async (req, res) => {
       return res.json({
         ok: true, base, quote, mid: null, usd, series: [], at: mkt.at,
         note: "No market reference for " + pair + " \u2014 " +
-              (!usd[base] ? base : quote) + " has no reliable public price."
+              (!usd[base] ? base : quote) + " has no price on the feed right now."
       });
     }
     const mid = b / q;
