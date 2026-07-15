@@ -772,8 +772,14 @@ app.post("/api/swap/fund", async (req, res) => {
 app.get("/api/swap/holdings", async (req, res) => {
   try {
     const role = req.query.role || "requester";
-    const hs = await queryActive(await partyIdFor(role), "UmbraSwap:AssetHolding");
-    res.json({ ok: true, role, count: hs.length, holdings: hs });
+    const party = await partyIdFor(role);
+    const hs = await queryActive(party, "UmbraSwap:AssetHolding");
+    // Only holdings this party OWNS. An asset `admin` also SEES (observer)
+    // everyone's holdings of that asset; without this filter `pick` could select
+    // a holding owned by someone else and the CIP-56 allocation would revert with
+    // "allocation sender is not the holding owner".
+    const owned = hs.filter(h => h.payload && h.payload.owner === party);
+    res.json({ ok: true, role, count: owned.length, holdings: owned });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
