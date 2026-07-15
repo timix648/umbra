@@ -2526,7 +2526,12 @@ function RequesterDesk(P) {
   // the reference is for the pair the requester is composing -- matches the fetch
   // in load() (requester prices composedPair), so label and value agree and
   // switching the form moves both.
-  const refPair = composedPair || { base: "cBTC", quote: "cETH" };
+  // label tracks the live (non-expired) RFQ so it matches the fetched value and
+  // the vs-mkt bps; only the form pair when there is no live request.
+  const _liveRef = rfqs.find(r => new Date(r.payload.expiresAt).getTime() > Date.now());
+  const refPair = _liveRef
+    ? { base: _liveRef.payload.offerAsset.symbol, quote: _liveRef.payload.wantAsset.symbol }
+    : (composedPair || { base: "cBTC", quote: "cETH" });
   const [theme, flipTheme] = useTheme();
 
   const [now, setNow] = React.useState(Date.now());
@@ -3175,7 +3180,7 @@ function PartyPortal({ role, onExit }) {
       //  - REQUESTER: the pair the form is composing (composedPair, immediate).
       // The old code priced rq.rfqs[0] for BOTH roles, unfiltered by expiry, so a
       // stale RFQ pinned the rate to the wrong pair (34 cBTC/cETH for a cBTC/CC deal).
-      const pr = isDealer ? (pairRef.current || composedPair) : composedPair;
+      const pr = pairRef.current || composedPair;
       const rateQ = pr ? ("?base=" + pr.base + "&quote=" + pr.quote) : "";
       const [si, sq, sh, md, le, hist, rt, rq] = await Promise.all([
         api("/api/swap/invitations?role=" + role).catch(() => ({})),
@@ -3198,14 +3203,19 @@ function PartyPortal({ role, onExit }) {
       if (rt && rt.ok) { setRate(rt.mid); setSeries(rt.series || []); setUsd(rt.usd || null); setRateNote(rt.note || null); }
       else { setRate(null); setSeries([]); setRateNote(null); }
       if (rq && rq.rfqs) setRfqs(rq.rfqs);
-      // Cache the SELECTED live invitation's pair (else the first live one) so the
-      // dealer REF's value matches the request in view, and an expired invitation
-      // never pins the rate to a dead pair.
-      const _live = nx.filter(i => { const t = new Date(i.payload.expiresAt).getTime(); return isNaN(t) || t > Date.now(); });
-      const _act = _live.find(i => i.contractId === selInvCid) || _live[0] || null;
-      pairRef.current = _act
-        ? { base: _act.payload.offerAsset.symbol, quote: _act.payload.wantAsset.symbol }
-        : null;
+      // Cache the pair to price next tick, by role:
+      //  DEALER    -> the selected (else first) LIVE invitation.
+      //  REQUESTER -> the LIVE (non-expired) RFQ, so the REF and vs-mkt bps track
+      //               the deal in flight, not a stale form default after a reload.
+      // Null (no live request) falls back to composedPair at the top -> the form.
+      if (isDealer) {
+        const _live = nx.filter(i => { const t = new Date(i.payload.expiresAt).getTime(); return isNaN(t) || t > Date.now(); });
+        const _act = _live.find(i => i.contractId === selInvCid) || _live[0] || null;
+        pairRef.current = _act ? { base: _act.payload.offerAsset.symbol, quote: _act.payload.wantAsset.symbol } : null;
+      } else {
+        const _lrfq = ((rq && rq.rfqs) || []).find(r => { const t = new Date(r.payload.expiresAt).getTime(); return isNaN(t) || t > Date.now(); });
+        pairRef.current = _lrfq ? { base: _lrfq.payload.offerAsset.symbol, quote: _lrfq.payload.wantAsset.symbol } : null;
+      }
     } catch (e) {}
   }, [role, composedPair, selInvCid]);
 
