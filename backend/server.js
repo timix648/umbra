@@ -835,6 +835,55 @@ app.get("/api/real/holdings", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ---- READ-ONLY: pending incoming CIP-56 transfer offers --------------------
+// The faucet's cBTC arrives as a TransferInstruction the receiver must accept.
+async function queryPendingTransfers(party) {
+  const offset = await ledgerEnd();
+  const body = {
+    filter: { filtersByParty: { [party]: { cumulative: [{
+      identifierFilter: { InterfaceFilter: { value: {
+        interfaceId: "#splice-api-token-transfer-instruction-v1:Splice.Api.Token.TransferInstructionV1:TransferInstruction",
+        includeInterfaceView: true,
+        includeCreatedEventBlob: false,
+      } } },
+    }] } } },
+    verbose: false,
+    activeAtOffset: offset,
+  };
+  const r = await ledgerFetch("/v2/state/active-contracts", { method: "POST", body: JSON.stringify(body) });
+  const text = await r.text();
+  if (!r.ok) throw new Error(humanize(`${r.status} ${text}`));
+  let items;
+  try { items = JSON.parse(text); }
+  catch { items = text.trim().split("\n").filter(Boolean).map(l => JSON.parse(l)); }
+  const arr = Array.isArray(items) ? items : [items];
+  const out = [];
+  for (const x of arr) {
+    const ce = x?.contractEntry?.JsActiveContract?.createdEvent || x?.activeContract?.createdEvent || x?.createdEvent;
+    if (!ce) continue;
+    for (const v of (ce.interfaceViews || [])) {
+      const vv = v.viewValue || v.value || {};
+      const t = vv.transfer || {};
+      const inst = t.instrumentId || {};
+      out.push({
+        contractId: ce.contractId,
+        status: (vv.status && (vv.status.tag || vv.status)) || null,
+        sender: t.sender, receiver: t.receiver, amount: t.amount,
+        instrument: inst.id, admin: inst.admin, executeBefore: t.executeBefore,
+      });
+    }
+  }
+  return out;
+}
+
+app.get("/api/real/pending", async (req, res) => {
+  try {
+    const party = req.query.party || await partyIdFor(req.query.role || "requester");
+    const offers = await queryPendingTransfers(party);
+    res.json({ ok: true, party, count: offers.length, offers });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ---- GRANULAR VENUE FLOW ---------------------------------------------------
 
 // requester creates a swap RFQ (offer asset -> want asset), then invites the
