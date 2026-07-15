@@ -884,6 +884,68 @@ app.get("/api/real/pending", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ---- ACCEPT a pending CIP-56 transfer (lands real cBTC/cETH) ----------------
+const REGISTRY_URL_DEFAULT = process.env.REGISTRY_URL || "https://api.utilities.digitalasset-dev.com";
+const TI_IFACE = "#splice-api-token-transfer-instruction-v1:Splice.Api.Token.TransferInstructionV1:TransferInstruction";
+
+// Ask the registrar (the instrument admin) for the accept choice-context: the
+// context values + disclosed contracts the TransferInstruction_Accept choice needs.
+async function acceptContext(registryUrl, registrar, offerCid) {
+  const url = registryUrl +
+    "/api/token-standard/v0/registrars/" + encodeURIComponent(registrar) +
+    "/registry/transfer-instruction/v1/" + offerCid + "/choice-contexts/accept";
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ meta: {} }),
+  });
+  const text = await r.text();
+  if (!r.ok) throw new Error("registry " + r.status + ": " + text.slice(0, 300));
+  return JSON.parse(text);
+}
+
+app.post("/api/real/pending/:cid/accept", async (req, res) => {
+  try {
+    const role = req.query.role || (req.body && req.body.role) || "requester";
+    const party = await partyIdFor(role);
+    const cid = req.params.cid;
+    const registryUrl = req.query.registry || REGISTRY_URL_DEFAULT;
+
+    // Confirm the offer exists for this party and get its registrar (instrument admin).
+    const offers = await queryPendingTransfers(party);
+    const offer = offers.find(o => o.contractId === cid);
+    if (!offer) return res.status(404).json({ error: "no pending offer '" + cid + "' for " + role });
+    if (!offer.admin) return res.status(400).json({ error: "offer has no instrument admin (registrar)" });
+
+    const ctx = await acceptContext(registryUrl, offer.admin, cid);
+    const disclosed = (ctx.disclosedContracts || []).map(d => ({
+      templateId: d.templateId, contractId: d.contractId,
+      createdEventBlob: d.createdEventBlob, synchronizerId: d.synchronizerId || "",
+    }));
+
+    const body = {
+      commandId: "accept-" + Date.now(),
+      actAs: [party],
+      commands: [{
+        ExerciseCommand: {
+          templateId: TI_IFACE,
+          contractId: cid,
+          choice: "TransferInstruction_Accept",
+          choiceArgument: { extraArgs: {
+            context: ctx.choiceContextData || { values: {} },
+            meta: { values: {} },
+          } },
+        },
+      }],
+      disclosedContracts: disclosed,
+    };
+    const r = await ledgerFetch("/v2/commands/submit-and-wait", { method: "POST", body: JSON.stringify(body) });
+    const text = await r.text();
+    if (!r.ok) throw new Error(humanize(`${r.status} ${text}`));
+    res.json({ ok: true, accepted: cid, instrument: offer.instrument, amount: offer.amount, disclosed: disclosed.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ---- GRANULAR VENUE FLOW ---------------------------------------------------
 
 // requester creates a swap RFQ (offer asset -> want asset), then invites the
