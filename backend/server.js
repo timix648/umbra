@@ -926,12 +926,24 @@ app.get("/api/swap/invitations", async (req, res) => {
 app.post("/api/swap/invitations/:cid/quote", async (req, res) => {
   try {
     const dealerRole = String(req.body.dealer || "").toLowerCase();
-    await partyIdFor(dealerRole); // validate
+    const dealerParty = await partyIdFor(dealerRole); // validate
     // validUntil is MANDATORY on SubmitSwapQuote: how long this dealer's price
     // stays firm. AcceptSwapQuote asserts `now < validUntil`, so a stale price
-    // cannot be lifted (see swapRejectsStaleQuote). Default 5 min.
+    // cannot be lifted (see swapRejectsStaleQuote).
+    // DEFAULT to the invitation's expiresAt (== the RFQ's close time): a firm
+    // price should not lapse while the buyer is still able to accept. An explicit
+    // validUntil/validMins in the body still wins (a dealer may quote SHORTER
+    // firmness), but the default must never be shorter than the RFQ window.
+    let invExpiry = null;
+    try {
+      const inv = (await queryActive(dealerParty, "UmbraSwap:SwapInvitation"))
+        .find(c => c.contractId === req.params.cid);
+      if (inv && inv.payload && inv.payload.expiresAt) invExpiry = inv.payload.expiresAt;
+    } catch (e) {}
     const validUntil = req.body.validUntil ||
-      new Date(Date.now() + Number(req.body.validMins || 5) * 60000).toISOString();
+      (req.body.validMins
+        ? new Date(Date.now() + Number(req.body.validMins) * 60000).toISOString()
+        : (invExpiry || new Date(Date.now() + 5 * 60000).toISOString()));
     const result = await act(dealerRole, "swap-quote", [{
       ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapInvitation`,
         contractId: req.params.cid, choice: "SubmitSwapQuote",
@@ -1026,6 +1038,42 @@ app.post("/api/swap/settlements/:cid/execute", async (req, res) => {
     const t = await r.text();
     if (!r.ok) throw new Error(`ExecuteSwap failed: ${r.status} ${t}`);
     res.json({ ok: true, signed: SIGNED_MODE });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---- close a settled/expired RFQ (archive it + its invitations) -----------
+// SwapRfq and SwapInvitation are both signatory=requester, so the requester can
+// archive them directly. Settlement never consumed the RFQ, which is why a done
+// deal kept showing as "live". Best-effort: a missing/already-archived contract
+// is ignored. Works in demo (operator acts) and signed (requester signs) mode.
+async function cleanupSwapRfq(rfqCid) {
+  if (!rfqCid) return { rfq: false, invitations: 0 };
+  const requester = await partyIdFor("requester");
+  let rfq = false;
+  try {
+    await act("requester", "swap-rfq-close", [{
+      ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapRfq`,
+        contractId: rfqCid, choice: "Archive", choiceArgument: {} } }]);
+    rfq = true;
+  } catch (e) { /* already archived / not found */ }
+  let invitations = 0, invs = [];
+  try { invs = await queryActive(requester, "UmbraSwap:SwapInvitation"); } catch {}
+  for (const iv of invs) {
+    if (!iv.payload || iv.payload.rfqCid !== rfqCid) continue;
+    try {
+      await act("requester", "swap-inv-close", [{
+        ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapInvitation`,
+          contractId: iv.contractId, choice: "Archive", choiceArgument: {} } }]);
+      invitations++;
+    } catch (e) { /* best-effort */ }
+  }
+  return { rfq, invitations };
+}
+
+app.post("/api/swap/rfqs/:cid/close", async (req, res) => {
+  try {
+    const closed = await cleanupSwapRfq(req.params.cid);
+    res.json({ ok: true, closed });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1139,6 +1187,7 @@ app.post("/api/swap/award", async (req, res) => {
         ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapSettlement`,
           contractId: settlementCid, choice: "ExecuteSwap", choiceArgument: {} } }]);
       steps.push(`executed atomic ${offerAsset.symbol}->${wantAsset.symbol} swap (CIP-56, both legs, self-signed)`);
+      try { await cleanupSwapRfq(rfqCid); steps.push("closed RFQ"); } catch (e) {}
       return res.json({ ok: true, signed: true, steps });
     }
     const execActAs = [requester, dealer, operator];
@@ -1149,6 +1198,7 @@ app.post("/api/swap/award", async (req, res) => {
     const t = await r.text();
     if (!r.ok) throw new Error(`ExecuteSwap failed: ${r.status} ${t}`);
     steps.push(`executed atomic ${offerAsset.symbol}->${wantAsset.symbol} swap (CIP-56, both legs)`);
+    try { await cleanupSwapRfq(rfqCid); steps.push("closed RFQ"); } catch (e) {}
 
     res.json({ ok: true, signed: SIGNED_MODE, steps });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1274,7 +1324,7 @@ app.get("/api/market/rate", async (req, res) => {
   try {
     const usd = await marketUsd();
     const b = usd[base], q = usd[quote];
-    // CC has no reliable public price. We say so rather than invent one.
+    // If either asset is missing from the feed, we return a null mid and say which -- rather than invent a number.
     if (!b || !q) {
       return res.json({
         ok: true, base, quote, mid: null, usd, series: [], at: mkt.at,
