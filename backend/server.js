@@ -876,6 +876,39 @@ async function queryPendingTransfers(party) {
   return out;
 }
 
+app.get("/api/real/raw", async (req, res) => {
+  try {
+    const party = req.query.party || await partyIdFor(req.query.role || "requester");
+    const offset = await ledgerEnd();
+    const body = {
+      filter: { filtersByParty: { [party]: { cumulative: [{
+        identifierFilter: { InterfaceFilter: { value: {
+          interfaceId: "#splice-api-token-holding-v1:Splice.Api.Token.HoldingV1:Holding",
+          includeInterfaceView: true,
+          includeCreatedEventBlob: false,
+        } } },
+      }] } } },
+      verbose: false,
+      activeAtOffset: offset,
+    };
+    const r = await ledgerFetch("/v2/state/active-contracts", { method: "POST", body: JSON.stringify(body) });
+    const text = await r.text();
+    if (!r.ok) throw new Error(humanize(`${r.status} ${text}`));
+    let items;
+    try { items = JSON.parse(text); }
+    catch { items = text.trim().split("\n").filter(Boolean).map(l => JSON.parse(l)); }
+    const arr = Array.isArray(items) ? items : [items];
+    const out = [];
+    for (const x of arr) {
+      const ce = x?.contractEntry?.JsActiveContract?.createdEvent || x?.activeContract?.createdEvent || x?.createdEvent;
+      if (!ce) continue;
+      out.push({ contractId: ce.contractId, templateId: ce.templateId, interfaceViews: ce.interfaceViews });
+    }
+    const only = req.query.cid ? out.filter(o => o.contractId === req.query.cid) : out;
+    res.json({ ok: true, party, count: out.length, holdings: only });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get("/api/real/pending", async (req, res) => {
   try {
     const party = req.query.party || await partyIdFor(req.query.role || "requester");
