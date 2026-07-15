@@ -505,6 +505,10 @@
     .vl-stage *{animation:none !important;transition:none !important}
     [data-phase] [data-role="legTop"],[data-phase] [data-role="legBottom"]{transform:none !important}}
 
+  .dq-click{cursor:pointer;width:100%;text-align:left;border:0;background:none;font:inherit;
+    display:block;transition:background .12s}
+  .dq-click:hover{background:var(--hover)}
+  .dq-click .dq-id{text-decoration:underline;text-decoration-color:var(--line2);text-underline-offset:3px}
   /* the proof link on the receipt */
   .vl-link{background:none;border:0;padding:0;cursor:pointer;
     font:600 11.5px/1 ui-monospace,monospace;color:var(--accent2);
@@ -2521,22 +2525,23 @@ const ASSET_LONG = sym => ASSET_LONGS[sym] || sym;
 
 function RequesterDesk(P) {
   const { meta, signed, onExit, note, rfqs, quotes, holdings, rate, series, usd, rateNote,
-          onCreate, onAward, awarding, awardStep, onPair, history, composedPair } = P;
+          onCreate, onAward, awarding, awardStep, onPair, history, composedPair, composing, setComposing } = P;
   const settled = (history && history.settlements) || [];
   // the reference is for the pair the requester is composing -- matches the fetch
   // in load() (requester prices composedPair), so label and value agree and
   // switching the form moves both.
   // label tracks the live (non-expired) RFQ so it matches the fetched value and
   // the vs-mkt bps; only the form pair when there is no live request.
+  // Focus: while composing (or none live) the reference follows the form;
+  // otherwise the live RFQ. Matches load(), so value + label always agree.
   const _liveRef = rfqs.find(r => new Date(r.payload.expiresAt).getTime() > Date.now());
-  const refPair = _liveRef
-    ? { base: _liveRef.payload.offerAsset.symbol, quote: _liveRef.payload.wantAsset.symbol }
-    : (composedPair || { base: "cBTC", quote: "cETH" });
+  const refPair = (composing || !_liveRef)
+    ? (composedPair || { base: "cBTC", quote: "cETH" })
+    : { base: _liveRef.payload.offerAsset.symbol, quote: _liveRef.payload.wantAsset.symbol };
   const [theme, flipTheme] = useTheme();
 
   const [now, setNow] = React.useState(Date.now());
   React.useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
-  const [composing, setComposing] = React.useState(false);
   const [holdOn, setHoldOn] = React.useState(null);   // contractId being held
   const [holdPct, setHoldPct] = React.useState(0);
   const holdRef = React.useRef(null);
@@ -2947,7 +2952,8 @@ function TradeBook({ settled }) {
 }
 
 function DealerDesk(P) {
-  const { meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, usd, price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid } = P;
+  const { meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, usd, price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid, role } = P;
+  const [proof, setProof] = useState(null); // dealer ledger-proof modal cid
   const [theme, flipTheme] = useTheme();
   // Split invitations by ledger-enforced expiry -- an expired one must never hold
   // the active slot (Canton refuses a late quote anyway). The dealer clicks a LIVE
@@ -2992,7 +2998,10 @@ function DealerDesk(P) {
         React.createElement(AssetIcon, { symbol: w, size: "sm" })));
   };
   const pastItem = (st, won) =>
-    React.createElement("div", { className: "dq-i dq-past", key: st.contractId || Math.random() },
+    React.createElement("button", {
+        className: "dq-i dq-past dq-click", key: st.contractId || Math.random(),
+        onClick: () => setProof(st.contractId),
+        title: "View ledger proof" },
       React.createElement("div", { className: "dq-top" },
         React.createElement("span", { className: "dq-id" }, short(st.contractId || "").toUpperCase()),
         React.createElement("span", { className: "dq-badge " + (won ? "won" : "exp") }, won ? "settled" : "expired")));
@@ -3010,6 +3019,10 @@ function DealerDesk(P) {
         React.createElement("span", { className: "prt-dot", style: { background: meta.dot, marginLeft: 6 } }),
         React.createElement("span", { className: "prt-nm" }, meta.nm)),
       React.createElement("div", { className: "prt-right" },
+        React.createElement("div", { className: "rq-total tip-below tip-left",
+          "data-tip": "Total value of your holdings at live market rates." },
+          React.createElement("span", null, "Portfolio"),
+          React.createElement("b", { className: "m" }, fmtUsd(totalUsd(usd, holdings)) || "\u2014")),
         active
           ? (rate != null
               ? React.createElement("span", { className: "dsk-ref tip-below tip-left", "data-tip": "Live mid-market reference for this pair (CoinGecko). A pricing anchor \u2014 not a quote." },
@@ -3125,7 +3138,7 @@ function DealerDesk(P) {
         React.createElement("section", { className: "mod" },
           React.createElement("div", { className: "mod-h" },
             React.createElement("h2", null, "Holdings"),
-            React.createElement("span", { className: "mod-c m" }, holdings.length)),
+            React.createElement("span", { className: "mod-c m" }, aggHoldings(holdings).length)),
           React.createElement("div", { className: "mod-b" },
             holdings.length === 0
               ? React.createElement("div", { className: "void" },
@@ -3140,7 +3153,7 @@ function DealerDesk(P) {
                     React.createElement("div", { className: "hl-v" },
                       React.createElement("div", { className: "hl-a m" }, h.amount.toLocaleString()),
                       React.createElement("div", { className: "hl-u m" }, fmtUsd(usdOf(usd, h.symbol, h.amount)) || "\u2014"))))))),
-        null)));
+        proof ? React.createElement(LedgerProof, { cid: proof, role, onClose: () => setProof(null) }) : null)));
 }
 
 function PartyPortal({ role, onExit }) {
@@ -3169,6 +3182,7 @@ function PartyPortal({ role, onExit }) {
   const [composedPair, setComposedPair] = useState({ base: "cBTC", quote: "cETH" });
   const onPair = useCallback(p => { setComposedPair(p); }, []);
   const [selInvCid, setSelInvCid] = useState(null);  // dealer-selected invitation
+  const [composing, setComposing] = useState(false); // requester composing a new RFQ (focuses REF on the form)
 
   const say = (m, bad) => { setNote({ m, bad }); setTimeout(() => setNote(null), 3400); };
 
@@ -3213,11 +3227,13 @@ function PartyPortal({ role, onExit }) {
         const _act = _live.find(i => i.contractId === selInvCid) || _live[0] || null;
         pairRef.current = _act ? { base: _act.payload.offerAsset.symbol, quote: _act.payload.wantAsset.symbol } : null;
       } else {
+        // Focus: while composing a new request (or none live) the REF follows the
+        // form (null here -> composedPair at top); otherwise the live RFQ.
         const _lrfq = ((rq && rq.rfqs) || []).find(r => { const t = new Date(r.payload.expiresAt).getTime(); return isNaN(t) || t > Date.now(); });
-        pairRef.current = _lrfq ? { base: _lrfq.payload.offerAsset.symbol, quote: _lrfq.payload.wantAsset.symbol } : null;
+        pairRef.current = (composing || !_lrfq) ? null : { base: _lrfq.payload.offerAsset.symbol, quote: _lrfq.payload.wantAsset.symbol };
       }
     } catch (e) {}
-  }, [role, composedPair, selInvCid]);
+  }, [role, composedPair, selInvCid, composing]);
 
   useEffect(() => { load(); const t = setInterval(load, 2500); return () => clearInterval(t); }, [load]);
 
@@ -3302,14 +3318,15 @@ function PartyPortal({ role, onExit }) {
 
   if (isDealer) return DealerDesk({
     meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, usd,
-    price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid
+    price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid, role
   });
 
   return React.createElement(React.Fragment, null,
     RequesterDesk({
       meta, signed, onExit, note,
       rfqs, quotes: myQuotes, holdings, rate, series, usd, rateNote, onPair, history, composedPair,
-      onCreate: createRfq, onAward: awardQuote, awarding, awardStep
+      onCreate: createRfq, onAward: awardQuote, awarding, awardStep,
+      composing, setComposing
     }),
     React.createElement(SettlementVault, { trade: vault, role, onClose: () => setVault(null) }));
 
