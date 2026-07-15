@@ -811,8 +811,12 @@ async function queryRealHoldings(party) {
   for (const x of arr) {
     const ce = x?.contractEntry?.JsActiveContract?.createdEvent || x?.activeContract?.createdEvent || x?.createdEvent;
     if (!ce) continue;
-    for (const v of (ce.interfaceViews || [])) {
-      const vv = v.viewValue || v.value || {};
+    // Each contract yields one interface view per interface-package version; the
+    // package-name 'umbra' view fails to render (viewValue null). Use the first
+    // view that actually rendered.
+    const gv = (ce.interfaceViews || []).find(v => v && v.viewValue && (!v.viewStatus || v.viewStatus.code === 0));
+    if (gv) {
+      const vv = gv.viewValue;
       const inst = vv.instrumentId || {};
       out.push({ contractId: ce.contractId, owner: vv.owner, admin: inst.admin, id: inst.id, amount: vv.amount });
     }
@@ -861,8 +865,9 @@ async function queryPendingTransfers(party) {
   for (const x of arr) {
     const ce = x?.contractEntry?.JsActiveContract?.createdEvent || x?.activeContract?.createdEvent || x?.createdEvent;
     if (!ce) continue;
-    for (const v of (ce.interfaceViews || [])) {
-      const vv = v.viewValue || v.value || {};
+    const gv = (ce.interfaceViews || []).find(v => v && v.viewValue && (!v.viewStatus || v.viewStatus.code === 0));
+    if (gv) {
+      const vv = gv.viewValue;
       const t = vv.transfer || {};
       const inst = t.instrumentId || {};
       out.push({
