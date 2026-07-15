@@ -1662,6 +1662,8 @@ function OperatorConsole({ onExit }) {
       await post("/api/swap/settlements/" + c.settlementCid + "/execute", {
         dealer: dealerRole
       });
+      // settled -- archive the RFQ so it stops showing as "live" (best-effort)
+      post("/api/swap/rfqs/" + p.rfqCid + "/close", {}).catch(() => {});
       setPipe(pp => ({ ...pp, active: pp.steps.length }));
 
       const trade = {
@@ -2125,7 +2127,7 @@ function SwapRfqForm({
         });
       } finally { setBusy(false); }
     },
-    "data-tip": "Request quotes to swap one asset for another \\u2014 dealers compete, winner settles atomically"
+    "data-tip": "Request quotes to swap one asset for another — dealers compete, winner settles atomically"
   }, busy ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", { className: "spinr" }), "Creating") : "Create Swap RFQ")));
 }
 function RfqForm({
@@ -2521,10 +2523,10 @@ function RequesterDesk(P) {
   const { meta, signed, onExit, note, rfqs, quotes, holdings, rate, series, usd, rateNote,
           onCreate, onAward, awarding, awardStep, onPair, history, composedPair } = P;
   const settled = (history && history.settlements) || [];
-  // the pair the reference is actually for: a live RFQ if present, else the form
-  const refPair = rfqs && rfqs[0]
-    ? { base: rfqs[0].payload.offerAsset.symbol, quote: rfqs[0].payload.wantAsset.symbol }
-    : (composedPair || { base: "cBTC", quote: "cETH" });
+  // the reference is for the pair the requester is composing -- matches the fetch
+  // in load() (requester prices composedPair), so label and value agree and
+  // switching the form moves both.
+  const refPair = composedPair || { base: "cBTC", quote: "cETH" };
   const [theme, flipTheme] = useTheme();
 
   const [now, setNow] = React.useState(Date.now());
@@ -2735,11 +2737,11 @@ function RequesterDesk(P) {
           React.createElement("div", { className: "mod-h" },
             React.createElement("h2", null, "Market reference"),
             React.createElement("span", { className: "mr-pair m" },
-              refPair.quote, " / ", refPair.base)),
+              refPair.base, " / ", refPair.quote)),
           React.createElement("div", { className: "mod-b" },
             React.createElement("div", { className: "mr-mid m" },
               rate != null ? Number(rate).toFixed(2) : "\u2014",
-              React.createElement("span", null, refPair.quote + " / " + refPair.base)),
+              React.createElement("span", null, refPair.base + " / " + refPair.quote)),
             spark,
             React.createElement("div", { className: "mr-foot" },
               React.createElement("span", { className: "live" }),
@@ -2940,10 +2942,17 @@ function TradeBook({ settled }) {
 }
 
 function DealerDesk(P) {
-  const { meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, usd, price, setPrice, busy, sendQuote, fresh } = P;
+  const { meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, usd, price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid } = P;
   const [theme, flipTheme] = useTheme();
-  const active = inv[0] || null;                       // the request being priced (first live invitation)
-  const rest   = inv.slice(1);                         // any other live invitations
+  // Split invitations by ledger-enforced expiry -- an expired one must never hold
+  // the active slot (Canton refuses a late quote anyway). The dealer clicks a LIVE
+  // request to make it active; default is the first live invitation.
+  const _now = Date.now();
+  const _isLive = iv => { const t = new Date(iv.payload.expiresAt).getTime(); return isNaN(t) || t > _now; };
+  const liveInv = inv.filter(_isLive);
+  const expiredInv = inv.filter(iv => !_isLive(iv));
+  const active = liveInv.find(iv => iv.contractId === selInvCid) || liveInv[0] || null;
+  const rest   = liveInv.filter(iv => !active || iv.contractId !== active.contractId);
   const settled = (history && history.settlements) || [];
   const pastRfqs = (history && history.rfqs) || [];
 
@@ -2960,13 +2969,17 @@ function DealerDesk(P) {
   }
   const cd = fmtCountdown(active && active.payload && active.payload.expiresAt);
 
-  const qItem = (iv, isOn) => {
+  const qItem = (iv, isOn, expired) => {
     const o = iv.payload.offerAsset.symbol, w = iv.payload.wantAsset.symbol;
     const c = fmtCountdown(iv.payload.expiresAt);
-    return React.createElement("button", { className: "dq-i" + (isOn ? " on" : ""), key: iv.contractId },
+    return React.createElement("button", {
+        className: "dq-i" + (isOn ? " on" : "") + (expired ? " dq-past" : ""),
+        key: iv.contractId, onClick: expired ? undefined : () => setSelInvCid(iv.contractId) },
       React.createElement("div", { className: "dq-top" },
         React.createElement("span", { className: "dq-id" }, short(iv.contractId).toUpperCase()),
-        React.createElement("span", { className: "dq-t" + (c.warn ? " warn" : "") }, c.txt)),
+        expired
+          ? React.createElement("span", { className: "dq-badge exp" }, "expired")
+          : React.createElement("span", { className: "dq-t" + (c.warn ? " warn" : "") }, c.txt)),
       React.createElement("div", { className: "dq-pair" },
         React.createElement(AssetIcon, { symbol: o, size: "sm" }),
         React.createElement("span", null, Number(iv.payload.offerAmount).toLocaleString()),
@@ -2996,7 +3009,7 @@ function DealerDesk(P) {
           ? (rate != null
               ? React.createElement("span", { className: "dsk-ref tip-below tip-left", "data-tip": "Live mid-market reference for this pair (CoinGecko). A pricing anchor \u2014 not a quote." },
                   "REF", React.createElement("b", null, Number(rate).toFixed(2)),
-                  React.createElement("span", { className: "dsk-ref-pair" }, " " + active.payload.wantAsset.symbol + "/" + active.payload.offerAsset.symbol))
+                  React.createElement("span", { className: "dsk-ref-pair" }, " " + active.payload.offerAsset.symbol + "/" + active.payload.wantAsset.symbol))
               : React.createElement("span", { className: "dsk-ref na tip-below tip-left", "data-tip": "Live market reference is unavailable right now. Price using your own read \u2014 the ledger never requires a reference." }, "REF", React.createElement("b", null, "\u2014")))
           : null,
         active ? React.createElement("span", { className: "dsk-close" + (cd.warn ? " warn" : "") }, "Closes in ", React.createElement("b", null, cd.txt)) : null,
@@ -3017,8 +3030,9 @@ function DealerDesk(P) {
           inv.length === 0 && settled.length === 0
             ? React.createElement("div", { className: "dq-empty" }, "No requests yet. A buyer's invitation appears here \u2014 only ones sent to you.")
             : React.createElement(React.Fragment, null,
-                active ? qItem(active, true) : null,
-                rest.map(iv => qItem(iv, false)),
+                active ? qItem(active, true, false) : null,
+                rest.map(iv => qItem(iv, false, false)),
+                expiredInv.map(iv => qItem(iv, false, true)),
                 settled.map(st => pastItem(st, true))))),
 
       // CENTER: the active ask + price input
@@ -3112,12 +3126,15 @@ function DealerDesk(P) {
               ? React.createElement("div", { className: "void" },
                   React.createElement("div", { className: "void-t" }, "No assets yet"),
                   React.createElement("div", { className: "void-s" }, "Your balances appear here once funded."))
-              : React.createElement("div", { className: "hold" },
-                  holdings.map(h => React.createElement("div", { className: "hold-i", key: h.contractId },
-                    React.createElement(AssetIcon, { symbol: h.payload.asset.symbol }),
-                    React.createElement("div", { className: "hold-t" },
-                      React.createElement("div", { className: "hold-a m" }, Number(h.payload.amount).toLocaleString()),
-                      React.createElement("div", { className: "hold-s" }, h.payload.asset.symbol))))))),
+              : React.createElement("div", { className: "hl" },
+                  aggHoldings(holdings).map(h => React.createElement("div", { className: "hl-r", key: h.symbol },
+                    React.createElement(AssetIcon, { symbol: h.symbol }),
+                    React.createElement("div", { className: "hl-n" },
+                      React.createElement("div", { className: "hl-s" }, h.symbol),
+                      React.createElement("div", { className: "hl-x" }, ASSET_LONG(h.symbol))),
+                    React.createElement("div", { className: "hl-v" },
+                      React.createElement("div", { className: "hl-a m" }, h.amount.toLocaleString()),
+                      React.createElement("div", { className: "hl-u m" }, fmtUsd(usdOf(usd, h.symbol, h.amount)) || "\u2014"))))))),
         null)));
 }
 
@@ -3146,17 +3163,19 @@ function PartyPortal({ role, onExit }) {
   const pairRef = useRef(null);
   const [composedPair, setComposedPair] = useState({ base: "cBTC", quote: "cETH" });
   const onPair = useCallback(p => { setComposedPair(p); }, []);
+  const [selInvCid, setSelInvCid] = useState(null);  // dealer-selected invitation
 
   const say = (m, bad) => { setNote({ m, bad }); setTimeout(() => setNote(null), 3400); };
 
   const load = useCallback(async () => {
     try {
-      // Decide the pair to price THIS tick, fresh -- a live request wins, else
-      // whatever the form is composing. (Previously this read a ref written at
-      // the END of the last tick, so the rate always lagged a poll and, on first
-      // mount, fell back to the endpoint's default pair and never moved.)
-      const liveNow = pairRef.current;                 // set at end of prior tick from a live RFQ/inv
-      const pr = liveNow || composedPair;              // else the pair the form is composing
+      // Which pair to price THIS tick, by role:
+      //  - DEALER: the invitation they were asked to quote (pairRef, cached from
+      //    nx[0] at the end of last tick -- one poll of lag, self-correcting).
+      //  - REQUESTER: the pair the form is composing (composedPair, immediate).
+      // The old code priced rq.rfqs[0] for BOTH roles, unfiltered by expiry, so a
+      // stale RFQ pinned the rate to the wrong pair (34 cBTC/cETH for a cBTC/CC deal).
+      const pr = isDealer ? (pairRef.current || composedPair) : composedPair;
       const rateQ = pr ? ("?base=" + pr.base + "&quote=" + pr.quote) : "";
       const [si, sq, sh, md, le, hist, rt, rq] = await Promise.all([
         api("/api/swap/invitations?role=" + role).catch(() => ({})),
@@ -3179,16 +3198,16 @@ function PartyPortal({ role, onExit }) {
       if (rt && rt.ok) { setRate(rt.mid); setSeries(rt.series || []); setUsd(rt.usd || null); setRateNote(rt.note || null); }
       else { setRate(null); setSeries([]); setRateNote(null); }
       if (rq && rq.rfqs) setRfqs(rq.rfqs);
-      // Cache the live-request pair (or null) for next tick's top-read. When null,
-      // the top falls back to composedPair, so composing the form updates the rate.
-      const liveRfq = (rq && rq.rfqs && rq.rfqs[0]) || null;
-      const liveInv = nx[0] || null;
-      const src = liveRfq ? liveRfq.payload : (liveInv ? liveInv.payload : null);
-      pairRef.current = src
-        ? { base: src.offerAsset.symbol, quote: src.wantAsset.symbol }
+      // Cache the SELECTED live invitation's pair (else the first live one) so the
+      // dealer REF's value matches the request in view, and an expired invitation
+      // never pins the rate to a dead pair.
+      const _live = nx.filter(i => { const t = new Date(i.payload.expiresAt).getTime(); return isNaN(t) || t > Date.now(); });
+      const _act = _live.find(i => i.contractId === selInvCid) || _live[0] || null;
+      pairRef.current = _act
+        ? { base: _act.payload.offerAsset.symbol, quote: _act.payload.wantAsset.symbol }
         : null;
     } catch (e) {}
-  }, [role, composedPair]);
+  }, [role, composedPair, selInvCid]);
 
   useEffect(() => { load(); const t = setInterval(load, 2500); return () => clearInterval(t); }, [load]);
 
@@ -3234,6 +3253,8 @@ function PartyPortal({ role, onExit }) {
       const c = await post("/api/swap/pending/" + b.pendingCid + "/commit-want", { dealer: dealerRole, holdingCid: theirs });
       setAwardStep("Settling\u2026");
       await post("/api/swap/settlements/" + c.settlementCid + "/execute", { dealer: dealerRole });
+      // settled -- archive the RFQ so it stops showing as "live" (best-effort)
+      post("/api/swap/rfqs/" + p.rfqCid + "/close", {}).catch(() => {});
       setVault({
         offerSym, offerAmt: p.offerAmount,
         wantSym, wantAmt: p.price,
@@ -3271,7 +3292,7 @@ function PartyPortal({ role, onExit }) {
 
   if (isDealer) return DealerDesk({
     meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, usd,
-    price, setPrice, busy, sendQuote, fresh
+    price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid
   });
 
   return React.createElement(React.Fragment, null,
