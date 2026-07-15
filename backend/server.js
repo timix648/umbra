@@ -783,6 +783,58 @@ app.get("/api/swap/holdings", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ---- READ-ONLY: real CIP-56 token holdings (Amulet/CC, CBTC, cETH, ...) -----
+// Queries the standard Splice Holding INTERFACE (not Umbra's AssetHolding) so we
+// can see the real assets a party holds. includeInterfaceView gives us the view
+// with owner, instrumentId {admin,id}, and amount.
+async function queryRealHoldings(party) {
+  const offset = await ledgerEnd();
+  const body = {
+    filter: { filtersByParty: { [party]: { cumulative: [{
+      identifierFilter: { InterfaceFilter: { value: {
+        interfaceId: "#splice-api-token-holding-v1:Splice.Api.Token.HoldingV1:Holding",
+        includeInterfaceView: true,
+        includeCreatedEventBlob: false,
+      } } },
+    }] } } },
+    verbose: false,
+    activeAtOffset: offset,
+  };
+  const r = await ledgerFetch("/v2/state/active-contracts", { method: "POST", body: JSON.stringify(body) });
+  const text = await r.text();
+  if (!r.ok) throw new Error(humanize(`${r.status} ${text}`));
+  let items;
+  try { items = JSON.parse(text); }
+  catch { items = text.trim().split("\n").filter(Boolean).map(l => JSON.parse(l)); }
+  const arr = Array.isArray(items) ? items : [items];
+  const out = [];
+  for (const x of arr) {
+    const ce = x?.contractEntry?.JsActiveContract?.createdEvent || x?.activeContract?.createdEvent || x?.createdEvent;
+    if (!ce) continue;
+    for (const v of (ce.interfaceViews || [])) {
+      const vv = v.viewValue || v.value || {};
+      const inst = vv.instrumentId || {};
+      out.push({ contractId: ce.contractId, owner: vv.owner, admin: inst.admin, id: inst.id, amount: vv.amount });
+    }
+  }
+  return out;
+}
+
+app.get("/api/real/holdings", async (req, res) => {
+  try {
+    const party = req.query.party || await partyIdFor(req.query.role || "requester");
+    const hs = await queryRealHoldings(party);
+    const byInst = {};
+    for (const h of hs) {
+      const k = (h.id || "?") + "@" + (h.admin || "?");
+      if (!byInst[k]) byInst[k] = { id: h.id, admin: h.admin, total: 0, utxos: 0 };
+      byInst[k].total += Number(h.amount || 0);
+      byInst[k].utxos += 1;
+    }
+    res.json({ ok: true, party, instruments: Object.values(byInst), raw: hs });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ---- GRANULAR VENUE FLOW ---------------------------------------------------
 
 // requester creates a swap RFQ (offer asset -> want asset), then invites the
