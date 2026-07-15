@@ -2118,7 +2118,7 @@ function SwapRfqForm({
     value: wantSym,
     onChange: e => setWantSym(e.target.value)
   }, syms.filter(x => x !== offerSym).map(opt)))), /*#__PURE__*/React.createElement("button", {
-    className: "btn prime tip-below",
+    className: "btn prime",
     disabled: busy || offerSym === wantSym,
     onClick: async () => {
       if (busy) return;
@@ -3063,6 +3063,8 @@ function DealerDesk(P) {
               React.createElement("div", { className: "mod-b" }, (function () {
                 const o = active.payload.offerAsset.symbol, w = active.payload.wantAsset.symbol;
                 const amt = Number(active.payload.offerAmount);
+                const _wMax = Math.max(0, ...holdings.filter(h => h.payload.asset.symbol === w).map(h => Number(h.payload.amount)));
+                const _unbacked = Number(price[active.contractId]) > _wMax;
                 return React.createElement(React.Fragment, null,
                   React.createElement("div", { className: "ask-pair" },
                     React.createElement("div", { className: "ask-side" },
@@ -3087,9 +3089,10 @@ function DealerDesk(P) {
                       }),
                       React.createElement("span", { className: "ask-unit" }, w)),
                     React.createElement("button", {
-                      className: "btn ask-btn", disabled: !!busy[active.contractId],
+                      className: "btn ask-btn", disabled: !!busy[active.contractId] || _unbacked,
                       onClick: () => sendQuote(active.contractId, w)
-                    }, busy[active.contractId] ? React.createElement("span", { className: "spinr" }) : "Seal quote to the ledger")),
+                    }, busy[active.contractId] ? React.createElement("span", { className: "spinr" })
+                       : (_unbacked ? ("Insufficient " + w) : "Seal quote to the ledger"))),
                   // quick-fill: price off the REAL mid, nudge in basis points.
                   (function () {
                     const cid = active.contractId;
@@ -3241,6 +3244,11 @@ function PartyPortal({ role, onExit }) {
     if (busy[cid]) return;
     const p = price[cid];
     if (!p || Number(p) <= 0) { say("Enter a price in " + wantSym, true); return; }
+    // A dealer cannot quote more than they can deliver: the swap needs ONE
+    // holding of the want-asset >= the price, or it reverts at settlement and
+    // wastes the requester\u2019s award. Block it here, not at the ledger.
+    const _wMax = Math.max(0, ...holdings.filter(h => h.payload.asset.symbol === wantSym).map(h => Number(h.payload.amount)));
+    if (Number(p) > _wMax) { say("You cannot back that: your largest " + wantSym + " holding is " + _wMax.toLocaleString() + ". Quote at or below it.", true); return; }
     setBusy(b => ({ ...b, [cid]: true }));
     try {
       await post("/api/swap/invitations/" + cid + "/quote", { dealer: role, price: p });
