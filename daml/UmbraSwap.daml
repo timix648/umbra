@@ -1,3 +1,4 @@
+
 module UmbraSwap where
 
 import DA.Date (date, Month(..))
@@ -9,7 +10,7 @@ import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.AllocationV1
 
 -- ============================================================================
--- UMBRA SWAP — the unified any-to-any settlement engine.
+-- UMBRA SWAP -- the unified any-to-any settlement engine.
 --
 -- One asset model, one allocation, one swap path. cBTC, cETH and CC are all
 -- ordinary CIP-56 assets identified by (admin, assetId); the engine never
@@ -18,7 +19,7 @@ import Splice.Api.Token.AllocationV1
 -- the same code with no per-asset branches.
 --
 -- Design decisions (locked):
---   * New file — the legacy Umbra.daml / UmbraDvP.daml paths are left intact
+--   * New file -- the legacy Umbra.daml / UmbraDvP.daml paths are left intact
 --     until this engine is proven green, then retired.
 --   * The RFQ layer is generalised too: a request names the asset it OFFERS
 --     and the asset it WANTS, and a dealer quotes a price in the wanted asset.
@@ -275,7 +276,7 @@ template SwapInvitation
 
 
 -- A dealer's private quote. Signed by the dealer, visible only to the
--- requester — the ledger itself withholds it from rival dealers (P1).
+-- requester -- the ledger itself withholds it from rival dealers (P1).
 template SwapQuote
   with
     requester   : Party
@@ -331,14 +332,35 @@ template SwapProposal
         requesterHoldingCid : ContractId AssetHolding
       controller requester
       do
-        offerAllocCid <- create AssetAllocation with
+        offerAllocRaw <- create AssetAllocation with
           sender = requester; receiver = dealer; executor = operator
           asset = offerAsset; amount = offerAmount
           holdingCid = requesterHoldingCid; legId = "offer-leg"
         create SwapDealerPending with
           requester; operator; dealer
           offerAsset; offerAmount; wantAsset; price
-          offerAllocCid
+          offerAllocCid = toInterfaceContractId @Allocation offerAllocRaw
+
+    -- v6 REAL path: the backend has already allocated BOTH legs against the real
+    -- registry (creating two DvpLegAllocation contracts) and is about to execute
+    -- them atomically via /api/real/settle. This choice records the trade on-ledger
+    -- as the blind-auction result, pointing at the two real allocations for audit.
+    -- Both principals authorize (matching SwapSettlement's signatories). No holdings
+    -- are moved here -- execution is the backend's atomic registry call.
+    choice RecordRealSwap : ContractId SwapSettlement
+      with
+        realOfferAllocCid : ContractId Allocation
+        realWantAllocCid  : ContractId Allocation
+        realRefMid        : Optional Decimal
+      controller requester, dealer
+      do
+        create SwapSettlement with
+          requester; operator; dealer
+          offerAsset; offerAmount; wantAsset; price
+          refMid = realRefMid
+          offerAllocCid = realOfferAllocCid
+          wantAllocCid = realWantAllocCid
+          settledVia = "real"
 
 
 template SwapDealerPending
@@ -350,7 +372,7 @@ template SwapDealerPending
     offerAmount  : Decimal
     wantAsset    : AssetId
     price        : Decimal
-    offerAllocCid : ContractId AssetAllocation
+    offerAllocCid : ContractId Allocation   -- v6: interface cid (stand-in or real)
   where
     signatory requester
     observer dealer, operator
@@ -366,7 +388,7 @@ template SwapDealerPending
         refMid : Optional Decimal
       controller dealer
       do
-        wantAllocCid <- create AssetAllocation with
+        wantAllocRaw <- create AssetAllocation with
           sender = dealer; receiver = requester; executor = operator
           asset = wantAsset; amount = price
           holdingCid = dealerHoldingCid; legId = "want-leg"
@@ -374,10 +396,12 @@ template SwapDealerPending
           requester; operator; dealer
           offerAsset; offerAmount; wantAsset; price
           refMid
-          offerAllocCid; wantAllocCid
+          offerAllocCid
+          wantAllocCid = toInterfaceContractId @Allocation wantAllocRaw
+          settledVia = "standin"
 
 
--- Signed by requester AND dealer (via the chain of accepts) — so ExecuteSwap,
+-- Signed by requester AND dealer (via the chain of accepts) -- so ExecuteSwap,
 -- controlled by the operator/executor, carries all the authority the nested
 -- Allocation_ExecuteTransfer on each leg requires.
 template SwapSettlement
@@ -393,22 +417,34 @@ template SwapSettlement
     wantAsset    : AssetId
     price        : Decimal
     refMid       : Optional Decimal
-    offerAllocCid : ContractId AssetAllocation
-    wantAllocCid  : ContractId AssetAllocation
+    -- v6: allocation references are stored as the Allocation INTERFACE cid, so a
+    -- settlement can reference EITHER the venue's own AssetAllocation (stand-in) OR
+    -- a registry-issued DvpLegAllocation (real cBTC/cETH/CC). The concrete template
+    -- differs; the interface is the same. Execution of real legs is performed by the
+    -- backend (it must supply the registry choice-context + disclosures, which Daml
+    -- cannot fetch), so for real swaps this is the on-ledger TRADE RECORD and the
+    -- audit pointer to the two real allocations.
+    offerAllocCid : ContractId Allocation
+    wantAllocCid  : ContractId Allocation
+    -- "standin" = executable on-ledger via ExecuteSwap; "real" = executed by the
+    -- backend against the registry, recorded here for audit.
+    settledVia   : Text
   where
     signatory requester, dealer
     observer operator
 
-    -- Fire both legs in one indivisible transaction. If either leg fails its
-    -- balance check, the whole thing reverts — no half-settled state (P6).
+    -- Fire both legs in one indivisible transaction (STAND-IN path only). The
+    -- venue's own AssetAllocation needs no registry context, so emptyChoiceContext
+    -- suffices. Real allocations require the registry context and are executed by
+    -- the backend /api/real/settle instead. Guarded so it can't be misused on real.
     choice ExecuteSwap : ()
       controller operator
       do
+        assertMsg "ExecuteSwap is for stand-in settlements; real legs settle via the registry"
+          (settledVia == "standin")
         let ea = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
-        _ <- exercise (toInterfaceContractId @Allocation offerAllocCid)
-               Allocation_ExecuteTransfer with extraArgs = ea
-        _ <- exercise (toInterfaceContractId @Allocation wantAllocCid)
-               Allocation_ExecuteTransfer with extraArgs = ea
+        _ <- exercise offerAllocCid Allocation_ExecuteTransfer with extraArgs = ea
+        _ <- exercise wantAllocCid Allocation_ExecuteTransfer with extraArgs = ea
         pure ()
 
     -- Either principal can abort before execution; both allocations are then
