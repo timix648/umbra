@@ -1812,6 +1812,199 @@ app.post("/api/swap/award", async (req, res) => {
 
 
 
+// ===== v6 REAL AWARD (blind auction -> real registry settlement) =====
+// Registry URLs per issuer. cBTC = DA utility registry (public). CC/Amulet & cETH
+// = the 5North validator scan-proxy (auth'd). Extend here as new real assets arrive.
+const REAL_REGISTRY = {
+  "cbtc-network": REGISTRY_URL_DEFAULT,
+  "DSO": "https://wallet.validator.devnet.sandbox.fivenorth.io/api/validator/v0/scan-proxy",
+  "rails-cethMain-1-dev": "https://wallet.validator.devnet.sandbox.fivenorth.io/api/validator/v0/scan-proxy",
+};
+function registryForAdmin(admin) {
+  const prefix = String(admin || "").split("::")[0];
+  return REAL_REGISTRY[prefix] || null;
+}
+
+// find a party's real Holding record for a symbol. queryRealHoldings returns
+// {contractId, owner, admin, id, amount}. We match on `id` (the instrument symbol)
+// and take the admin straight off the holding -- so the real issuer is whatever the
+// ledger says, never a hardcoded guess. Returns the full record (or null).
+async function realHoldingBySymbol(role, sym, need) {
+  const party = await partyIdFor(role);
+  const hs = await queryRealHoldings(party);
+  const OURS = new Set(["Requester","Dealer1","Dealer2","Observer"]);
+  const isReal = h => !OURS.has(String(h.admin || "").split("::")[0]);
+  const alias = { CBTC: "CBTC", CETH: "cETH", CC: "Amulet", AMULET: "Amulet" };
+  const target = alias[String(sym).toUpperCase()] || sym;
+  const want = Number(need);
+  // Real, externally-issued holdings of this instrument only (skip stand-ins).
+  let cands = hs.filter(h =>
+    isReal(h) && String(h.id).toUpperCase() === String(target).toUpperCase());
+  if (!cands.length) return null;
+  // Return ALL covering candidates, smallest-first (exact match first). The caller
+  // tries them in order: queryRealHoldings does NOT expose lock status, so a holding
+  // may look available but be locked in a stale allocation -> the registry rejects it
+  // as "invalid". Trying the next candidate makes allocation resilient to that.
+  const covering = cands
+    .filter(h => Number(h.amount) >= want - 1e-12)
+    .sort((a, b) => Number(a.amount) - Number(b.amount));
+  return covering;  // array (possibly empty)
+}
+
+// allocate one real leg via the existing endpoint's logic, then return the new alloc cid
+async function allocateRealLeg(senderRole, receiverRole, admin, instrId, sym, amount, settleId, legId) {
+  const registry = registryForAdmin(admin);
+  if (!registry) throw new Error("no registry mapped for issuer " + admin);
+  const senderParty = await partyIdFor(senderRole);
+  let lastErr = "no attempt made";
+  // The registry validates the input holding against ITS current ledger view. A cid
+  // read even moments earlier can be superseded (the blind auction and prior legs
+  // advance the ledger), yielding "Given holdings are invalid". So we RE-FETCH the
+  // holding fresh on each attempt and retry a few times until the cid the registry
+  // sees is the one we send.
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const candidates = await realHoldingBySymbol(senderRole, sym, amount);
+    if (!candidates.length) { lastErr = senderRole + " has no free real " + sym + " >= " + amount; await new Promise(z=>setTimeout(z,500)); continue; }
+    let advanced = false;
+    for (const h of candidates) {
+      const before = await queryAllocations(senderParty);
+      const beforeIds = new Set(before.map(a => a.contractId));
+      const r = await fetch("http://localhost:" + (process.env.PORT || 4000) + "/api/real/allocate", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ senderRole, receiverRole, admin, id: instrId, amount,
+          holdingCids: [h.contractId], settleId, legId, registry }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        lastErr = "cid " + h.contractId.slice(0,20) + " (amt " + h.amount + "): " + (j.error || JSON.stringify(j));
+        // "invalid holdings" = stale cid; break to re-fetch fresh. Other errors: try next candidate.
+        if (/invalid|not found|unlocked/i.test(lastErr)) { advanced = true; break; }
+        continue;
+      }
+      for (let i = 0; i < 12; i++) {
+        const now = await queryAllocations(senderParty);
+        const fresh = now.find(a => !beforeIds.has(a.contractId) &&
+          a.instrument === instrId && a.amount.startsWith(String(amount)));
+        if (fresh) return { cid: fresh.contractId, registry };
+        await new Promise(z => setTimeout(z, 400));
+      }
+      lastErr = "allocated but could not locate new allocation cid";
+    }
+    if (advanced) await new Promise(z => setTimeout(z, 500)); // let the ledger settle, re-fetch
+  }
+  throw new Error("allocate " + instrId + " failed after retries: " + lastErr);
+}
+
+app.post("/api/real/award", async (req, res) => {
+  try {
+    const dealerRole = String(req.body.dealer || "dealer1").toLowerCase();
+    const requester = await partyIdFor("requester");
+    const dealer = await partyIdFor(dealerRole);
+    const operator = await partyIdFor("requester");
+    const offerSym = String((req.body.offerAsset && req.body.offerAsset.symbol) || req.body.offerAsset || "");
+    const wantSym = String((req.body.wantAsset && req.body.wantAsset.symbol) || req.body.wantAsset || "");
+    const offerAmount = String(req.body.offerAmount);
+    const wantAmount = String(req.body.wantAmount);
+    const expiresAt = req.body.expiresAt ||
+      new Date(Date.now() + Number(req.body.ttlMins || 15) * 60000).toISOString();
+    const validUntil = req.body.validUntil ||
+      new Date(Date.now() + Number(req.body.validMins || 5) * 60000).toISOString();
+    const steps = [];
+
+    // Resolve each asset from the REAL holding the party actually owns -- the admin
+    // comes straight off the on-ledger Holding, so there are no hardcoded issuer ids
+    // to get wrong, and a self-issued stand-in (admin = one of our parties) is rejected.
+    const OURS = new Set(["Requester","Dealer1","Dealer2","Observer"]);
+    const offCands = await realHoldingBySymbol("requester", offerSym, offerAmount);
+    if (!offCands.length) throw new Error("requester has no single real " + offerSym + " holding >= " + offerAmount + " (only real externally-issued tokens, no auto-merge)");
+    const wantCands = await realHoldingBySymbol(dealerRole, wantSym, wantAmount);
+    if (!wantCands.length) throw new Error(dealerRole + " has no single real " + wantSym + " holding >= " + wantAmount);
+    const offAdmin = offCands[0].admin, wantAdmin = wantCands[0].admin;
+    if (OURS.has(String(offAdmin).split("::")[0]))
+      throw new Error(offerSym + " resolved to a self-issued stand-in (issuer " + offAdmin + "); this endpoint settles real tokens only");
+    if (OURS.has(String(wantAdmin).split("::")[0]))
+      throw new Error(wantSym + " resolved to a self-issued stand-in (issuer " + wantAdmin + ")");
+    if (!registryForAdmin(offAdmin)) throw new Error("no registry mapped for " + offerSym + " issuer " + offAdmin);
+    if (!registryForAdmin(wantAdmin)) throw new Error("no registry mapped for " + wantSym + " issuer " + wantAdmin);
+    // AssetId objects for the on-ledger records (real admin + symbol)
+    const offerAsset = { admin: offAdmin, symbol: offerSym };
+    const wantAsset = { admin: wantAdmin, symbol: wantSym };
+
+    // ---- allocate the real legs FIRST, while the ledger is quiet ----
+    // The registry validates each input holding against its own (slightly lagged)
+    // view of the ledger. If the blind auction's transactions run first, that churn
+    // makes the registry transiently reject the holding as "invalid" (the same cid
+    // allocates fine when nothing precedes it). Allocating up front avoids that: the
+    // allocations lock the holdings, the blind auction below is the on-ledger trade
+    // record, and the settle at the end executes these pre-made allocations.
+    const settleId = "umbra-real-" + Date.now();
+    const offLeg = await allocateRealLeg("requester", dealerRole, offAdmin, offerAsset.symbol,
+      offerSym, offerAmount, settleId, "offer-leg");
+    steps.push("allocated real offer leg (" + offerAmount + " " + offerAsset.symbol + ")");
+    const wantLeg = await allocateRealLeg(dealerRole, "requester", wantAdmin, wantAsset.symbol,
+      wantSym, wantAmount, settleId, "want-leg");
+    steps.push("allocated real want leg (" + wantAmount + " " + wantAsset.symbol + ")");
+
+    // ---- blind auction choreography (on-ledger, identical to stand-in) ----
+    let b = await idSetSwap(requester, "UmbraSwap:SwapRfq");
+    await act("requester", "raward-rfq", [{ CreateCommand: {
+      templateId: `#${PKGN}:UmbraSwap:SwapRfq`,
+      createArguments: { requester, operator, offerAsset, offerAmount, wantAsset,
+        invited: [dealer], expiresAt } } }]);
+    const rfqCid = await pollNewCid(requester, "UmbraSwap:SwapRfq", b);
+    steps.push("created swap RFQ");
+
+    b = await idSetSwap(dealer, "UmbraSwap:SwapInvitation");
+    await act("requester", "raward-invite", [{ ExerciseCommand: {
+      templateId: `#${PKGN}:UmbraSwap:SwapRfq`, contractId: rfqCid,
+      choice: "InviteDealer", choiceArgument: { dealer } } }]);
+    const invCid = await pollNewCid(dealer, "UmbraSwap:SwapInvitation", b);
+    steps.push("invited " + dealerRole);
+
+    b = await idSetSwap(dealer, "UmbraSwap:SwapQuote");
+    await act(dealerRole, "raward-quote", [{ ExerciseCommand: {
+      templateId: `#${PKGN}:UmbraSwap:SwapInvitation`, contractId: invCid,
+      choice: "SubmitSwapQuote", choiceArgument: { price: wantAmount, validUntil } } }]);
+    const quoteCid = await pollNewCid(dealer, "UmbraSwap:SwapQuote", b);
+    steps.push(dealerRole + " quoted " + wantAmount + " " + wantAsset.symbol);
+
+    b = await idSetSwap(requester, "UmbraSwap:SwapProposal");
+    await act("requester", "raward-accept", [{ ExerciseCommand: {
+      templateId: `#${PKGN}:UmbraSwap:SwapQuote`, contractId: quoteCid,
+      choice: "AcceptSwapQuote", choiceArgument: {} } }]);
+    const propCid = await pollNewCid(requester, "UmbraSwap:SwapProposal", b);
+    steps.push("requester accepted quote (blind auction complete)");
+
+    // record the trade on-ledger (blind-auction result + real allocation pointers)
+    const awardRefMid = await refMidFor(offerAsset.symbol, wantAsset.symbol);
+    b = await idSetSwap(requester, "UmbraSwap:SwapSettlement");
+    await actMulti(["requester", dealerRole], "raward-record", [{ ExerciseCommand: {
+      templateId: `#${PKGN}:UmbraSwap:SwapProposal`, contractId: propCid,
+      choice: "RecordRealSwap", choiceArgument: {
+        realOfferAllocCid: offLeg.cid, realWantAllocCid: wantLeg.cid, realRefMid: awardRefMid } } }]);
+    const settlementCid = await pollNewCid(requester, "UmbraSwap:SwapSettlement", b);
+    steps.push("recorded on-ledger SwapSettlement (settledVia=real)");
+
+    // fire both real legs atomically via the proven settle endpoint
+    const sr = await fetch("http://localhost:" + (process.env.PORT || 4000) + "/api/real/settle", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ legs: [
+        { cid: offLeg.cid, registry: offLeg.registry },
+        { cid: wantLeg.cid, registry: wantLeg.registry },
+      ] }),
+    });
+    const sj = await sr.json();
+    if (!sj.ok) throw new Error("atomic settle failed: " + (sj.error || JSON.stringify(sj)));
+    steps.push("executed REAL atomic swap: " + offerAmount + " " + offerAsset.symbol +
+      " <-> " + wantAmount + " " + wantAsset.symbol + " (both legs, one tx)");
+    try { await cleanupSwapRfq(rfqCid); steps.push("closed RFQ"); } catch (e) {}
+
+    res.json({ ok: true, real: true, settlementCid, atomic: sj.atomic,
+      disclosed: sj.disclosed, legs: sj.legs, steps });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+
 // ===== LEDGER PROOF =====
 // GET /api/ledger/contract/:cid?role=requester
 // Reads a contract back off the Canton ledger. There is no public explorer for
