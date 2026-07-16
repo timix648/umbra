@@ -16,3 +16,6 @@ backend/*.pre*
 daml/*.pre*
 latest*.xml
 backend/umbra_swap_endpoints.js
+
+*.local.txt*
+backend/ext-parties*
