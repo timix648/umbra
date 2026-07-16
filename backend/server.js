@@ -864,7 +864,7 @@ async function queryRealHoldings(party) {
     if (gv) {
       const vv = gv.viewValue;
       const inst = vv.instrumentId || {};
-      out.push({ contractId: ce.contractId, owner: vv.owner, admin: inst.admin, id: inst.id, amount: vv.amount });
+      out.push({ contractId: ce.contractId, owner: vv.owner, admin: inst.admin, id: inst.id, amount: vv.amount, lock: vv.lock || null });
     }
   }
   return out;
@@ -1877,8 +1877,10 @@ async function realHoldingBySymbol(role, sym, need) {
   const want = Number(need);
   // Real, externally-issued holdings of this instrument only (skip stand-ins).
   let cands = hs.filter(h =>
-    isReal(h) && String(h.id).toUpperCase() === String(target).toUpperCase());
-  if (!cands.length) return null;
+    isReal(h) && String(h.id).toUpperCase() === String(target).toUpperCase()
+    && !h.lock);   // skip LOCKED holdings: the registry rejects a locked holding as
+                   // "Given holdings are invalid"; only free coin can be allocated.
+  if (!cands.length) return [];
   // Return ALL covering candidates, smallest-first (exact match first). The caller
   // tries them in order: queryRealHoldings does NOT expose lock status, so a holding
   // may look available but be locked in a stale allocation -> the registry rejects it
@@ -1900,9 +1902,14 @@ async function allocateRealLeg(senderRole, receiverRole, admin, instrId, sym, am
   // advance the ledger), yielding "Given holdings are invalid". So we RE-FETCH the
   // holding fresh on each attempt and retry a few times until the cid the registry
   // sees is the one we send.
-  for (let attempt = 0; attempt < 6; attempt++) {
+  // The external registry (esp. the scan-proxy) lags a moment behind recent ledger
+  // writes. On the first attempt, pause briefly so the registry's view catches up to
+  // the holdings the participant already sees; otherwise a fresh, valid holding is
+  // transiently rejected as "Given holdings are invalid".
+  await new Promise(z => setTimeout(z, 2500));
+  for (let attempt = 0; attempt < 8; attempt++) {
     const candidates = await realHoldingBySymbol(senderRole, sym, amount);
-    if (!candidates.length) { lastErr = senderRole + " has no free real " + sym + " >= " + amount; await new Promise(z=>setTimeout(z,500)); continue; }
+    if (!candidates.length) { lastErr = senderRole + " has no free real " + sym + " >= " + amount; await new Promise(z=>setTimeout(z,1500)); continue; }
     let advanced = false;
     for (const h of candidates) {
       const before = await queryAllocations(senderParty);
@@ -1928,7 +1935,7 @@ async function allocateRealLeg(senderRole, receiverRole, admin, instrId, sym, am
       }
       lastErr = "allocated but could not locate new allocation cid";
     }
-    if (advanced) await new Promise(z => setTimeout(z, 500)); // let the ledger settle, re-fetch
+    if (advanced) await new Promise(z => setTimeout(z, 2000 + attempt * 1000)); // registry lag: back off longer each time
   }
   throw new Error("allocate " + instrId + " failed after retries: " + lastErr);
 }
@@ -1976,10 +1983,10 @@ app.post("/api/real/award", async (req, res) => {
     // allocations lock the holdings, the blind auction below is the on-ledger trade
     // record, and the settle at the end executes these pre-made allocations.
     const settleId = "umbra-real-" + Date.now();
-    const offLeg = await allocateRealLeg("requester", dealerRole, offAdmin, offerAsset.symbol,
+    const offLeg = await allocateRealLeg("requester", dealerRole, offAdmin, offCands[0].id,
       offerSym, offerAmount, settleId, "offer-leg");
     steps.push("allocated real offer leg (" + offerAmount + " " + offerAsset.symbol + ")");
-    const wantLeg = await allocateRealLeg(dealerRole, "requester", wantAdmin, wantAsset.symbol,
+    const wantLeg = await allocateRealLeg(dealerRole, "requester", wantAdmin, wantCands[0].id,
       wantSym, wantAmount, settleId, "want-leg");
     steps.push("allocated real want leg (" + wantAmount + " " + wantAsset.symbol + ")");
 

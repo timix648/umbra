@@ -447,6 +447,25 @@ template SwapSettlement
         _ <- exercise wantAllocCid Allocation_ExecuteTransfer with extraArgs = ea
         pure ()
 
+    -- v7 REAL path: one-command, all-signed atomic settle for registry tokens.
+    -- Signed by requester+dealer, controlled by operator, so the single exercise
+    -- carries every authority the nested Allocation_ExecuteTransfer needs. The
+    -- backend fetches each leg's registry choice-context (Daml can't) and passes
+    -- them in as offerArgs/wantArgs, and supplies the merged disclosed contracts
+    -- at submission. Both legs move in THIS one transaction -> atomic, and it's a
+    -- single command so an external wallet can sign it via interactive-submission.
+    choice ExecuteRealSwap : ()
+      with
+        offerArgs : ExtraArgs
+        wantArgs  : ExtraArgs
+      controller operator
+      do
+        assertMsg "ExecuteRealSwap is for real settlements"
+          (settledVia == "real")
+        _ <- exercise offerAllocCid Allocation_ExecuteTransfer with extraArgs = offerArgs
+        _ <- exercise wantAllocCid Allocation_ExecuteTransfer with extraArgs = wantArgs
+        pure ()
+
     -- Either principal can abort before execution; both allocations are then
     -- withdrawn by their senders out-of-band.
     choice AbortSwap : ()
