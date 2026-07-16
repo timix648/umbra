@@ -984,6 +984,90 @@ app.post("/api/real/pending/:cid/accept", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ---- ALLOCATE a real Holding via the registry AllocationFactory --------------
+const AF_IFACE = "#splice-api-token-allocation-instruction-v1:Splice.Api.Token.AllocationInstructionV1:AllocationFactory";
+
+async function allocationFactory(registryUrl, registrar, choiceArguments) {
+  const url = registryUrl +
+    "/api/token-standard/v0/registrars/" + encodeURIComponent(registrar) +
+    "/registry/allocation-instruction/v1/allocation-factory";
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ choiceArguments, excludeDebugFields: true }),
+  });
+  const text = await r.text();
+  if (!r.ok) throw new Error("registry " + r.status + ": " + text.slice(0, 400));
+  return JSON.parse(text);
+}
+
+app.post("/api/real/allocate", async (req, res) => {
+  try {
+    const b = req.body || {};
+    const senderRole = b.senderRole || req.query.role || "requester";
+    const sender = (b.sender && String(b.sender).includes("::")) ? b.sender : await partyIdFor(senderRole);
+    const receiver = (b.receiver && String(b.receiver).includes("::")) ? b.receiver : await partyIdFor(b.receiverRole || "dealer1");
+    const executor = (b.executor && String(b.executor).includes("::")) ? b.executor : await partyIdFor(b.executorRole || senderRole);
+    const admin = b.admin, id = b.id, amount = b.amount;
+    const holdingCids = b.holdingCids || [];
+    const registryUrl = b.registry || req.query.registry || REGISTRY_URL_DEFAULT;
+    if (!admin || !id || !amount || !holdingCids.length) {
+      return res.status(400).json({ error: "need admin, id, amount, holdingCids[]" });
+    }
+
+    const now = new Date();
+    const iso = (d) => d.toISOString();
+    const mkArgs = (ctx) => ({
+      expectedAdmin: admin,
+      allocation: {
+        settlement: {
+          executor,
+          settlementRef: { id: b.settleId || ("umbra-" + Date.now()), cid: null },
+          requestedAt: iso(now),
+          allocateBefore: iso(new Date(now.getTime() + 15 * 60000)),
+          settleBefore: iso(new Date(now.getTime() + 30 * 60000)),
+          meta: { values: {} },
+        },
+        transferLegId: b.legId || "leg-1",
+        transferLeg: {
+          sender, receiver, amount,
+          instrumentId: { admin, id },
+          meta: { values: {} },
+        },
+      },
+      requestedAt: iso(now),
+      inputHoldingCids: holdingCids,
+      extraArgs: { context: ctx || { values: {} }, meta: { values: {} } },
+    });
+
+    // 1. factory + choice-context (validates the body; stub context ok here)
+    const fc = await allocationFactory(registryUrl, admin, mkArgs({ values: {} }));
+    const ctx = (fc.choiceContext && fc.choiceContext.choiceContextData) || { values: {} };
+    const disclosed = ((fc.choiceContext && fc.choiceContext.disclosedContracts) || []).map(d => ({
+      templateId: d.templateId, contractId: d.contractId,
+      createdEventBlob: d.createdEventBlob, synchronizerId: d.synchronizerId || "",
+    }));
+
+    // 2. exercise AllocationFactory_Allocate with the REAL context + disclosures
+    const cmd = {
+      commandId: "allocate-" + Date.now(),
+      actAs: [sender],
+      commands: [{ ExerciseCommand: {
+        templateId: AF_IFACE,
+        contractId: fc.factoryId,
+        choice: "AllocationFactory_Allocate",
+        choiceArgument: mkArgs(ctx),
+      } }],
+      disclosedContracts: disclosed,
+    };
+    const r = await ledgerFetch("/v2/commands/submit-and-wait", { method: "POST", body: JSON.stringify(cmd) });
+    const text = await r.text();
+    if (!r.ok) throw new Error(humanize(`${r.status} ${text}`));
+    res.json({ ok: true, allocated: { id, amount, sender: senderRole, receiver, executor },
+      factoryId: fc.factoryId, disclosed: disclosed.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ---- GRANULAR VENUE FLOW ---------------------------------------------------
 
 // requester creates a swap RFQ (offer asset -> want asset), then invites the
