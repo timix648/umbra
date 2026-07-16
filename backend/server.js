@@ -1856,7 +1856,7 @@ app.post("/api/swap/award", async (req, res) => {
 const REAL_REGISTRY = {
   "cbtc-network": REGISTRY_URL_DEFAULT,
   "DSO": "https://wallet.validator.devnet.sandbox.fivenorth.io/api/validator/v0/scan-proxy",
-  "rails-cethMain-1-dev": "https://wallet.validator.devnet.sandbox.fivenorth.io/api/validator/v0/scan-proxy",
+  "rails-cethMain-1-dev": REGISTRY_URL_DEFAULT,
 };
 function registryForAdmin(admin) {
   const prefix = String(admin || "").split("::")[0];
