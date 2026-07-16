@@ -7,6 +7,31 @@ require("dns").setDefaultResultOrder("ipv4first");
 
 const express = require("express");
 const { ledgerFetch } = require("./token");
+const __tok = require("./token");
+async function getLedgerToken() {
+  if (typeof __tok.getToken === "function") return __tok.getToken();
+  if (typeof __tok.token === "function") return __tok.token();
+  const b = new URLSearchParams({ grant_type: "client_credentials",
+    client_id: process.env.CLIENT_ID, client_secret: process.env.CLIENT_SECRET,
+    audience: process.env.AUDIENCE, scope: process.env.SCOPE || "daml_ledger_api" });
+  const r = await fetch(process.env.AUTH_URL, { method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: b });
+  return (await r.json()).access_token;
+}
+function isScanProxy(url) { return /\/scan-proxy(\/|$)/.test(url || ""); }
+function regPath(registryUrl, registrar, rest) {
+  if (isScanProxy(registryUrl)) return registryUrl.replace(/\/$/, "") + "/registry/" + rest;
+  return registryUrl + "/api/token-standard/v0/registrars/" +
+    encodeURIComponent(registrar) + "/registry/" + rest;
+}
+async function regFetch(registryUrl, url, opts) {
+  if (isScanProxy(registryUrl)) {
+    const tok = await getLedgerToken();
+    const h = Object.assign({ "Authorization": "Bearer " + tok }, (opts && opts.headers) || {});
+    return fetch(url, Object.assign({}, opts, { headers: h }));
+  }
+  return fetch(url, opts);
+}
 const { onboardExternalParty, prepareSignExecute, prepareSignExecuteMulti } = require("./external");
 require("dotenv").config();
 
@@ -929,10 +954,9 @@ const TI_IFACE = "#splice-api-token-transfer-instruction-v1:Splice.Api.Token.Tra
 // Ask the registrar (the instrument admin) for the accept choice-context: the
 // context values + disclosed contracts the TransferInstruction_Accept choice needs.
 async function acceptContext(registryUrl, registrar, offerCid) {
-  const url = registryUrl +
-    "/api/token-standard/v0/registrars/" + encodeURIComponent(registrar) +
-    "/registry/transfer-instruction/v1/" + offerCid + "/choice-contexts/accept";
-  const r = await fetch(url, {
+  const url = regPath(registryUrl, registrar,
+    "transfer-instruction/v1/" + offerCid + "/choice-contexts/accept");
+  const r = await regFetch(registryUrl, url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ meta: {} }),
@@ -988,10 +1012,8 @@ app.post("/api/real/pending/:cid/accept", async (req, res) => {
 const AF_IFACE = "#splice-api-token-allocation-instruction-v1:Splice.Api.Token.AllocationInstructionV1:AllocationFactory";
 
 async function allocationFactory(registryUrl, registrar, choiceArguments) {
-  const url = registryUrl +
-    "/api/token-standard/v0/registrars/" + encodeURIComponent(registrar) +
-    "/registry/allocation-instruction/v1/allocation-factory";
-  const r = await fetch(url, {
+  const url = regPath(registryUrl, registrar, "allocation-instruction/v1/allocation-factory");
+  const r = await regFetch(registryUrl, url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ choiceArguments, excludeDebugFields: true }),
@@ -1070,6 +1092,10 @@ app.post("/api/real/allocate", async (req, res) => {
 
 // ---- READ-ONLY: registry Allocations (locked legs awaiting execution) --------
 const ALLOC_IFACE = "#splice-api-token-allocation-v1:Splice.Api.Token.AllocationV1:Allocation";
+// The utility registry's DvpLegAllocation implements AllocationV1 at THIS exact
+// package hash (proven by interface-view probe). The #-name resolves to a different
+// version on this participant, causing CONTRACT_DOES_NOT_IMPLEMENT_INTERFACE. Pin it.
+const ALLOC_IFACE_VER = "93c942ae2b4c2ba674fb152fe38473c507bda4e82b4e4c5da55a552a9d8cce1d:Splice.Api.Token.AllocationV1:Allocation";
 
 async function queryAllocations(party) {
   const offset = await ledgerEnd();
@@ -1119,6 +1145,241 @@ app.get("/api/real/allocations", async (req, res) => {
     const party = req.query.party || await partyIdFor(req.query.role || "requester");
     const allocs = await queryAllocations(party);
     res.json({ ok: true, party, count: allocs.length, allocations: allocs });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---- WITHDRAW a registry Allocation (unlock the Holding) --------------------
+async function withdrawContext(registryUrl, registrar, allocationCid) {
+  const url = registryUrl +
+    "/api/token-standard/v0/registrars/" + encodeURIComponent(registrar) +
+    "/registry/allocations/v1/" + allocationCid + "/choice-contexts/withdraw";
+  const r = await fetch(url, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ meta: {} }),
+  });
+  const text = await r.text();
+  if (!r.ok) throw new Error("registry " + r.status + ": " + text.slice(0, 300));
+  return JSON.parse(text);
+}
+
+app.post("/api/real/withdraw/:cid", async (req, res) => {
+  try {
+    const b = req.body || {};
+    const cid = req.params.cid;
+    const role = b.role || req.query.role || "requester";
+    const party = await partyIdFor(role);
+    const registryUrl = b.registry || req.query.registry || REGISTRY_URL_DEFAULT;
+
+    const allocs = await queryAllocations(party);
+    const al = allocs.find(a => a.contractId === cid);
+    if (!al) return res.status(404).json({ error: "allocation '" + cid + "' not visible to " + role });
+
+    const ctx = await withdrawContext(registryUrl, al.admin, cid);
+    const cdata = ctx.choiceContextData || { values: {} };
+    const disclosed = (ctx.disclosedContracts || []).map(d => ({
+      templateId: d.templateId, contractId: d.contractId,
+      createdEventBlob: d.createdEventBlob, synchronizerId: d.synchronizerId || "",
+    }));
+
+    const actAs = b.actAs || [...new Set([al.sender, al.executor].filter(Boolean))];
+    const cmd = {
+      commandId: "withdraw-" + Date.now(),
+      actAs,
+      commands: [{ ExerciseCommand: {
+        templateId: ALLOC_IFACE_VER,
+        contractId: cid,
+        choice: "Allocation_Withdraw",
+        choiceArgument: { extraArgs: { context: cdata, meta: { values: {} } } },
+      } }],
+      disclosedContracts: disclosed,
+    };
+    const r = await ledgerFetch("/v2/commands/submit-and-wait", { method: "POST", body: JSON.stringify(cmd) });
+    const text = await r.text();
+    if (!r.ok) return res.status(500).json({ error: humanize(`${r.status} ${text}`),
+      hint_disclosed_templateIds: disclosed.map(d => d.templateId),
+      hint_context_keys: Object.keys((cdata.values) || {}) });
+    res.json({ ok: true, withdrawn: cid, instrument: al.instrument, amount: al.amount, unlocked: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---- EXECUTE a registry Allocation (settle the locked token) ----------------
+async function executeContext(registryUrl, registrar, allocationCid) {
+  const url = registryUrl +
+    "/api/token-standard/v0/registrars/" + encodeURIComponent(registrar) +
+    "/registry/allocations/v1/" + allocationCid + "/choice-contexts/execute-transfer";
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ meta: {} }),
+  });
+  const text = await r.text();
+  if (!r.ok) throw new Error("registry " + r.status + ": " + text.slice(0, 300));
+  return JSON.parse(text);
+}
+
+app.post("/api/real/execute/:cid", async (req, res) => {
+  try {
+    const b = req.body || {};
+    const cid = req.params.cid;
+    const role = b.role || req.query.role || "requester";
+    const party = await partyIdFor(role);
+    const registryUrl = b.registry || req.query.registry || REGISTRY_URL_DEFAULT;
+
+    const allocs = await queryAllocations(party);
+    const al = allocs.find(a => a.contractId === cid);
+    if (!al) return res.status(404).json({ error: "allocation '" + cid + "' not visible to " + role });
+
+    const ctx = await executeContext(registryUrl, al.admin, cid);
+    const cdata = ctx.choiceContextData || { values: {} };
+    const disclosed = (ctx.disclosedContracts || []).map(d => ({
+      templateId: d.templateId, contractId: d.contractId,
+      createdEventBlob: d.createdEventBlob, synchronizerId: d.synchronizerId || "",
+    }));
+
+    const actAs = b.actAs || [...new Set([al.executor, al.sender, al.receiver].filter(Boolean))];
+    const cmd = {
+      commandId: "execute-" + Date.now(),
+      actAs,
+      commands: [{ ExerciseCommand: {
+        templateId: ALLOC_IFACE_VER,
+        contractId: cid,
+        choice: "Allocation_ExecuteTransfer",
+        choiceArgument: { extraArgs: { context: cdata, meta: { values: {} } } },
+      } }],
+      disclosedContracts: disclosed,
+    };
+    const r = await ledgerFetch("/v2/commands/submit-and-wait", { method: "POST", body: JSON.stringify(cmd) });
+    const text = await r.text();
+    if (!r.ok) throw new Error(humanize(`${r.status} ${text}`));
+    res.json({ ok: true, executed: cid, instrument: al.instrument, amount: al.amount,
+      from: al.sender, to: al.receiver, disclosed: disclosed.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---- EXECUTE a registry Allocation (settle the locked token) ----------------
+async function executeContext(registryUrl, registrar, allocationCid) {
+  const url = registryUrl +
+    "/api/token-standard/v0/registrars/" + encodeURIComponent(registrar) +
+    "/registry/allocations/v1/" + allocationCid + "/choice-contexts/execute-transfer";
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ meta: {} }),
+  });
+  const text = await r.text();
+  if (!r.ok) throw new Error("registry " + r.status + ": " + text.slice(0, 300));
+  return JSON.parse(text);
+}
+
+app.post("/api/real/execute/:cid", async (req, res) => {
+  try {
+    const b = req.body || {};
+    const cid = req.params.cid;
+    const role = b.role || req.query.role || "requester";
+    const party = await partyIdFor(role);
+    const registryUrl = b.registry || req.query.registry || REGISTRY_URL_DEFAULT;
+
+    const allocs = await queryAllocations(party);
+    const al = allocs.find(a => a.contractId === cid);
+    if (!al) return res.status(404).json({ error: "allocation '" + cid + "' not visible to " + role });
+
+    const ctx = await executeContext(registryUrl, al.admin, cid);
+    const disclosed = (ctx.disclosedContracts || []).map(d => ({
+      templateId: d.templateId, contractId: d.contractId,
+      createdEventBlob: d.createdEventBlob, synchronizerId: d.synchronizerId || "",
+    }));
+
+    const actAs = b.actAs || [...new Set([al.executor, al.sender, al.receiver].filter(Boolean))];
+    const cmd = {
+      commandId: "execute-" + Date.now(),
+      actAs,
+      commands: [{ ExerciseCommand: {
+        templateId: ALLOC_IFACE,
+        contractId: cid,
+        choice: "Allocation_ExecuteTransfer",
+        choiceArgument: { extraArgs: {
+          context: ctx.choiceContextData || { values: {} },
+          meta: { values: {} },
+        } },
+      } }],
+      disclosedContracts: disclosed,
+    };
+    const r = await ledgerFetch("/v2/commands/submit-and-wait", { method: "POST", body: JSON.stringify(cmd) });
+    const text = await r.text();
+    if (!r.ok) throw new Error(humanize(`${r.status} ${text}`));
+    res.json({ ok: true, executed: cid, instrument: al.instrument, amount: al.amount,
+      from: al.sender, to: al.receiver, disclosed: disclosed.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---- ATOMIC SETTLEMENT: execute N real allocations in one transaction -------
+// scan-proxy-aware execute-transfer choice-context (unlike executeContext, this
+// routes CC/scan-proxy correctly and carries the ledger token).
+async function execTransferContext(registryUrl, registrar, allocationCid) {
+  const url = regPath(registryUrl, registrar, "allocations/v1/" + allocationCid + "/choice-contexts/execute-transfer");
+  const r = await regFetch(registryUrl, url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ meta: {} }),
+  });
+  const text = await r.text();
+  if (!r.ok) throw new Error("registry " + r.status + ": " + text.slice(0, 300));
+  return JSON.parse(text);
+}
+
+app.post("/api/real/settle", async (req, res) => {
+  try {
+    const b = req.body || {};
+    const legs = b.legs || [];
+    if (!legs.length) return res.status(400).json({ error: "need legs:[{cid, registry?}]" });
+
+    // Index every allocation visible to any of our parties, so we can resolve
+    // each leg's admin/executor/sender/receiver regardless of which role sees it.
+    const seen = {};
+    for (const role of ["requester", "dealer1", "dealer2"]) {
+      try {
+        const party = await partyIdFor(role);
+        for (const a of await queryAllocations(party)) seen[a.contractId] = a;
+      } catch (e) { /* skip */ }
+    }
+
+    const cmds = [];
+    let disclosed = [];
+    const dseen = {};
+    const actAsSet = new Set();
+    const summary = [];
+    for (const leg of legs) {
+      const al = seen[leg.cid];
+      if (!al) return res.status(404).json({ error: "allocation not found / not visible: " + leg.cid });
+      const registryUrl = leg.registry || REGISTRY_URL_DEFAULT;
+      const ctx = await execTransferContext(registryUrl, al.admin, leg.cid);
+      const cdata = ctx.choiceContextData || { values: {} };
+      for (const d of (ctx.disclosedContracts || [])) {
+        if (dseen[d.contractId]) continue;
+        dseen[d.contractId] = true;
+        disclosed.push({ templateId: d.templateId, contractId: d.contractId,
+          createdEventBlob: d.createdEventBlob, synchronizerId: d.synchronizerId || "" });
+      }
+      [al.executor, al.sender, al.receiver].filter(Boolean).forEach(p => actAsSet.add(p));
+      cmds.push({ ExerciseCommand: {
+        templateId: ALLOC_IFACE_VER,
+        contractId: leg.cid,
+        choice: "Allocation_ExecuteTransfer",
+        choiceArgument: { extraArgs: { context: cdata, meta: { values: {} } } },
+      } });
+      summary.push({ cid: leg.cid, instrument: al.instrument, amount: al.amount, from: al.sender, to: al.receiver });
+    }
+
+    const cmd = {
+      commandId: "settle-" + Date.now(),
+      actAs: b.actAs || [...actAsSet],
+      commands: cmds,                 // ALL legs -> ONE transaction -> atomic
+      disclosedContracts: disclosed,
+    };
+    const r = await ledgerFetch("/v2/commands/submit-and-wait", { method: "POST", body: JSON.stringify(cmd) });
+    const text = await r.text();
+    if (!r.ok) throw new Error(humanize(`${r.status} ${text}`));
+    res.json({ ok: true, atomic: true, legs: summary, actAs: cmd.actAs, disclosed: disclosed.length });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
