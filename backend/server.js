@@ -1271,47 +1271,6 @@ async function executeContext(registryUrl, registrar, allocationCid) {
   return JSON.parse(text);
 }
 
-app.post("/api/real/execute/:cid", async (req, res) => {
-  try {
-    const b = req.body || {};
-    const cid = req.params.cid;
-    const role = b.role || req.query.role || "requester";
-    const party = await partyIdFor(role);
-    const registryUrl = b.registry || req.query.registry || REGISTRY_URL_DEFAULT;
-
-    const allocs = await queryAllocations(party);
-    const al = allocs.find(a => a.contractId === cid);
-    if (!al) return res.status(404).json({ error: "allocation '" + cid + "' not visible to " + role });
-
-    const ctx = await executeContext(registryUrl, al.admin, cid);
-    const disclosed = (ctx.disclosedContracts || []).map(d => ({
-      templateId: d.templateId, contractId: d.contractId,
-      createdEventBlob: d.createdEventBlob, synchronizerId: d.synchronizerId || "",
-    }));
-
-    const actAs = b.actAs || [...new Set([al.executor, al.sender, al.receiver].filter(Boolean))];
-    const cmd = {
-      commandId: "execute-" + Date.now(),
-      actAs,
-      commands: [{ ExerciseCommand: {
-        templateId: ALLOC_IFACE,
-        contractId: cid,
-        choice: "Allocation_ExecuteTransfer",
-        choiceArgument: { extraArgs: {
-          context: ctx.choiceContextData || { values: {} },
-          meta: { values: {} },
-        } },
-      } }],
-      disclosedContracts: disclosed,
-    };
-    const r = await ledgerFetch("/v2/commands/submit-and-wait", { method: "POST", body: JSON.stringify(cmd) });
-    const text = await r.text();
-    if (!r.ok) throw new Error(humanize(`${r.status} ${text}`));
-    res.json({ ok: true, executed: cid, instrument: al.instrument, amount: al.amount,
-      from: al.sender, to: al.receiver, disclosed: disclosed.length });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
 // ---- ATOMIC SETTLEMENT: execute N real allocations in one transaction -------
 // scan-proxy-aware execute-transfer choice-context (unlike executeContext, this
 // routes CC/scan-proxy correctly and carries the ledger token).
