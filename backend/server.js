@@ -136,6 +136,27 @@ async function act(role, tag, commands) {
   return submit(tag, PARTIES[r], commands); // synchronous commit
 }
 
+
+// Real-token submit, routed by mode. Body shape: {commandId, actAs, commands,
+// disclosedContracts}. DEMO: operator submit-and-wait. SIGNED: each actAs party
+// signs its own leg with its key (operator signs nothing); disclosures forwarded.
+async function realSubmit(body, tag) {
+  if (SIGNED_MODE) {
+    const recs = [];
+    for (const pid of (body.actAs || [])) {
+      const role = await roleOfParty(pid);
+      if (!role) throw new Error("signed mode: no external signer for party " + pid);
+      recs.push(await recFor(role));
+    }
+    if (!recs.length) throw new Error("signed mode: no signers resolved for real submit");
+    await prepareSignExecuteMulti(recs, body.commands, tag || "rsub", body.disclosedContracts || []);
+    return;
+  }
+  const r = await ledgerFetch("/v2/commands/submit-and-wait", { method: "POST", body: JSON.stringify(body) });
+  const text = await r.text();
+  if (!r.ok) throw new Error(humanize(`${r.status} ${text}`));
+}
+
 app.get("/health", (req, res) => res.json({ ok: true }));
 
 // --- helper: read the current ledger end (needed as the query offset) ---
@@ -1001,9 +1022,7 @@ app.post("/api/real/pending/:cid/accept", async (req, res) => {
       }],
       disclosedContracts: disclosed,
     };
-    const r = await ledgerFetch("/v2/commands/submit-and-wait", { method: "POST", body: JSON.stringify(body) });
-    const text = await r.text();
-    if (!r.ok) throw new Error(humanize(`${r.status} ${text}`));
+    await realSubmit(body, "raccept");
     res.json({ ok: true, accepted: cid, instrument: offer.instrument, amount: offer.amount, disclosed: disclosed.length });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1082,9 +1101,7 @@ app.post("/api/real/allocate", async (req, res) => {
       } }],
       disclosedContracts: disclosed,
     };
-    const r = await ledgerFetch("/v2/commands/submit-and-wait", { method: "POST", body: JSON.stringify(cmd) });
-    const text = await r.text();
-    if (!r.ok) throw new Error(humanize(`${r.status} ${text}`));
+    await realSubmit(cmd, "rallocate");
     res.json({ ok: true, allocated: { id, amount, sender: senderRole, receiver, executor },
       factoryId: fc.factoryId, disclosed: disclosed.length });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1248,9 +1265,7 @@ app.post("/api/real/execute/:cid", async (req, res) => {
       } }],
       disclosedContracts: disclosed,
     };
-    const r = await ledgerFetch("/v2/commands/submit-and-wait", { method: "POST", body: JSON.stringify(cmd) });
-    const text = await r.text();
-    if (!r.ok) throw new Error(humanize(`${r.status} ${text}`));
+    await realSubmit(cmd, "rexecute");
     res.json({ ok: true, executed: cid, instrument: al.instrument, amount: al.amount,
       from: al.sender, to: al.receiver, disclosed: disclosed.length });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1335,9 +1350,7 @@ app.post("/api/real/settle", async (req, res) => {
       commands: cmds,                 // ALL legs -> ONE transaction -> atomic
       disclosedContracts: disclosed,
     };
-    const r = await ledgerFetch("/v2/commands/submit-and-wait", { method: "POST", body: JSON.stringify(cmd) });
-    const text = await r.text();
-    if (!r.ok) throw new Error(humanize(`${r.status} ${text}`));
+    await realSubmit(cmd, "rsettle");
     res.json({ ok: true, atomic: true, legs: summary, actAs: cmd.actAs, disclosed: disclosed.length });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

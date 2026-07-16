@@ -59,10 +59,11 @@ async function onboardExternalParty(role) {
 }
 
 // prepare -> sign (with the party's OWN key) -> execute. The operator never signs.
-async function prepareSignExecute(rec, commands, tag = "ext") {
+async function prepareSignExecute(rec, commands, tag = "ext", disclosed = []) {
   const prep = await jpost("/v2/interactive-submission/prepare", {
     userId: USER_ID, actAs: [rec.partyId], commandId: `${tag}-${Date.now()}`,
     synchronizerId: SYNC, packageIdSelectionPreference: [], commands,
+    disclosedContracts: disclosed,
   });
   const priv = crypto.createPrivateKey({ key: Buffer.from(rec.privDer, "base64"), format: "der", type: "pkcs8" });
   const sig = crypto.sign(null, Buffer.from(prep.preparedTransactionHash, "base64"), priv).toString("base64");
@@ -80,11 +81,12 @@ async function prepareSignExecute(rec, commands, tag = "ext") {
 // Multi-party prepare -> sign -> execute. Every party signs with its OWN key;
 // the operator still signs nothing. Needed whenever a contract has more than one
 // external signatory (e.g. AssetHolding = signatory owner, asset.admin).
-async function prepareSignExecuteMulti(recs, commands, tag = "extm") {
+async function prepareSignExecuteMulti(recs, commands, tag = "extm", disclosed = []) {
   const parties = recs.map((r) => r.partyId);
   const prep = await jpost("/v2/interactive-submission/prepare", {
     userId: USER_ID, actAs: parties, commandId: `${tag}-${Date.now()}`,
     synchronizerId: SYNC, packageIdSelectionPreference: [], commands,
+    disclosedContracts: disclosed,
   });
   const hash = Buffer.from(prep.preparedTransactionHash, "base64");
   const signatures = recs.map((rec) => {
