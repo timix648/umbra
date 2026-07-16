@@ -1107,6 +1107,72 @@ app.post("/api/real/allocate", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ---- SEND a real CIP-56 token via the registry TransferFactory --------------
+const TF_FACTORY_IFACE = "#splice-api-token-transfer-instruction-v1:Splice.Api.Token.TransferInstructionV1:TransferFactory";
+
+async function transferFactory(registryUrl, registrar, choiceArguments) {
+  const url = regPath(registryUrl, registrar, "transfer-instruction/v1/transfer-factory");
+  const r = await regFetch(registryUrl, url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ choiceArguments, excludeDebugFields: true }),
+  });
+  const text = await r.text();
+  if (!r.ok) throw new Error("registry " + r.status + ": " + text.slice(0, 400));
+  return JSON.parse(text);
+}
+
+app.post("/api/real/send", async (req, res) => {
+  try {
+    const b = req.body || {};
+    const senderRole = b.senderRole || req.query.role || "requester";
+    const sender = (b.sender && String(b.sender).includes("::")) ? b.sender : await partyIdFor(senderRole);
+    const receiver = b.receiver;  // full party id (e.g. a wallet party)
+    const admin = b.admin, id = b.id, amount = b.amount;
+    const holdingCids = b.holdingCids || [];
+    const registryUrl = b.registry || registryForAdmin(admin) || REGISTRY_URL_DEFAULT;
+    if (!receiver || !String(receiver).includes("::")) return res.status(400).json({ error: "need receiver (full party id)" });
+    if (!admin || !id || !amount || !holdingCids.length) return res.status(400).json({ error: "need admin, id, amount, holdingCids[]" });
+
+    const now = new Date();
+    const iso = (d) => d.toISOString();
+    const mkArgs = (ctx) => ({
+      expectedAdmin: admin,
+      transfer: {
+        sender, receiver, amount,
+        instrumentId: { admin, id },
+        requestedAt: iso(now),
+        executeBefore: iso(new Date(now.getTime() + 60 * 60000)),
+        inputHoldingCids: holdingCids,
+        meta: { values: {} },
+      },
+      extraArgs: { context: ctx || { values: {} }, meta: { values: {} } },
+    });
+
+    const fc = await transferFactory(registryUrl, admin, mkArgs({ values: {} }));
+    const ctx = (fc.choiceContext && fc.choiceContext.choiceContextData) || { values: {} };
+    const disclosed = ((fc.choiceContext && fc.choiceContext.disclosedContracts) || []).map(d => ({
+      templateId: d.templateId, contractId: d.contractId,
+      createdEventBlob: d.createdEventBlob, synchronizerId: d.synchronizerId || "",
+    }));
+
+    const cmd = {
+      commandId: "send-" + Date.now(),
+      actAs: [sender],
+      commands: [{ ExerciseCommand: {
+        templateId: TF_FACTORY_IFACE,
+        contractId: fc.factoryId,
+        choice: "TransferFactory_Transfer",
+        choiceArgument: mkArgs(ctx),
+      } }],
+      disclosedContracts: disclosed,
+    };
+    await realSubmit(cmd, "rsend");
+    res.json({ ok: true, sent: { id, amount, from: senderRole, to: receiver },
+      note: "receiver must accept via /api/real/pending/:cid/accept", disclosed: disclosed.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ---- READ-ONLY: registry Allocations (locked legs awaiting execution) --------
 const ALLOC_IFACE = "#splice-api-token-allocation-v1:Splice.Api.Token.AllocationV1:Allocation";
 // The utility registry's DvpLegAllocation implements AllocationV1 at THIS exact
