@@ -1068,6 +1068,60 @@ app.post("/api/real/allocate", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ---- READ-ONLY: registry Allocations (locked legs awaiting execution) --------
+const ALLOC_IFACE = "#splice-api-token-allocation-v1:Splice.Api.Token.AllocationV1:Allocation";
+
+async function queryAllocations(party) {
+  const offset = await ledgerEnd();
+  const body = {
+    filter: { filtersByParty: { [party]: { cumulative: [{
+      identifierFilter: { InterfaceFilter: { value: {
+        interfaceId: ALLOC_IFACE,
+        includeInterfaceView: true,
+        includeCreatedEventBlob: false,
+      } } },
+    }] } } },
+    verbose: false,
+    activeAtOffset: offset,
+  };
+  const r = await ledgerFetch("/v2/state/active-contracts", { method: "POST", body: JSON.stringify(body) });
+  const text = await r.text();
+  if (!r.ok) throw new Error(humanize(`${r.status} ${text}`));
+  let items;
+  try { items = JSON.parse(text); }
+  catch { items = text.trim().split("\n").filter(Boolean).map(l => JSON.parse(l)); }
+  const arr = Array.isArray(items) ? items : [items];
+  const out = [];
+  for (const x of arr) {
+    const ce = x?.contractEntry?.JsActiveContract?.createdEvent || x?.activeContract?.createdEvent || x?.createdEvent;
+    if (!ce) continue;
+    const gv = (ce.interfaceViews || []).find(v => v && v.viewValue && (!v.viewStatus || v.viewStatus.code === 0));
+    if (!gv) continue;
+    const vv = gv.viewValue;
+    const al = vv.allocation || {};
+    const leg = al.transferLeg || {};
+    const st = al.settlement || {};
+    const inst = leg.instrumentId || {};
+    out.push({
+      contractId: ce.contractId,
+      instrument: inst.id, admin: inst.admin,
+      sender: leg.sender, receiver: leg.receiver, amount: leg.amount,
+      executor: st.executor,
+      settlementRef: st.settlementRef, settleBefore: st.settleBefore,
+      transferLegId: al.transferLegId,
+    });
+  }
+  return out;
+}
+
+app.get("/api/real/allocations", async (req, res) => {
+  try {
+    const party = req.query.party || await partyIdFor(req.query.role || "requester");
+    const allocs = await queryAllocations(party);
+    res.json({ ok: true, party, count: allocs.length, allocations: allocs });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ---- GRANULAR VENUE FLOW ---------------------------------------------------
 
 // requester creates a swap RFQ (offer asset -> want asset), then invites the
