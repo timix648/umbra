@@ -3108,8 +3108,8 @@ function DealerDesk(P) {
         active
           ? (rate != null
               ? React.createElement("span", { className: "dsk-ref tip-below tip-left", "data-tip": "Live mid-market reference for this pair (CoinGecko). A pricing anchor \u2014 not a quote." },
-                  "REF", React.createElement("b", null, Number(rate).toFixed(2)),
-                  React.createElement("span", { className: "dsk-ref-pair" }, " " + active.payload.offerAsset.symbol + "/" + active.payload.wantAsset.symbol))
+                  "REF", React.createElement("b", null, "1 " + active.payload.offerAsset.symbol),
+                  React.createElement("span", { className: "dsk-ref-pair" }, " \u2248 " + Number(rate).toLocaleString(undefined, { maximumFractionDigits: 2 }) + " " + active.payload.wantAsset.symbol))
               : React.createElement("span", { className: "dsk-ref na tip-below tip-left", "data-tip": "Live market reference is unavailable right now. Price using your own read \u2014 the ledger never requires a reference." }, "REF", React.createElement("b", null, "\u2014")))
           : null,
         active ? React.createElement("span", { className: "dsk-close" + (cd.warn ? " warn" : "") }, "Closes in ", React.createElement("b", null, cd.txt)) : null,
@@ -3191,9 +3191,10 @@ function DealerDesk(P) {
                       React.createElement("button", { disabled: mid == null && !(cur > 0), onClick: () => nudge(10) }, "+0.10%"),
                       React.createElement("button", { disabled: mid == null && !(cur > 0), onClick: () => nudge(-10) }, "\u22120.10%"),
                       React.createElement("button", { disabled: !price[cid], onClick: () => set(null) }, "Clear"),
-                      React.createElement("span", { className: "imp" }, "= ",
-                        React.createElement("b", null, implied != null ? implied.toFixed(4) : "\u2014"),
-                        " /" + o));
+                      React.createElement("span", { className: "imp", title: "This quote's implied rate (want per 1 offer)" },
+                        "this quote: 1 " + o + " = ",
+                        React.createElement("b", null, implied != null ? Number(implied).toLocaleString(undefined, { maximumFractionDigits: 4 }) : "\u2014"),
+                        " " + w));
                   })());
               })()))
           : React.createElement("section", { className: "mod mod-focal" },
