@@ -2476,6 +2476,19 @@ function Login({ onPick }) {
 // Holdings come off the ledger as CONTRACTS, not balances -- three cBTC
 // contracts is still one cBTC balance. Aggregate per symbol before showing a
 // number to a human, or the header reads "1 cBTC" and "9 cBTC" side by side.
+// Map /api/real/holdings raw -> panel holding shape; keep only issuer-issued (real).
+const OURS_ISS = { Requester: 1, Dealer1: 1, Dealer2: 1, Observer: 1 };
+const mapRealHoldings = (rh, ownerHint) => ((rh && rh.raw) || [])
+  .filter(h => h.id && h.admin && !OURS_ISS[String(h.admin).split("::")[0]])
+  .map(h => ({
+    contractId: h.contractId,
+    payload: {
+      asset: { symbol: h.id === "Amulet" ? "CC" : h.id, admin: h.admin },
+      amount: h.amount,
+      owner: h.owner || ownerHint
+    }
+  }));
+
 const aggHoldings = (hs) => {
   const m = new Map();
   for (const h of (hs || [])) {
@@ -3203,7 +3216,7 @@ function PartyPortal({ role, onExit }) {
       const [si, sq, sh, md, le, hist, rt, rq] = await Promise.all([
         api("/api/swap/invitations?role=" + role).catch(() => ({})),
         api("/api/swap/quotes?role=" + role).catch(() => ({})),
-        api("/api/swap/holdings?role=" + role).catch(() => ({})),
+        api("/api/real/holdings?role=" + role).catch(() => ({})),
         api("/api/mode").catch(() => ({})),
         api("/api/ledger-end").catch(() => ({})),
         api("/api/swap/history?role=" + role).catch(() => ({})),
@@ -3213,7 +3226,7 @@ function PartyPortal({ role, onExit }) {
       const nx = (si && si.invitations) || [];
       setInv(prev => { if (nx.length > prev.length) { setFresh(true); setTimeout(() => setFresh(false), 900); } return nx; });
       setMyQuotes((sq && sq.quotes) || []);
-      setHoldings((sh && sh.holdings) || []);
+      setHoldings(mapRealHoldings(sh, role));
       if (md && md.parties) setParties(md.parties);
       if (md) setSigned(!!md.signedMode);
       if (le) setOffset(le.offset);
@@ -3275,21 +3288,12 @@ function PartyPortal({ role, onExit }) {
     };
     try {
       setAwardStep("Accepting\u2026");
-      const mine = pick(holdings, offerSym, p.offerAmount);
-      if (!mine) throw new Error("You hold no " + offerSym + " \u2265 " + p.offerAmount);
-      const dh = await api("/api/swap/holdings?role=" + dealerRole).catch(() => ({}));
-      const theirs = pick(dh && dh.holdings, wantSym, p.price);
-      if (!theirs) throw new Error(DEALER_NAME(p.dealer) + " holds no " + wantSym + " \u2265 " + p.price);
-
+      // Accept the awarded quote -> SwapProposal, then settle it with REAL tokens
+      // (backend validates real holdings + allocates both real legs + atomic settle).
       const a = await post("/api/swap/quotes/" + q.contractId + "/accept", {});
-      setAwardStep("Your leg\u2026");
-      const b = await post("/api/swap/proposals/" + a.proposalCid + "/commit-offer", { holdingCid: mine });
-      setAwardStep("Their leg\u2026");
-      const c = await post("/api/swap/pending/" + b.pendingCid + "/commit-want", { dealer: dealerRole, holdingCid: theirs });
-      setAwardStep("Settling\u2026");
-      await post("/api/swap/settlements/" + c.settlementCid + "/execute", { dealer: dealerRole });
-      // settled -- archive the RFQ so it stops showing as "live" (best-effort)
-      post("/api/swap/rfqs/" + p.rfqCid + "/close", {}).catch(() => {});
+      setAwardStep("Settling real\u2026");
+      const rr = await post("/api/swap/proposals/" + a.proposalCid + "/settle-real", { rfqCid: p.rfqCid });
+      if (!rr.ok) throw new Error(rr.error || "real settlement failed");
       setVault({
         offerSym, offerAmt: p.offerAmount,
         wantSym, wantAmt: p.price,
