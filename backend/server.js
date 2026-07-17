@@ -1233,10 +1233,8 @@ app.get("/api/real/allocations", async (req, res) => {
 
 // ---- WITHDRAW a registry Allocation (unlock the Holding) --------------------
 async function withdrawContext(registryUrl, registrar, allocationCid) {
-  const url = registryUrl +
-    "/api/token-standard/v0/registrars/" + encodeURIComponent(registrar) +
-    "/registry/allocations/v1/" + allocationCid + "/choice-contexts/withdraw";
-  const r = await fetch(url, {
+  const url = regPath(registryUrl, registrar, "allocations/v1/" + allocationCid + "/choice-contexts/withdraw");
+  const r = await regFetch(registryUrl, url, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ meta: {} }),
   });
@@ -1626,6 +1624,23 @@ app.post("/api/swap/quotes/:cid/accept", async (req, res) => {
 // ---- OPTION B: settle the awarded proposal with REAL tokens -----------------
 // Runs the real allocate-both-legs -> RecordRealSwap -> atomic settle chain on the
 // EXISTING proposal the UI awarded (settles the actual quote, no internal re-auction).
+// Best-effort: release an allocation back to free holdings (used to roll back a
+// failed settlement so funds are never stranded/locked).
+async function withdrawLeg(leg, adminHint) {
+  try {
+    if (!leg || !leg.cid) return;
+    const party = leg.senderParty; // may be undefined; withdraw resolves via role too
+    const body = { registry: leg.registry };
+    // find which role owns it (sender) so withdraw can actAs it
+    const r = await fetch("http://localhost:" + (process.env.PORT || 4000) +
+      "/api/real/withdraw/" + leg.cid + "?registry=" + encodeURIComponent(leg.registry || ""), {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role: leg.senderRole || "requester" }),
+    });
+    await r.text();
+  } catch (e) { /* best-effort rollback */ }
+}
+
 app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
   const steps = [];
   try {
@@ -1669,37 +1684,64 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
     const settlementCid = await pollNewCid(requester, "UmbraSwap:SwapSettlement", b);
     steps.push("recorded on-ledger SwapSettlement (settledVia=real)");
 
-    // v7: atomic settle via ONE on-ledger command -- SwapSettlement.ExecuteRealSwap
-    // executes both Allocation_ExecuteTransfer legs inside a single choice. One
-    // command => interactive-submission can sign it => wallet-signable in SIGNED_MODE.
-    const offerCtx = await execTransferContext(offLeg.registry, offAdmin, offLeg.cid);
-    const wantCtx  = await execTransferContext(wantLeg.registry, wantAdmin, wantLeg.cid);
-    const _dseen = {}; const disclosed = [];
-    for (const ctx of [offerCtx, wantCtx]) {
-      for (const d of (ctx.disclosedContracts || [])) {
-        if (_dseen[d.contractId]) continue; _dseen[d.contractId] = true;
-        disclosed.push({ templateId: d.templateId, contractId: d.contractId,
-          createdEventBlob: d.createdEventBlob, synchronizerId: d.synchronizerId || "" });
+    // Atomic settle. Two paths, chosen by mode:
+    //  DEMO   -> /api/real/settle: two Allocation_ExecuteTransfer in one tx. Robust:
+    //            it RE-QUERIES each allocation by cid right before executing, so it
+    //            tolerates registry lag / change-holding churn from combo allocations.
+    //  SIGNED -> SwapSettlement.ExecuteRealSwap: ONE on-ledger command, so an external
+    //            wallet can sign it (interactive-submission is one-command-only).
+    if (SIGNED_MODE) {
+      const offerCtx = await execTransferContext(offLeg.registry, offAdmin, offLeg.cid);
+      const wantCtx  = await execTransferContext(wantLeg.registry, wantAdmin, wantLeg.cid);
+      const _dseen = {}; const disclosed = [];
+      for (const ctx of [offerCtx, wantCtx]) {
+        for (const d of (ctx.disclosedContracts || [])) {
+          if (_dseen[d.contractId]) continue; _dseen[d.contractId] = true;
+          disclosed.push({ templateId: d.templateId, contractId: d.contractId,
+            createdEventBlob: d.createdEventBlob, synchronizerId: d.synchronizerId || "" });
+        }
       }
+      const dealerParty = await partyIdFor(dealerRole);
+      const execCmd = {
+        commandId: "execreal-" + Date.now(),
+        actAs: [...new Set([requester, dealerParty])],
+        commands: [{ ExerciseCommand: {
+          templateId: `#${PKGN}:UmbraSwap:SwapSettlement`,
+          contractId: settlementCid,
+          choice: "ExecuteRealSwap",
+          choiceArgument: {
+            offerArgs: { context: offerCtx.choiceContextData || { values: {} }, meta: { values: {} } },
+            wantArgs:  { context: wantCtx.choiceContextData  || { values: {} }, meta: { values: {} } },
+          },
+        } }],
+        disclosedContracts: disclosed,
+      };
+      try {
+        await realSubmit(execCmd, "rexecreal");
+      } catch (execErr) {
+        await withdrawLeg(offLeg); await withdrawLeg(wantLeg);
+        steps.push("settlement failed \u2014 rolled back allocations (funds released)");
+        throw execErr;
+      }
+      steps.push("executed REAL atomic swap via ExecuteRealSwap (one on-ledger choice, party-signed)");
+    } else {
+      const sr = await fetch("http://localhost:" + (process.env.PORT || 4000) + "/api/real/settle", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ legs: [
+          { cid: offLeg.cid, registry: offLeg.registry },
+          { cid: wantLeg.cid, registry: wantLeg.registry },
+        ] }),
+      });
+      const sj = await sr.json();
+      if (!sj.ok) {
+        // roll back: withdraw both allocations so the funds return to free holdings
+        await withdrawLeg(offLeg); await withdrawLeg(wantLeg);
+        steps.push("settlement failed \u2014 rolled back allocations (funds released)");
+        throw new Error("atomic settle failed: " + (sj.error || JSON.stringify(sj)));
+      }
+      steps.push("executed REAL atomic swap: " + offerAmount + " " + offerAsset.symbol +
+        " <-> " + wantAmount + " " + wantAsset.symbol + " (both legs, one tx)");
     }
-    const dealerParty = await partyIdFor(dealerRole);
-    const execCmd = {
-      commandId: "execreal-" + Date.now(),
-      actAs: [...new Set([requester, dealerParty])],
-      commands: [{ ExerciseCommand: {
-        templateId: `#${PKGN}:UmbraSwap:SwapSettlement`,
-        contractId: settlementCid,
-        choice: "ExecuteRealSwap",
-        choiceArgument: {
-          offerArgs: { context: offerCtx.choiceContextData || { values: {} }, meta: { values: {} } },
-          wantArgs:  { context: wantCtx.choiceContextData  || { values: {} }, meta: { values: {} } },
-        },
-      } }],
-      disclosedContracts: disclosed,
-    };
-    await realSubmit(execCmd, "rexecreal");
-    steps.push("executed REAL atomic swap via ExecuteRealSwap: " + offerAmount + " " + offerAsset.symbol +
-      " <-> " + wantAmount + " " + wantAsset.symbol + " (one on-ledger choice)");
 
     // Close the RFQ + ALL its invitations so no invited dealer is left with a stale
     // live countdown. The SwapProposal has no rfqCid, so derive it: prefer the body,
@@ -2044,7 +2086,7 @@ async function allocateRealLeg(senderRole, receiverRole, admin, instrId, sym, am
         const now = await queryAllocations(senderParty);
         const fresh = now.find(a => !beforeIds.has(a.contractId) &&
           a.instrument === instrId && a.amount.startsWith(String(amount)));
-        if (fresh) return { cid: fresh.contractId, registry };
+        if (fresh) return { cid: fresh.contractId, registry, senderRole, senderParty };
         await new Promise(z => setTimeout(z, 400));
       }
       lastErr = "combo allocated but could not locate new allocation cid";
@@ -2071,7 +2113,7 @@ async function allocateRealLeg(senderRole, receiverRole, admin, instrId, sym, am
         const now = await queryAllocations(senderParty);
         const fresh = now.find(a => !beforeIds.has(a.contractId) &&
           a.instrument === instrId && a.amount.startsWith(String(amount)));
-        if (fresh) return { cid: fresh.contractId, registry };
+        if (fresh) return { cid: fresh.contractId, registry, senderRole, senderParty };
         await new Promise(z => setTimeout(z, 400));
       }
       lastErr = "allocated but could not locate new allocation cid";
