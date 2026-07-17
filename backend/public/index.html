@@ -1587,6 +1587,14 @@ function OperatorConsole({ onExit }) {
   }
   async function createSwapRfq(f) {
     try {
+      // don't waste dealers' time: requester must actually hold the offer amount
+      const _rh = (hold && hold.requester && hold.requester.assets) || [];
+      const _have = _rh.filter(h => h.payload.asset.symbol === f.offerAsset.symbol)
+        .reduce((s, h) => s + Number(h.payload.amount), 0);
+      if (_have < Number(f.offerAmount)) {
+        push("You only hold " + _have + " " + f.offerAsset.symbol + " \u2014 can't offer " + f.offerAmount, "er");
+        return;
+      }
       await post("/api/swap/rfq", {
         offerAsset: f.offerAsset,
         offerAmount: f.offerAmount,
@@ -3133,7 +3141,7 @@ function DealerDesk(P) {
               React.createElement("div", { className: "mod-b" }, (function () {
                 const o = active.payload.offerAsset.symbol, w = active.payload.wantAsset.symbol;
                 const amt = Number(active.payload.offerAmount);
-                const _wMax = Math.max(0, ...holdings.filter(h => h.payload.asset.symbol === w).map(h => Number(h.payload.amount)));
+                const _wMax = holdings.filter(h => h.payload.asset.symbol === w).reduce((s, h) => s + Number(h.payload.amount), 0);
                 const _unbacked = Number(price[active.contractId]) > _wMax;
                 return React.createElement(React.Fragment, null,
                   React.createElement("div", { className: "ask-pair" },
@@ -3317,7 +3325,7 @@ function PartyPortal({ role, onExit }) {
     // A dealer cannot quote more than they can deliver: the swap needs ONE
     // holding of the want-asset >= the price, or it reverts at settlement and
     // wastes the requester\u2019s award. Block it here, not at the ledger.
-    const _wMax = Math.max(0, ...holdings.filter(h => h.payload.asset.symbol === wantSym).map(h => Number(h.payload.amount)));
+    const _wMax = holdings.filter(h => h.payload.asset.symbol === wantSym).reduce((s, h) => s + Number(h.payload.amount), 0);
     if (Number(p) > _wMax) { say("You cannot back that: your largest " + wantSym + " holding is " + _wMax.toLocaleString() + ". Quote at or below it.", true); return; }
     setBusy(b => ({ ...b, [cid]: true }));
     try {
