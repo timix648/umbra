@@ -2521,6 +2521,28 @@ const usdOf = (usd, sym, amt) => {
 const fmtUsd = v => v == null ? null
   : "$" + v.toLocaleString(undefined, { maximumFractionDigits: v >= 1000 ? 0 : 2 });
 
+// Adaptive number formatter. Big numbers: thousands + <=2dp. Small: enough sig-figs.
+// Very small (< 0.001): DEX subscript-zero style 0.0<sub>N</sub>digits so a tiny but
+// nonzero price is legible instead of rounding to 0.00. Returns a React node.
+const fmtNum = (v) => {
+  if (v == null || isNaN(Number(v))) return "\u2014";
+  const n = Number(v);
+  if (n === 0) return "0";
+  const abs = Math.abs(n);
+  if (abs >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  if (abs >= 1)    return n.toLocaleString(undefined, { maximumFractionDigits: 4 });
+  if (abs >= 0.001) return n.toLocaleString(undefined, { maximumFractionDigits: 6 });
+  // subscript-zero notation for < 0.001
+  const s = abs.toFixed(20);                 // plenty of precision
+  const dec = s.split(".")[1] || "";
+  let zeros = 0; while (dec[zeros] === "0") zeros++;
+  const sig = dec.slice(zeros).replace(/0+$/, "").slice(0, 4) || "0";
+  return React.createElement("span", null,
+    (n < 0 ? "-" : ""), "0.0",
+    React.createElement("sub", null, zeros),
+    sig);
+};
+
 // theme, shared by every surface (was stranded in the operator console)
 function useTheme() {
   const [theme, setTheme] = useState(() => {
@@ -2798,7 +2820,7 @@ function RequesterDesk(P) {
               refPair.base, " / ", refPair.quote)),
           React.createElement("div", { className: "mod-b" },
             React.createElement("div", { className: "mr-mid m" },
-              rate != null ? Number(rate).toFixed(2) : "\u2014",
+              rate != null ? fmtNum(rate) : "\u2014",
               React.createElement("span", null, refPair.base + " / " + refPair.quote)),
             spark,
             React.createElement("div", { className: "mr-foot" },
@@ -3332,7 +3354,7 @@ function PartyPortal({ role, onExit }) {
         offerSym, offerAmt: p.offerAmount,
         wantSym, wantAmt: p.price,
         dealerName: DEALER_NAME(p.dealer),
-        cid: c.settlementCid, offset, signed
+        cid: rr.settlementCid, offset, signed
       });
       load();
     } catch (e) {
