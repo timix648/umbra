@@ -1635,7 +1635,8 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
       .find(c => c.contractId === req.params.cid);
     if (!prop) return res.status(404).json({ error: "proposal not found: " + req.params.cid });
     const p = prop.payload;
-    const dealerRole = cleanRole(p.dealer);
+    let dealerRole = await roleOfParty(p.dealer);
+    if (!dealerRole) dealerRole = String(p.dealer).split("::")[0].toLowerCase(); // hint fallback
     const offerAsset = p.offerAsset, wantAsset = p.wantAsset;
     const offerAmount = p.offerAmount, wantAmount = p.price;
 
