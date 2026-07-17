@@ -2043,8 +2043,11 @@ function registryForAdmin(admin) {
 async function realHoldingBySymbol(role, sym, need) {
   const party = await partyIdFor(role);
   const hs = await queryRealHoldings(party);
-  const OURS = new Set(["Requester","Dealer1","Dealer2","Observer"]);
-  const isReal = h => !OURS.has(String(h.admin || "").split("::")[0]);
+  // A holding is REAL iff its issuer is a known external registry issuer
+  // (cbtc-network / DSO / rails-cethMain). This excludes ALL self-issued stand-ins -
+  // both the demo parties AND the external WALLET parties (which mint their own fakes
+  // in signed mode). registryForAdmin() returns non-null only for real issuers.
+  const isReal = h => registryForAdmin(h.admin) != null;
   const alias = { CBTC: "CBTC", CETH: "cETH", CC: "Amulet", AMULET: "Amulet" };
   const target = alias[String(sym).toUpperCase()] || sym;
   const want = Number(need);
