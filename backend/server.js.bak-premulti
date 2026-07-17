@@ -1233,8 +1233,10 @@ app.get("/api/real/allocations", async (req, res) => {
 
 // ---- WITHDRAW a registry Allocation (unlock the Holding) --------------------
 async function withdrawContext(registryUrl, registrar, allocationCid) {
-  const url = regPath(registryUrl, registrar, "allocations/v1/" + allocationCid + "/choice-contexts/withdraw");
-  const r = await regFetch(registryUrl, url, {
+  const url = registryUrl +
+    "/api/token-standard/v0/registrars/" + encodeURIComponent(registrar) +
+    "/registry/allocations/v1/" + allocationCid + "/choice-contexts/withdraw";
+  const r = await fetch(url, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ meta: {} }),
   });
@@ -1624,53 +1626,6 @@ app.post("/api/swap/quotes/:cid/accept", async (req, res) => {
 // ---- OPTION B: settle the awarded proposal with REAL tokens -----------------
 // Runs the real allocate-both-legs -> RecordRealSwap -> atomic settle chain on the
 // EXISTING proposal the UI awarded (settles the actual quote, no internal re-auction).
-// Best-effort: release an allocation back to free holdings (used to roll back a
-// failed settlement so funds are never stranded/locked).
-async function withdrawLeg(leg, adminHint) {
-  try {
-    if (!leg || !leg.cid) return;
-    const party = leg.senderParty; // may be undefined; withdraw resolves via role too
-    const body = { registry: leg.registry };
-    // find which role owns it (sender) so withdraw can actAs it
-    const r = await fetch("http://localhost:" + (process.env.PORT || 4000) +
-      "/api/real/withdraw/" + leg.cid + "?registry=" + encodeURIComponent(leg.registry || ""), {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ role: leg.senderRole || "requester" }),
-    });
-    await r.text();
-  } catch (e) { /* best-effort rollback */ }
-}
-
-// On settlement failure: archive the orphaned SwapProposal and re-invite the dealer
-// so it can quote again (its invitation+quote were consumed by quote+accept). This
-// makes the failure path symmetric -- the dealer that quoted isn't silently frozen out.
-async function recoverFailedSwap(requester, proposalCid, dealerRole, offerAsset, wantAsset) {
-  try {
-    // archive the dead proposal (best-effort)
-    await act("requester", "swap-prop-archive", [{ ExerciseCommand: {
-      templateId: `#${PKGN}:UmbraSwap:SwapProposal`, contractId: proposalCid,
-      choice: "Archive", choiceArgument: {} } }]).catch(() => {});
-  } catch (e) {}
-  try {
-    // find the still-live RFQ for this pair and re-invite the dealer
-    const rfqs = await queryActive(requester, "UmbraSwap:SwapRfq");
-    const rfq = rfqs.find(r => r.payload &&
-      r.payload.offerAsset && r.payload.offerAsset.symbol === offerAsset.symbol &&
-      r.payload.wantAsset && r.payload.wantAsset.symbol === wantAsset.symbol);
-    if (!rfq) return false;
-    const dealerParty = await partyIdFor(dealerRole);
-    // already has a live invitation? then nothing to do.
-    const invs = await queryActive(requester, "UmbraSwap:SwapInvitation");
-    const has = invs.some(iv => iv.payload && iv.payload.rfqCid === rfq.contractId &&
-      iv.payload.dealer === dealerParty);
-    if (has) return true;
-    await act("requester", "swap-reinvite", [{ ExerciseCommand: {
-      templateId: `#${PKGN}:UmbraSwap:SwapRfq`, contractId: rfq.contractId,
-      choice: "InviteDealer", choiceArgument: { dealer: dealerParty } } }]);
-    return true;
-  } catch (e) { return false; }
-}
-
 app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
   const steps = [];
   try {
@@ -1687,13 +1642,11 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
 
     // real instrument ids come OFF the holdings (case-correct), like /api/real/award
     const offCands = await realHoldingBySymbol("requester", offerAsset.symbol, offerAmount);
-    const offPick = offCands.length ? offCands[0] : (offCands.combo && offCands.combo[0]);
-    if (!offPick) throw new Error("requester has no real " + offerAsset.symbol + " totalling >= " + offerAmount);
+    if (!offCands.length) throw new Error("requester has no free real " + offerAsset.symbol + " >= " + offerAmount);
     const wantCands = await realHoldingBySymbol(dealerRole, wantAsset.symbol, wantAmount);
-    const wantPick = wantCands.length ? wantCands[0] : (wantCands.combo && wantCands.combo[0]);
-    if (!wantPick) throw new Error(dealerRole + " has no real " + wantAsset.symbol + " totalling >= " + wantAmount);
-    const offAdmin = offPick.admin, offInstr = offPick.id;
-    const wantAdmin = wantPick.admin, wantInstr = wantPick.id;
+    if (!wantCands.length) throw new Error(dealerRole + " has no free real " + wantAsset.symbol + " >= " + wantAmount);
+    const offAdmin = offCands[0].admin, offInstr = offCands[0].id;
+    const wantAdmin = wantCands[0].admin, wantInstr = wantCands[0].id;
 
     const settleId = "umbra-uiswap-" + Date.now();
     const offLeg = await allocateRealLeg("requester", dealerRole, offAdmin, offInstr,
@@ -1714,72 +1667,40 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
     const settlementCid = await pollNewCid(requester, "UmbraSwap:SwapSettlement", b);
     steps.push("recorded on-ledger SwapSettlement (settledVia=real)");
 
-    // Atomic settle. Two paths, chosen by mode:
-    //  DEMO   -> /api/real/settle: two Allocation_ExecuteTransfer in one tx. Robust:
-    //            it RE-QUERIES each allocation by cid right before executing, so it
-    //            tolerates registry lag / change-holding churn from combo allocations.
-    //  SIGNED -> SwapSettlement.ExecuteRealSwap: ONE on-ledger command, so an external
-    //            wallet can sign it (interactive-submission is one-command-only).
-    if (SIGNED_MODE) {
-      const offerCtx = await execTransferContext(offLeg.registry, offAdmin, offLeg.cid);
-      const wantCtx  = await execTransferContext(wantLeg.registry, wantAdmin, wantLeg.cid);
-      const _dseen = {}; const disclosed = [];
-      for (const ctx of [offerCtx, wantCtx]) {
-        for (const d of (ctx.disclosedContracts || [])) {
-          if (_dseen[d.contractId]) continue; _dseen[d.contractId] = true;
-          disclosed.push({ templateId: d.templateId, contractId: d.contractId,
-            createdEventBlob: d.createdEventBlob, synchronizerId: d.synchronizerId || "" });
-        }
+    // v7: atomic settle via ONE on-ledger command -- SwapSettlement.ExecuteRealSwap
+    // executes both Allocation_ExecuteTransfer legs inside a single choice. One
+    // command => interactive-submission can sign it => wallet-signable in SIGNED_MODE.
+    const offerCtx = await execTransferContext(offLeg.registry, offAdmin, offLeg.cid);
+    const wantCtx  = await execTransferContext(wantLeg.registry, wantAdmin, wantLeg.cid);
+    const _dseen = {}; const disclosed = [];
+    for (const ctx of [offerCtx, wantCtx]) {
+      for (const d of (ctx.disclosedContracts || [])) {
+        if (_dseen[d.contractId]) continue; _dseen[d.contractId] = true;
+        disclosed.push({ templateId: d.templateId, contractId: d.contractId,
+          createdEventBlob: d.createdEventBlob, synchronizerId: d.synchronizerId || "" });
       }
-      const dealerParty = await partyIdFor(dealerRole);
-      const execCmd = {
-        commandId: "execreal-" + Date.now(),
-        actAs: [...new Set([requester, dealerParty])],
-        commands: [{ ExerciseCommand: {
-          templateId: `#${PKGN}:UmbraSwap:SwapSettlement`,
-          contractId: settlementCid,
-          choice: "ExecuteRealSwap",
-          choiceArgument: {
-            offerArgs: { context: offerCtx.choiceContextData || { values: {} }, meta: { values: {} } },
-            wantArgs:  { context: wantCtx.choiceContextData  || { values: {} }, meta: { values: {} } },
-          },
-        } }],
-        disclosedContracts: disclosed,
-      };
-      try {
-        await realSubmit(execCmd, "rexecreal");
-      } catch (execErr) {
-        await withdrawLeg(offLeg); await withdrawLeg(wantLeg);
-        await recoverFailedSwap(requester, req.params.cid, dealerRole, offerAsset, wantAsset);
-        steps.push("settlement failed \u2014 rolled back allocations + re-opened the request for " + dealerRole);
-        throw execErr;
-      }
-      steps.push("executed REAL atomic swap via ExecuteRealSwap (one on-ledger choice, party-signed)");
-    } else {
-      const sr = await fetch("http://localhost:" + (process.env.PORT || 4000) + "/api/real/settle", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ legs: [
-          { cid: offLeg.cid, registry: offLeg.registry },
-          { cid: wantLeg.cid, registry: wantLeg.registry },
-        ] }),
-      });
-      const sj = await sr.json();
-      if (!sj.ok) {
-        // roll back: withdraw both allocations so the funds return to free holdings
-        await withdrawLeg(offLeg); await withdrawLeg(wantLeg);
-        await recoverFailedSwap(requester, req.params.cid, dealerRole, offerAsset, wantAsset);
-        steps.push("settlement failed \u2014 rolled back allocations + re-opened the request for " + dealerRole);
-        throw new Error("atomic settle failed: " + (sj.error || JSON.stringify(sj)));
-      }
-      steps.push("executed REAL atomic swap: " + offerAmount + " " + offerAsset.symbol +
-        " <-> " + wantAmount + " " + wantAsset.symbol + " (both legs, one tx)");
     }
+    const dealerParty = await partyIdFor(dealerRole);
+    const execCmd = {
+      commandId: "execreal-" + Date.now(),
+      actAs: [...new Set([requester, dealerParty])],
+      commands: [{ ExerciseCommand: {
+        templateId: `#${PKGN}:UmbraSwap:SwapSettlement`,
+        contractId: settlementCid,
+        choice: "ExecuteRealSwap",
+        choiceArgument: {
+          offerArgs: { context: offerCtx.choiceContextData || { values: {} }, meta: { values: {} } },
+          wantArgs:  { context: wantCtx.choiceContextData  || { values: {} }, meta: { values: {} } },
+        },
+      } }],
+      disclosedContracts: disclosed,
+    };
+    await realSubmit(execCmd, "rexecreal");
+    steps.push("executed REAL atomic swap via ExecuteRealSwap: " + offerAmount + " " + offerAsset.symbol +
+      " <-> " + wantAmount + " " + wantAsset.symbol + " (one on-ledger choice)");
 
-    // Close the RFQ + ALL its invitations so no invited dealer is left with a stale
-    // live countdown. The SwapProposal has no rfqCid, so derive it: prefer the body,
-    // else find a live SwapInvitation for this trade's pair and use its rfqCid.
     try {
-      let rfqCid = (req.body && req.body.rfqCid) || null;
+      let rfqCid = (req.body && req.body.rfqCid) || p.rfqCid || null;
       if (!rfqCid) {
         const invs = await queryActive(requester, "UmbraSwap:SwapInvitation");
         const match = invs.find(iv => iv.payload &&
@@ -2043,11 +1964,8 @@ function registryForAdmin(admin) {
 async function realHoldingBySymbol(role, sym, need) {
   const party = await partyIdFor(role);
   const hs = await queryRealHoldings(party);
-  // A holding is REAL iff its issuer is a known external registry issuer
-  // (cbtc-network / DSO / rails-cethMain). This excludes ALL self-issued stand-ins -
-  // both the demo parties AND the external WALLET parties (which mint their own fakes
-  // in signed mode). registryForAdmin() returns non-null only for real issuers.
-  const isReal = h => registryForAdmin(h.admin) != null;
+  const OURS = new Set(["Requester","Dealer1","Dealer2","Observer"]);
+  const isReal = h => !OURS.has(String(h.admin || "").split("::")[0]);
   const alias = { CBTC: "CBTC", CETH: "cETH", CC: "Amulet", AMULET: "Amulet" };
   const target = alias[String(sym).toUpperCase()] || sym;
   const want = Number(need);
@@ -2064,23 +1982,7 @@ async function realHoldingBySymbol(role, sym, need) {
   const covering = cands
     .filter(h => Number(h.amount) >= want - 1e-12)
     .sort((a, b) => Number(a.amount) - Number(b.amount));
-  // Single-holding candidates first (cheapest path). If NONE covers alone, build a
-  // multi-holding combo: CIP-56 allocate accepts multiple inputHoldingCids and merges
-  // them atomically inside the choice (returns change). Greedy largest-first to keep
-  // the input count small; cap at 10 UTXOs (Canton recommends <=10, hard max 100).
-  if (covering.length) {
-    covering.combo = null; // signal: single holdings available, try them individually
-    return covering;
-  }
-  const byBig = cands.slice().sort((a, b) => Number(b.amount) - Number(a.amount));
-  const combo = []; let sum = 0;
-  for (const h of byBig) {
-    if (combo.length >= 10) break;
-    combo.push(h); sum += Number(h.amount);
-    if (sum >= want - 1e-12) break;
-  }
-  if (sum >= want - 1e-12) { const out = []; out.combo = combo; return out; }
-  return [];  // genuinely insufficient total
+  return covering;  // array (possibly empty)
 }
 
 // allocate one real leg via the existing endpoint's logic, then return the new alloc cid
@@ -2101,32 +2003,6 @@ async function allocateRealLeg(senderRole, receiverRole, admin, instrId, sym, am
   await new Promise(z => setTimeout(z, 2500));
   for (let attempt = 0; attempt < 8; attempt++) {
     const candidates = await realHoldingBySymbol(senderRole, sym, amount);
-    // combo = a covering SET (no single holding sufficed). Allocate from all of them
-    // in one call; the registry merges + returns change.
-    if (candidates.combo && candidates.combo.length) {
-      const cids = candidates.combo.map(h => h.contractId);
-      const before = await queryAllocations(senderParty);
-      const beforeIds = new Set(before.map(a => a.contractId));
-      const r = await fetch("http://localhost:" + (process.env.PORT || 4000) + "/api/real/allocate", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ senderRole, receiverRole, admin, id: instrId, amount,
-          holdingCids: cids, settleId, legId, registry }),
-      });
-      const j = await r.json();
-      if (!j.ok) {
-        lastErr = "combo(" + cids.length + "): " + (j.error || JSON.stringify(j));
-        await new Promise(z => setTimeout(z, 2000 + attempt * 1000)); continue;
-      }
-      for (let i = 0; i < 12; i++) {
-        const now = await queryAllocations(senderParty);
-        const fresh = now.find(a => !beforeIds.has(a.contractId) &&
-          a.instrument === instrId && a.amount.startsWith(String(amount)));
-        if (fresh) return { cid: fresh.contractId, registry, senderRole, senderParty };
-        await new Promise(z => setTimeout(z, 400));
-      }
-      lastErr = "combo allocated but could not locate new allocation cid";
-      continue;
-    }
     if (!candidates.length) { lastErr = senderRole + " has no free real " + sym + " >= " + amount; await new Promise(z=>setTimeout(z,1500)); continue; }
     let advanced = false;
     for (const h of candidates) {
@@ -2148,7 +2024,7 @@ async function allocateRealLeg(senderRole, receiverRole, admin, instrId, sym, am
         const now = await queryAllocations(senderParty);
         const fresh = now.find(a => !beforeIds.has(a.contractId) &&
           a.instrument === instrId && a.amount.startsWith(String(amount)));
-        if (fresh) return { cid: fresh.contractId, registry, senderRole, senderParty };
+        if (fresh) return { cid: fresh.contractId, registry };
         await new Promise(z => setTimeout(z, 400));
       }
       lastErr = "allocated but could not locate new allocation cid";
@@ -2179,12 +2055,10 @@ app.post("/api/real/award", async (req, res) => {
     // to get wrong, and a self-issued stand-in (admin = one of our parties) is rejected.
     const OURS = new Set(["Requester","Dealer1","Dealer2","Observer"]);
     const offCands = await realHoldingBySymbol("requester", offerSym, offerAmount);
-    const offPick = offCands.length ? offCands[0] : (offCands.combo && offCands.combo[0]);
-    if (!offPick) throw new Error("requester has no real " + offerSym + " totalling >= " + offerAmount);
+    if (!offCands.length) throw new Error("requester has no single real " + offerSym + " holding >= " + offerAmount + " (only real externally-issued tokens, no auto-merge)");
     const wantCands = await realHoldingBySymbol(dealerRole, wantSym, wantAmount);
-    const wantPick = wantCands.length ? wantCands[0] : (wantCands.combo && wantCands.combo[0]);
-    if (!wantPick) throw new Error(dealerRole + " has no real " + wantSym + " totalling >= " + wantAmount);
-    const offAdmin = offPick.admin, wantAdmin = wantPick.admin;
+    if (!wantCands.length) throw new Error(dealerRole + " has no single real " + wantSym + " holding >= " + wantAmount);
+    const offAdmin = offCands[0].admin, wantAdmin = wantCands[0].admin;
     if (OURS.has(String(offAdmin).split("::")[0]))
       throw new Error(offerSym + " resolved to a self-issued stand-in (issuer " + offAdmin + "); this endpoint settles real tokens only");
     if (OURS.has(String(wantAdmin).split("::")[0]))
@@ -2203,10 +2077,10 @@ app.post("/api/real/award", async (req, res) => {
     // allocations lock the holdings, the blind auction below is the on-ledger trade
     // record, and the settle at the end executes these pre-made allocations.
     const settleId = "umbra-real-" + Date.now();
-    const offLeg = await allocateRealLeg("requester", dealerRole, offAdmin, (offPick ? offPick.id : offCands[0].id),
+    const offLeg = await allocateRealLeg("requester", dealerRole, offAdmin, offCands[0].id,
       offerSym, offerAmount, settleId, "offer-leg");
     steps.push("allocated real offer leg (" + offerAmount + " " + offerAsset.symbol + ")");
-    const wantLeg = await allocateRealLeg(dealerRole, "requester", wantAdmin, (wantPick ? wantPick.id : wantCands[0].id),
+    const wantLeg = await allocateRealLeg(dealerRole, "requester", wantAdmin, wantCands[0].id,
       wantSym, wantAmount, settleId, "want-leg");
     steps.push("allocated real want leg (" + wantAmount + " " + wantAsset.symbol + ")");
 
