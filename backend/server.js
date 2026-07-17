@@ -1642,11 +1642,13 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
 
     // real instrument ids come OFF the holdings (case-correct), like /api/real/award
     const offCands = await realHoldingBySymbol("requester", offerAsset.symbol, offerAmount);
-    if (!offCands.length) throw new Error("requester has no free real " + offerAsset.symbol + " >= " + offerAmount);
+    const offPick = offCands.length ? offCands[0] : (offCands.combo && offCands.combo[0]);
+    if (!offPick) throw new Error("requester has no real " + offerAsset.symbol + " totalling >= " + offerAmount);
     const wantCands = await realHoldingBySymbol(dealerRole, wantAsset.symbol, wantAmount);
-    if (!wantCands.length) throw new Error(dealerRole + " has no free real " + wantAsset.symbol + " >= " + wantAmount);
-    const offAdmin = offCands[0].admin, offInstr = offCands[0].id;
-    const wantAdmin = wantCands[0].admin, wantInstr = wantCands[0].id;
+    const wantPick = wantCands.length ? wantCands[0] : (wantCands.combo && wantCands.combo[0]);
+    if (!wantPick) throw new Error(dealerRole + " has no real " + wantAsset.symbol + " totalling >= " + wantAmount);
+    const offAdmin = offPick.admin, offInstr = offPick.id;
+    const wantAdmin = wantPick.admin, wantInstr = wantPick.id;
 
     const settleId = "umbra-uiswap-" + Date.now();
     const offLeg = await allocateRealLeg("requester", dealerRole, offAdmin, offInstr,
@@ -1699,8 +1701,11 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
     steps.push("executed REAL atomic swap via ExecuteRealSwap: " + offerAmount + " " + offerAsset.symbol +
       " <-> " + wantAmount + " " + wantAsset.symbol + " (one on-ledger choice)");
 
+    // Close the RFQ + ALL its invitations so no invited dealer is left with a stale
+    // live countdown. The SwapProposal has no rfqCid, so derive it: prefer the body,
+    // else find a live SwapInvitation for this trade's pair and use its rfqCid.
     try {
-      let rfqCid = (req.body && req.body.rfqCid) || p.rfqCid || null;
+      let rfqCid = (req.body && req.body.rfqCid) || null;
       if (!rfqCid) {
         const invs = await queryActive(requester, "UmbraSwap:SwapInvitation");
         const match = invs.find(iv => iv.payload &&
@@ -1982,7 +1987,23 @@ async function realHoldingBySymbol(role, sym, need) {
   const covering = cands
     .filter(h => Number(h.amount) >= want - 1e-12)
     .sort((a, b) => Number(a.amount) - Number(b.amount));
-  return covering;  // array (possibly empty)
+  // Single-holding candidates first (cheapest path). If NONE covers alone, build a
+  // multi-holding combo: CIP-56 allocate accepts multiple inputHoldingCids and merges
+  // them atomically inside the choice (returns change). Greedy largest-first to keep
+  // the input count small; cap at 10 UTXOs (Canton recommends <=10, hard max 100).
+  if (covering.length) {
+    covering.combo = null; // signal: single holdings available, try them individually
+    return covering;
+  }
+  const byBig = cands.slice().sort((a, b) => Number(b.amount) - Number(a.amount));
+  const combo = []; let sum = 0;
+  for (const h of byBig) {
+    if (combo.length >= 10) break;
+    combo.push(h); sum += Number(h.amount);
+    if (sum >= want - 1e-12) break;
+  }
+  if (sum >= want - 1e-12) { const out = []; out.combo = combo; return out; }
+  return [];  // genuinely insufficient total
 }
 
 // allocate one real leg via the existing endpoint's logic, then return the new alloc cid
@@ -2003,6 +2024,32 @@ async function allocateRealLeg(senderRole, receiverRole, admin, instrId, sym, am
   await new Promise(z => setTimeout(z, 2500));
   for (let attempt = 0; attempt < 8; attempt++) {
     const candidates = await realHoldingBySymbol(senderRole, sym, amount);
+    // combo = a covering SET (no single holding sufficed). Allocate from all of them
+    // in one call; the registry merges + returns change.
+    if (candidates.combo && candidates.combo.length) {
+      const cids = candidates.combo.map(h => h.contractId);
+      const before = await queryAllocations(senderParty);
+      const beforeIds = new Set(before.map(a => a.contractId));
+      const r = await fetch("http://localhost:" + (process.env.PORT || 4000) + "/api/real/allocate", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ senderRole, receiverRole, admin, id: instrId, amount,
+          holdingCids: cids, settleId, legId, registry }),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        lastErr = "combo(" + cids.length + "): " + (j.error || JSON.stringify(j));
+        await new Promise(z => setTimeout(z, 2000 + attempt * 1000)); continue;
+      }
+      for (let i = 0; i < 12; i++) {
+        const now = await queryAllocations(senderParty);
+        const fresh = now.find(a => !beforeIds.has(a.contractId) &&
+          a.instrument === instrId && a.amount.startsWith(String(amount)));
+        if (fresh) return { cid: fresh.contractId, registry };
+        await new Promise(z => setTimeout(z, 400));
+      }
+      lastErr = "combo allocated but could not locate new allocation cid";
+      continue;
+    }
     if (!candidates.length) { lastErr = senderRole + " has no free real " + sym + " >= " + amount; await new Promise(z=>setTimeout(z,1500)); continue; }
     let advanced = false;
     for (const h of candidates) {
@@ -2055,10 +2102,12 @@ app.post("/api/real/award", async (req, res) => {
     // to get wrong, and a self-issued stand-in (admin = one of our parties) is rejected.
     const OURS = new Set(["Requester","Dealer1","Dealer2","Observer"]);
     const offCands = await realHoldingBySymbol("requester", offerSym, offerAmount);
-    if (!offCands.length) throw new Error("requester has no single real " + offerSym + " holding >= " + offerAmount + " (only real externally-issued tokens, no auto-merge)");
+    const offPick = offCands.length ? offCands[0] : (offCands.combo && offCands.combo[0]);
+    if (!offPick) throw new Error("requester has no real " + offerSym + " totalling >= " + offerAmount);
     const wantCands = await realHoldingBySymbol(dealerRole, wantSym, wantAmount);
-    if (!wantCands.length) throw new Error(dealerRole + " has no single real " + wantSym + " holding >= " + wantAmount);
-    const offAdmin = offCands[0].admin, wantAdmin = wantCands[0].admin;
+    const wantPick = wantCands.length ? wantCands[0] : (wantCands.combo && wantCands.combo[0]);
+    if (!wantPick) throw new Error(dealerRole + " has no real " + wantSym + " totalling >= " + wantAmount);
+    const offAdmin = offPick.admin, wantAdmin = wantPick.admin;
     if (OURS.has(String(offAdmin).split("::")[0]))
       throw new Error(offerSym + " resolved to a self-issued stand-in (issuer " + offAdmin + "); this endpoint settles real tokens only");
     if (OURS.has(String(wantAdmin).split("::")[0]))
@@ -2077,10 +2126,10 @@ app.post("/api/real/award", async (req, res) => {
     // allocations lock the holdings, the blind auction below is the on-ledger trade
     // record, and the settle at the end executes these pre-made allocations.
     const settleId = "umbra-real-" + Date.now();
-    const offLeg = await allocateRealLeg("requester", dealerRole, offAdmin, offCands[0].id,
+    const offLeg = await allocateRealLeg("requester", dealerRole, offAdmin, (offPick ? offPick.id : offCands[0].id),
       offerSym, offerAmount, settleId, "offer-leg");
     steps.push("allocated real offer leg (" + offerAmount + " " + offerAsset.symbol + ")");
-    const wantLeg = await allocateRealLeg(dealerRole, "requester", wantAdmin, wantCands[0].id,
+    const wantLeg = await allocateRealLeg(dealerRole, "requester", wantAdmin, (wantPick ? wantPick.id : wantCands[0].id),
       wantSym, wantAmount, settleId, "want-leg");
     steps.push("allocated real want leg (" + wantAmount + " " + wantAsset.symbol + ")");
 
