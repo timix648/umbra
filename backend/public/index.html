@@ -2573,7 +2573,7 @@ const ASSET_LONG = sym => ASSET_LONGS[sym] || sym;
 
 function RequesterDesk(P) {
   const { meta, signed, onExit, note, rfqs, quotes, holdings, rate, series, usd, rateNote,
-          onCreate, onAward, awarding, awardStep, onPair, history, composedPair, composing, setComposing } = P;
+          onCreate, onAward, awarding, awardStep, onPair, history, composedPair, composing, setComposing, ratePair } = P;
   const settled = (history && history.settlements) || [];
   // the reference is for the pair the requester is composing -- matches the fetch
   // in load() (requester prices composedPair), so label and value agree and
@@ -2639,7 +2639,11 @@ function RequesterDesk(P) {
 
   // real market maths — mid comes from the ledgerless price feed; no invented spread
   const offerAmt = rfq ? Number(rfq.payload.offerAmount) : 0;
-  const mktTotal = (rate != null && offerAmt) ? rate * offerAmt : null;
+  // only price bps when the loaded rate is actually for THIS request's pair;
+  // otherwise (fresh login, rate still defaulting) show "\u2014" instead of a wrong bps.
+  const _pairOk = ratePair && rfq &&
+    ratePair.base === rfq.payload.offerAsset.symbol && ratePair.quote === rfq.payload.wantAsset.symbol;
+  const mktTotal = (rate != null && offerAmt && _pairOk) ? rate * offerAmt : null;
   const bps = (px) => (mktTotal ? ((Number(px) - mktTotal) / mktTotal) * 10000 : null);
   const bestBps = ranked.length ? bps(ranked[0].payload.price) : null;
 
@@ -3252,6 +3256,7 @@ function PartyPortal({ role, onExit }) {
   const [fresh, setFresh] = useState(false);
   const [history, setHistory] = useState({ settlements: [], rfqs: [] });
   const [rate, setRate] = useState(null);
+  const [ratePair, setRatePair] = useState(null); // which pair `rate` is for (gates bps until it matches the RFQ)
   const [series, setSeries] = useState([]);
   const [rfqs, setRfqs] = useState([]);
   const [awarding, setAwarding] = useState(false);
@@ -3295,7 +3300,7 @@ function PartyPortal({ role, onExit }) {
       if (md) setSigned(!!md.signedMode);
       if (le) setOffset(le.offset);
       if (hist && hist.ok) setHistory({ settlements: hist.settlements || [], rfqs: hist.rfqs || [] });
-      if (rt && rt.ok) { setRate(rt.mid); setSeries(rt.series || []); setUsd(rt.usd || null); setRateNote(rt.note || null); }
+      if (rt && rt.ok) { setRate(rt.mid); setRatePair(rt.base && rt.quote ? { base: rt.base, quote: rt.quote } : null); setSeries(rt.series || []); setUsd(rt.usd || null); setRateNote(rt.note || null); }
       else { setRate(null); setSeries([]); setRateNote(null); }
       if (rq && rq.rfqs) setRfqs(rq.rfqs);
       // Cache the pair to price next tick, by role:
@@ -3355,9 +3360,20 @@ function PartyPortal({ role, onExit }) {
       // Accept the awarded quote -> SwapProposal, then settle it with REAL tokens
       // (backend validates real holdings + allocates both real legs + atomic settle).
       const a = await post("/api/swap/quotes/" + q.contractId + "/accept", {});
-      setAwardStep("Settling real\u2026");
-      const rr = await post("/api/swap/proposals/" + a.proposalCid + "/settle-real", { rfqCid: p.rfqCid });
+      // staged progress: real settlement is several ledger round-trips (~8-12s).
+      // Advance a visible ticker through the known stages so the wait isn't dead air.
+      const _stages = ["Allocating your " + offerSym + " leg\u2026",
+                       "Allocating " + DEALER_NAME(p.dealer) + "'s " + wantSym + " leg\u2026",
+                       "Recording settlement on ledger\u2026",
+                       "Executing atomic swap\u2026"];
+      let _si = 0; setAwardStep(_stages[0]);
+      const _tick = setInterval(() => { _si = Math.min(_si + 1, _stages.length - 1); setAwardStep(_stages[_si]); }, 2600);
+      let rr;
+      try {
+        rr = await post("/api/swap/proposals/" + a.proposalCid + "/settle-real", { rfqCid: p.rfqCid });
+      } finally { clearInterval(_tick); }
       if (!rr.ok) throw new Error(rr.error || "real settlement failed");
+      setAwardStep("Settled \u2713");
       setVault({
         offerSym, offerAmt: p.offerAmount,
         wantSym, wantAmt: p.price,
@@ -3403,7 +3419,7 @@ function PartyPortal({ role, onExit }) {
       meta, signed, onExit, note,
       rfqs, quotes: myQuotes, holdings, rate, series, usd, rateNote, onPair, history, composedPair,
       onCreate: createRfq, onAward: awardQuote, awarding, awardStep,
-      composing, setComposing
+      composing, setComposing, ratePair
     }),
     React.createElement(SettlementVault, { trade: vault, role, onClose: () => setVault(null) }));
 

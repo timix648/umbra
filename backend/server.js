@@ -1641,6 +1641,36 @@ async function withdrawLeg(leg, adminHint) {
   } catch (e) { /* best-effort rollback */ }
 }
 
+// On settlement failure: archive the orphaned SwapProposal and re-invite the dealer
+// so it can quote again (its invitation+quote were consumed by quote+accept). This
+// makes the failure path symmetric -- the dealer that quoted isn't silently frozen out.
+async function recoverFailedSwap(requester, proposalCid, dealerRole, offerAsset, wantAsset) {
+  try {
+    // archive the dead proposal (best-effort)
+    await act("requester", "swap-prop-archive", [{ ExerciseCommand: {
+      templateId: `#${PKGN}:UmbraSwap:SwapProposal`, contractId: proposalCid,
+      choice: "Archive", choiceArgument: {} } }]).catch(() => {});
+  } catch (e) {}
+  try {
+    // find the still-live RFQ for this pair and re-invite the dealer
+    const rfqs = await queryActive(requester, "UmbraSwap:SwapRfq");
+    const rfq = rfqs.find(r => r.payload &&
+      r.payload.offerAsset && r.payload.offerAsset.symbol === offerAsset.symbol &&
+      r.payload.wantAsset && r.payload.wantAsset.symbol === wantAsset.symbol);
+    if (!rfq) return false;
+    const dealerParty = await partyIdFor(dealerRole);
+    // already has a live invitation? then nothing to do.
+    const invs = await queryActive(requester, "UmbraSwap:SwapInvitation");
+    const has = invs.some(iv => iv.payload && iv.payload.rfqCid === rfq.contractId &&
+      iv.payload.dealer === dealerParty);
+    if (has) return true;
+    await act("requester", "swap-reinvite", [{ ExerciseCommand: {
+      templateId: `#${PKGN}:UmbraSwap:SwapRfq`, contractId: rfq.contractId,
+      choice: "InviteDealer", choiceArgument: { dealer: dealerParty } } }]);
+    return true;
+  } catch (e) { return false; }
+}
+
 app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
   const steps = [];
   try {
@@ -1720,7 +1750,8 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
         await realSubmit(execCmd, "rexecreal");
       } catch (execErr) {
         await withdrawLeg(offLeg); await withdrawLeg(wantLeg);
-        steps.push("settlement failed \u2014 rolled back allocations (funds released)");
+        await recoverFailedSwap(requester, req.params.cid, dealerRole, offerAsset, wantAsset);
+        steps.push("settlement failed \u2014 rolled back allocations + re-opened the request for " + dealerRole);
         throw execErr;
       }
       steps.push("executed REAL atomic swap via ExecuteRealSwap (one on-ledger choice, party-signed)");
@@ -1736,7 +1767,8 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
       if (!sj.ok) {
         // roll back: withdraw both allocations so the funds return to free holdings
         await withdrawLeg(offLeg); await withdrawLeg(wantLeg);
-        steps.push("settlement failed \u2014 rolled back allocations (funds released)");
+        await recoverFailedSwap(requester, req.params.cid, dealerRole, offerAsset, wantAsset);
+        steps.push("settlement failed \u2014 rolled back allocations + re-opened the request for " + dealerRole);
         throw new Error("atomic settle failed: " + (sj.error || JSON.stringify(sj)));
       }
       steps.push("executed REAL atomic swap: " + offerAmount + " " + offerAsset.symbol +
