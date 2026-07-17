@@ -1472,7 +1472,7 @@ function OperatorConsole({ onExit }) {
   }, []);
   const refresh = useCallback(async (opts) => {
     try {
-      const [m, rf, qa, i1, i2, qd1, qd2, hr, hd1, hd2, qp, le, si1, si2, sq1, sq2, sqa, shr, shd1, shd2] = await Promise.all([api("/api/mode"), api("/api/rfqs"), api("/api/quotes?role=requester"), api("/api/invitations?role=dealer1"), api("/api/invitations?role=dealer2"), api("/api/quotes?role=dealer1"), api("/api/quotes?role=dealer2"), api("/api/holdings?role=requester"), api("/api/holdings?role=dealer1"), api("/api/holdings?role=dealer2"), api("/api/quotes?role=public"), api("/api/ledger-end"), api("/api/swap/invitations?role=dealer1").catch(() => ({})), api("/api/swap/invitations?role=dealer2").catch(() => ({})), api("/api/swap/quotes?role=dealer1").catch(() => ({})), api("/api/swap/quotes?role=dealer2").catch(() => ({})), api("/api/swap/quotes?role=requester").catch(() => ({})), api("/api/swap/holdings?role=requester").catch(() => ({})), api("/api/swap/holdings?role=dealer1").catch(() => ({})), api("/api/swap/holdings?role=dealer2").catch(() => ({}))]);
+      const [m, rf, qa, i1, i2, qd1, qd2, hr, hd1, hd2, qp, le, si1, si2, sq1, sq2, sqa, shr, shd1, shd2, rhr, rhd1, rhd2] = await Promise.all([api("/api/mode"), api("/api/rfqs"), api("/api/quotes?role=requester"), api("/api/invitations?role=dealer1"), api("/api/invitations?role=dealer2"), api("/api/quotes?role=dealer1"), api("/api/quotes?role=dealer2"), api("/api/holdings?role=requester"), api("/api/holdings?role=dealer1"), api("/api/holdings?role=dealer2"), api("/api/quotes?role=public"), api("/api/ledger-end"), api("/api/swap/invitations?role=dealer1").catch(() => ({})), api("/api/swap/invitations?role=dealer2").catch(() => ({})), api("/api/swap/quotes?role=dealer1").catch(() => ({})), api("/api/swap/quotes?role=dealer2").catch(() => ({})), api("/api/swap/quotes?role=requester").catch(() => ({})), api("/api/swap/holdings?role=requester").catch(() => ({})), api("/api/swap/holdings?role=dealer1").catch(() => ({})), api("/api/swap/holdings?role=dealer2").catch(() => ({})), api("/api/real/holdings?role=requester").catch(() => ({})), api("/api/real/holdings?role=dealer1").catch(() => ({})), api("/api/real/holdings?role=dealer2").catch(() => ({}))]);
       if (!(opts && opts.skipMode)) setMode(m.signedMode);
       setParties(m.parties || {});
       setRfqs(rf.rfqs || []);
@@ -1490,21 +1490,38 @@ function OperatorConsole({ onExit }) {
         swapQ: (sq2 && sq2.quotes) || []
       });
       setSwapQuotesAll((sqa && sqa.quotes) || []);
+      // Map REAL /api/real/holdings (raw, issuer-issued only) into the panel's
+      // holding shape. Skip self-issued stand-ins (admin hint in our own parties)
+      // and null views. "Amulet" -> "CC" for display consistency.
+      const OURS = { Requester: 1, Dealer1: 1, Dealer2: 1, Observer: 1 };
+      const realAssets = (rh, ownerHint) => ((rh && rh.raw) || [])
+        .filter(h => {
+          const iss = String(h.admin || "").split("::")[0];
+          return h.id && h.admin && !OURS[iss];
+        })
+        .map(h => ({
+          contractId: h.contractId,
+          payload: {
+            asset: { symbol: h.id === "Amulet" ? "CC" : h.id, admin: h.admin },
+            amount: h.amount,
+            owner: h.owner || ownerHint
+          }
+        }));
       setHold({
         requester: {
           cash: hr.cash || [],
           instruments: hr.instruments || [],
-          assets: (shr && shr.holdings) || []
+          assets: realAssets(rhr, "requester")
         },
         dealer1: {
           cash: hd1.cash || [],
           instruments: hd1.instruments || [],
-          assets: (shd1 && shd1.holdings) || []
+          assets: realAssets(rhd1, "dealer1")
         },
         dealer2: {
           cash: hd2.cash || [],
           instruments: hd2.instruments || [],
-          assets: (shd2 && shd2.holdings) || []
+          assets: realAssets(rhd2, "dealer2")
         }
       });
       setPub((qp.quotes || []).length);
