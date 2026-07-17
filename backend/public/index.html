@@ -692,6 +692,10 @@
   .dq-i:last-child{border-bottom:0}
   .dq-i:hover{background:var(--hover)}
   .dq-i.on{border-left-color:var(--accent);background:var(--accentbg)}
+  .dq-i.lrq{display:flex;align-items:center;justify-content:space-between;gap:10px;color:var(--text)}
+  .lrq-l{display:flex;align-items:center;gap:8px;color:var(--text)}
+  .lrq-arr{opacity:.45}
+  .lrq-q{color:var(--mute)}
   .dq-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
   .dq-id{font:600 10px/1 ui-monospace,monospace;color:var(--mute);letter-spacing:.04em}
   .dq-t{font:600 10px/1 ui-monospace,monospace;color:var(--dim)}
@@ -2663,17 +2667,20 @@ function RequesterDesk(P) {
               const isSel = rfq && r.contractId === rfq.contractId;
               return React.createElement("button", {
                 key: r.contractId,
-                className: "dq-i" + (isSel ? " sel" : ""),
-                onClick: () => setSelRfqCid(r.contractId),
-                style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px" }
+                className: "dq-i lrq" + (isSel ? " on" : ""),
+                onClick: () => {
+                  setSelRfqCid(r.contractId);
+                  // drive REF + the rate fetch to THIS request's pair (keeps value+label agreeing)
+                  if (onPair) onPair({ base: r.payload.offerAsset.symbol, quote: r.payload.wantAsset.symbol });
+                }
               },
-                React.createElement("span", { style: { display: "flex", alignItems: "center", gap: "8px" } },
+                React.createElement("div", { className: "lrq-l" },
                   React.createElement(AssetIcon, { symbol: r.payload.offerAsset.symbol, size: "sm" }),
                   React.createElement("span", { className: "m" }, Number(r.payload.offerAmount).toLocaleString(), " ", r.payload.offerAsset.symbol),
-                  React.createElement("span", { style: { opacity: 0.5 } }, "\u21c4"),
+                  React.createElement("span", { className: "lrq-arr" }, "\u21c4"),
                   React.createElement(AssetIcon, { symbol: r.payload.wantAsset.symbol, size: "sm" }),
                   React.createElement("span", { className: "m" }, r.payload.wantAsset.symbol)),
-                React.createElement("span", { className: "mod-c m" }, qn, qn === 1 ? " quote" : " quotes"));
+                React.createElement("span", { className: "lrq-q m" }, qn, qn === 1 ? " quote" : " quotes"));
             }))) : null,
 
         rfq ? React.createElement("section", { className: "mod mod-focal rq-head" },
