@@ -1502,7 +1502,7 @@ function OperatorConsole({ onExit }) {
         .map(h => ({
           contractId: h.contractId,
           payload: {
-            asset: { symbol: h.id === "Amulet" ? "CC" : h.id, admin: h.admin },
+            asset: { symbol: h.id === "Amulet" ? "CC" : (h.id === "CBTC" ? "cBTC" : h.id), admin: h.admin },
             amount: h.amount,
             owner: h.owner || ownerHint
           }
@@ -2483,7 +2483,7 @@ const mapRealHoldings = (rh, ownerHint) => ((rh && rh.raw) || [])
   .map(h => ({
     contractId: h.contractId,
     payload: {
-      asset: { symbol: h.id === "Amulet" ? "CC" : h.id, admin: h.admin },
+      asset: { symbol: h.id === "Amulet" ? "CC" : (h.id === "CBTC" ? "cBTC" : h.id), admin: h.admin },
       amount: h.amount,
       owner: h.owner || ownerHint
     }
