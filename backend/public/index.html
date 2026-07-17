@@ -2548,6 +2548,7 @@ function RequesterDesk(P) {
   // the vs-mkt bps; only the form pair when there is no live request.
   // Focus: while composing (or none live) the reference follows the form;
   // otherwise the live RFQ. Matches load(), so value + label always agree.
+  const [selRfqCid, setSelRfqCid] = React.useState(null); // requester-selected live RFQ
   const _liveRef = rfqs.find(r => new Date(r.payload.expiresAt).getTime() > Date.now());
   const refPair = (composing || !_liveRef)
     ? (composedPair || { base: "cBTC", quote: "cETH" })
@@ -2590,7 +2591,8 @@ function RequesterDesk(P) {
   // An expired request is DEAD, not "live". The ledger already refuses a late
   // quote; the UI must stop contradicting it -- and must stop pinning both the
   // response count and the market reference to a request that is over.
-  const rfq = rfqs.find(r => !fmt(r.payload.expiresAt).dead) || null;
+  const _liveRfqs = rfqs.filter(r => !fmt(r.payload.expiresAt).dead);
+  const rfq = _liveRfqs.find(r => r.contractId === selRfqCid) || _liveRfqs[0] || null;
   // Quotes ANSWERING THIS REQUEST. rfqCid is an exact link (umbra-v5); a quote
   // predating it falls back to being counted only while still firm.
   const mine = rfq
@@ -2648,6 +2650,31 @@ function RequesterDesk(P) {
               React.createElement("div", { className: "mod-b" },
                 React.createElement(SwapRfqForm, { onPair, onCreate: async (f) => { await onCreate(f); setComposing(false); } })))
           : null,
+
+        _liveRfqs.length > 1 ? React.createElement("section", { className: "mod" },
+          React.createElement("div", { className: "mod-h" },
+            React.createElement("h2", null, "Your live requests"),
+            React.createElement("span", { className: "mod-c m" }, _liveRfqs.length)),
+          React.createElement("div", { className: "mod-b flush" },
+            _liveRfqs.map(r => {
+              const qn = quotes.filter(q =>
+                (!q.payload.rfqCid || q.payload.rfqCid === r.contractId) &&
+                !fmt(q.payload.validUntil).dead).length;
+              const isSel = rfq && r.contractId === rfq.contractId;
+              return React.createElement("button", {
+                key: r.contractId,
+                className: "dq-i" + (isSel ? " sel" : ""),
+                onClick: () => setSelRfqCid(r.contractId),
+                style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px" }
+              },
+                React.createElement("span", { style: { display: "flex", alignItems: "center", gap: "8px" } },
+                  React.createElement(AssetIcon, { symbol: r.payload.offerAsset.symbol, size: "sm" }),
+                  React.createElement("span", { className: "m" }, Number(r.payload.offerAmount).toLocaleString(), " ", r.payload.offerAsset.symbol),
+                  React.createElement("span", { style: { opacity: 0.5 } }, "\u21c4"),
+                  React.createElement(AssetIcon, { symbol: r.payload.wantAsset.symbol, size: "sm" }),
+                  React.createElement("span", { className: "m" }, r.payload.wantAsset.symbol)),
+                React.createElement("span", { className: "mod-c m" }, qn, qn === 1 ? " quote" : " quotes"));
+            }))) : null,
 
         rfq ? React.createElement("section", { className: "mod mod-focal rq-head" },
           React.createElement("div", { className: "mod-h" },
