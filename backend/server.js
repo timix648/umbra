@@ -1667,20 +1667,49 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
     const settlementCid = await pollNewCid(requester, "UmbraSwap:SwapSettlement", b);
     steps.push("recorded on-ledger SwapSettlement (settledVia=real)");
 
-    // atomic settle both real legs (one tx)
-    const sr = await fetch("http://localhost:" + (process.env.PORT || 4000) + "/api/real/settle", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ legs: [
-        { cid: offLeg.cid, registry: offLeg.registry },
-        { cid: wantLeg.cid, registry: wantLeg.registry },
-      ] }),
-    });
-    const sj = await sr.json();
-    if (!sj.ok) throw new Error("atomic settle failed: " + (sj.error || JSON.stringify(sj)));
-    steps.push("executed REAL atomic swap: " + offerAmount + " " + offerAsset.symbol +
-      " <-> " + wantAmount + " " + wantAsset.symbol + " (both legs, one tx)");
+    // v7: atomic settle via ONE on-ledger command -- SwapSettlement.ExecuteRealSwap
+    // executes both Allocation_ExecuteTransfer legs inside a single choice. One
+    // command => interactive-submission can sign it => wallet-signable in SIGNED_MODE.
+    const offerCtx = await execTransferContext(offLeg.registry, offAdmin, offLeg.cid);
+    const wantCtx  = await execTransferContext(wantLeg.registry, wantAdmin, wantLeg.cid);
+    const _dseen = {}; const disclosed = [];
+    for (const ctx of [offerCtx, wantCtx]) {
+      for (const d of (ctx.disclosedContracts || [])) {
+        if (_dseen[d.contractId]) continue; _dseen[d.contractId] = true;
+        disclosed.push({ templateId: d.templateId, contractId: d.contractId,
+          createdEventBlob: d.createdEventBlob, synchronizerId: d.synchronizerId || "" });
+      }
+    }
+    const dealerParty = await partyIdFor(dealerRole);
+    const execCmd = {
+      commandId: "execreal-" + Date.now(),
+      actAs: [...new Set([requester, dealerParty])],
+      commands: [{ ExerciseCommand: {
+        templateId: `#${PKGN}:UmbraSwap:SwapSettlement`,
+        contractId: settlementCid,
+        choice: "ExecuteRealSwap",
+        choiceArgument: {
+          offerArgs: { context: offerCtx.choiceContextData || { values: {} }, meta: { values: {} } },
+          wantArgs:  { context: wantCtx.choiceContextData  || { values: {} }, meta: { values: {} } },
+        },
+      } }],
+      disclosedContracts: disclosed,
+    };
+    await realSubmit(execCmd, "rexecreal");
+    steps.push("executed REAL atomic swap via ExecuteRealSwap: " + offerAmount + " " + offerAsset.symbol +
+      " <-> " + wantAmount + " " + wantAsset.symbol + " (one on-ledger choice)");
 
-    try { await cleanupSwapRfq(p.rfqCid); steps.push("closed RFQ"); } catch (e) {}
+    try {
+      let rfqCid = (req.body && req.body.rfqCid) || p.rfqCid || null;
+      if (!rfqCid) {
+        const invs = await queryActive(requester, "UmbraSwap:SwapInvitation");
+        const match = invs.find(iv => iv.payload &&
+          iv.payload.offerAsset && iv.payload.offerAsset.symbol === offerAsset.symbol &&
+          iv.payload.wantAsset && iv.payload.wantAsset.symbol === wantAsset.symbol);
+        if (match) rfqCid = match.payload.rfqCid;
+      }
+      if (rfqCid) { const cr = await cleanupSwapRfq(rfqCid); steps.push("closed RFQ (+" + cr.invitations + " invitations)"); }
+    } catch (e) {}
 
     res.json({ ok: true, real: true, atomic: true, settlementCid,
       offerSym: offerAsset.symbol, offerAmount, wantSym: wantAsset.symbol, wantAmount,
