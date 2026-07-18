@@ -5,16 +5,26 @@ sdk-version: 3.4.11
 name: umbra-v8
 source: daml
 init-script: UmbraTest:umbraDemo
-version: 0.1.0
+version: 0.1.1
 dependencies:
   - daml-prim
   - daml-stdlib
   - daml-script
 data-dependencies:
-  # Official 1.0.0 Splice token-standard DARs (from the splice-node release bundle).
-  # allocation-v1 package-id = 93c942ae..., matching the real registry allocation, so
-  # Umbra's ExecuteRealSwap exercises the SAME AllocationV1 interface the registry uses.
-  # allocation-instruction dropped: Umbra's Daml does not use it.
-  - vendor/registry-1.0.0/splice-api-token-metadata-v1-1.0.0.dar
-  - vendor/registry-1.0.0/splice-api-token-holding-v1-1.0.0.dar
-  - vendor/registry-1.0.0/splice-api-token-allocation-v1-1.0.0.dar
+  # Registry-matched token-standard packages, pulled directly from the participant
+  # via GET /v2/packages/{id} (their sha256 == the package-id, so these ARE the exact
+  # packages the DevNet registry uses). allocation-v1 = 93c942ae... matches the real
+  # registry allocation, so Umbra's ExecuteRealSwap exercises the SAME AllocationV1
+  # interface the registry implements (fixes CONTRACT_DOES_NOT_IMPLEMENT_INTERFACE).
+  # .dalf files are accepted directly in data-dependencies (no DAR wrapping needed).
+  # allocation-instruction omitted: UmbraSwap.daml imports only Allocation/Holding/Metadata.
+  - vendor/registry-matched/splice-api-token-metadata-v1-4ded6b66.dalf
+  - vendor/registry-matched/splice-api-token-holding-v1-718a0f77.dalf
+  - vendor/registry-matched/splice-api-token-allocation-v1-93c942ae.dalf
+  - vendor/registry-matched/daml-stdlib-9d1a644e.dalf
+  - vendor/registry-matched/daml-prim-54f85ebf.dalf
+
+build-options:
+  - --package=splice-api-token-holding-v1-1.0.0
+  - --package=splice-api-token-metadata-v1-1.0.0
+  - --package=splice-api-token-allocation-v1-1.0.0

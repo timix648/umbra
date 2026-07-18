@@ -362,6 +362,59 @@ template SwapProposal
           wantAllocCid = realWantAllocCid
           settledVia = "real"
 
+    -- SIGNED-MODE path: single-party propose/accept so no step needs two signers
+    -- at once (interactive-submission supports only single-party submissions).
+    -- Requester proposes (requester-signed); dealer accepts (dealer-signed) ->
+    -- SwapSettlement with both authorities, identical to RecordRealSwap's result.
+    choice ProposeRealSwap : ContractId RealSwapPending
+      with
+        realOfferAllocCid : ContractId Allocation
+        realWantAllocCid  : ContractId Allocation
+        realRefMid        : Optional Decimal
+      controller requester
+      do
+        create RealSwapPending with
+          requester; operator; dealer
+          offerAsset; offerAmount; wantAsset; price
+          offerAllocCid = realOfferAllocCid
+          wantAllocCid = realWantAllocCid
+          refMid = realRefMid
+
+
+-- A requester-signed proposal to settle a real swap. The dealer accepts to gather
+-- its authority onto the SwapSettlement -- the propose/accept equivalent of the
+-- two-party RecordRealSwap, but as two single-party transactions.
+template RealSwapPending
+  with
+    requester    : Party
+    operator     : Party
+    dealer       : Party
+    offerAsset   : AssetId
+    offerAmount  : Decimal
+    wantAsset    : AssetId
+    price        : Decimal
+    offerAllocCid : ContractId Allocation
+    wantAllocCid  : ContractId Allocation
+    refMid        : Optional Decimal
+  where
+    signatory requester
+    observer dealer, operator
+
+    choice AcceptRealSwap : ContractId SwapSettlement
+      controller dealer
+      do
+        create SwapSettlement with
+          requester; operator; dealer
+          offerAsset; offerAmount; wantAsset; price
+          refMid
+          offerAllocCid; wantAllocCid
+          settledVia = "real"
+
+    -- Requester can withdraw the proposal if the dealer never accepts.
+    choice WithdrawRealSwap : ()
+      controller requester
+      do pure ()
+
 
 template SwapDealerPending
   with
