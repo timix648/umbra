@@ -247,9 +247,9 @@
       <table>
         <thead><tr><th>Dealer</th><th>Instrument</th><th>Qty</th><th>Price</th></tr></thead>
         <tbody>
-          <tr class="you-row"><td><span class="dot g"></span>You · D1</td><td>UST-2030</td><td>100</td><td class="px">98.50</td></tr>
-          <tr><td><span class="dot a"></span>Dealer 2</td><td>UST-2030</td><td>100</td><td><span class="rd"><i style="--w:34px"></i></span></td></tr>
-          <tr><td><span class="dot a"></span>Dealer 3</td><td>UST-2030</td><td>100</td><td><span class="rd"><i style="--w:26px"></i></span></td></tr>
+          <tr class="you-row"><td><span class="dot g"></span>You · D1</td><td>cBTC / cETH</td><td>0.1</td><td class="px">34.71</td></tr>
+          <tr><td><span class="dot a"></span>Dealer 2</td><td>cBTC / cETH</td><td>0.1</td><td><span class="rd"><i style="--w:34px"></i></span></td></tr>
+          <tr><td><span class="dot a"></span>Dealer 3</td><td>cBTC / cETH</td><td>0.1</td><td><span class="rd"><i style="--w:26px"></i></span></td></tr>
         </tbody>
       </table>
       <div class="bf">You see <b>your own quote</b>. Rival prices aren't hidden by this screen — they were <b>never disclosed to you</b> at the protocol level.</div>
@@ -291,7 +291,7 @@
     <div class="prop">
       <span class="pid">P2 · Atomic settlement</span>
       <h4>Delivery-versus-payment, or nothing</h4>
-      <p>Accepting a quote locks the requester's cash; settlement swaps instrument for cash in a single transaction. There is no moment where one side holds both. Underfund it and the whole trade is rejected — no partial state left behind.</p>
+      <p>Awarding a quote allocates both real legs; settlement swaps one asset for the other — real cBTC, cETH or Canton Coin — in a single transaction. There is no moment where one side holds both. Underfund it and the whole trade is rejected, with nothing stranded.</p>
       <div class="ev"><svg viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg> Proven live · atomic swap + clean abort</div>
     </div>
   </div>
@@ -326,7 +326,7 @@
     <div class="layer"><div class="n">Ledger</div><h5>Per-contract visibility</h5><p>Signatory and observer rules decide who sees a contract. A dealer is a stakeholder only on its own quote — rivals are structurally excluded.</p></div>
     <div class="layer"><div class="n">Settlement</div><h5>Atomic DvP</h5><p>One Daml transaction archives the cash and creates the instrument holding together. Indivisible by construction.</p></div>
     <div class="layer"><div class="n">Identity</div><h5>External-party keys</h5><p>Participants onboard as external parties whose identity is their own keypair, signing via Canton's interactive submission.</p></div>
-    <div class="layer"><div class="n">Assets</div><h5>Token-standard ready</h5><p>Holdings model any asset pair today; the roadmap settles real ecosystem assets via the CIP-56 token standard and Canton Coin.</p></div>
+    <div class="layer"><div class="n">Assets</div><h5>Real assets, live</h5><p>Settles real BitSafe cBTC, onRails cETH and DSO Canton Coin atomically across issuers on Canton DevNet — via the CIP-56 token standard, not stand-in tokens.</p></div>
   </div>
 </section>
 
