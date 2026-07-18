@@ -19,3 +19,16 @@ backend/umbra_swap_endpoints.js
 
 *.local.txt*
 backend/ext-parties*
+
+# scaffolding + backups (kept locally, never in the repo)
+*.bak-*
+*.pre-*
+patch_*.py
+*_patch.py
+backend/.env*
+probe_*.js
+spike/
+
+# scaffolding + backups (kept locally, never committed)
+*.bak
+wrap_dalf.py
