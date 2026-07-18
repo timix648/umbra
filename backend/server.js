@@ -5,6 +5,12 @@
 // against hosts that were provably up. Must run before any socket opens.
 require("dns").setDefaultResultOrder("ipv4first");
 
+// Verbose settlement debugging ([CTXDBG] context/disclosure dumps). Off by default so a
+// demo run has a clean console; re-enable with  UMBRA_DEBUG=1 node server.js
+// Real failures ([settle-real] FAILED/WARN) are NOT gated -- they only fire on error.
+const UMBRA_DEBUG = /^(1|true|yes)$/i.test(String(process.env.UMBRA_DEBUG || ""));
+function dbg(...args) { if (UMBRA_DEBUG) console.error(...args); }
+
 const express = require("express");
 const { ledgerFetch } = require("./token");
 const __tok = require("./token");
@@ -1896,12 +1902,12 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
     if (SIGNED_MODE) {
       const offerCtx = await execTransferContext(offLeg.registry, offAdmin, offLeg.cid);
       const wantCtx  = await execTransferContext(wantLeg.registry, wantAdmin, wantLeg.cid);
-      console.error("[CTXDBG] offerCtx keys:", Object.keys(offerCtx||{}));
-      console.error("[CTXDBG] offerCtx.disclosedContracts:", JSON.stringify((offerCtx.disclosedContracts||[]).map(d=>({t:d.templateId,c:(d.contractId||"").slice(0,20)}))));
-      console.error("[CTXDBG] offerCtx.choiceContextData:", JSON.stringify(offerCtx.choiceContextData||{}).slice(0,1200));
-      console.error("[CTXDBG] wantCtx keys:", Object.keys(wantCtx||{}));
-      console.error("[CTXDBG] wantCtx.disclosedContracts:", JSON.stringify((wantCtx.disclosedContracts||[]).map(d=>({t:d.templateId,c:(d.contractId||"").slice(0,20)}))));
-      console.error("[CTXDBG] wantCtx.choiceContextData:", JSON.stringify(wantCtx.choiceContextData||{}).slice(0,1200));
+      dbg("[CTXDBG] offerCtx keys:", Object.keys(offerCtx||{}));
+      dbg("[CTXDBG] offerCtx.disclosedContracts:", JSON.stringify((offerCtx.disclosedContracts||[]).map(d=>({t:d.templateId,c:(d.contractId||"").slice(0,20)}))));
+      dbg("[CTXDBG] offerCtx.choiceContextData:", JSON.stringify(offerCtx.choiceContextData||{}).slice(0,1200));
+      dbg("[CTXDBG] wantCtx keys:", Object.keys(wantCtx||{}));
+      dbg("[CTXDBG] wantCtx.disclosedContracts:", JSON.stringify((wantCtx.disclosedContracts||[]).map(d=>({t:d.templateId,c:(d.contractId||"").slice(0,20)}))));
+      dbg("[CTXDBG] wantCtx.choiceContextData:", JSON.stringify(wantCtx.choiceContextData||{}).slice(0,1200));
       const _dseen = {}; const disclosed = [];
       for (const ctx of [offerCtx, wantCtx]) {
         for (const d of (ctx.disclosedContracts || [])) {
@@ -1959,9 +1965,9 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
         } }],
         disclosedContracts: disclosed,
       };
-      console.error("[CTXDBG] settlementCid:", (settlementCid||"").slice(0,24));
-      console.error("[CTXDBG] offLeg.cid:", (offLeg.cid||"").slice(0,24), "wantLeg.cid:", (wantLeg.cid||"").slice(0,24));
-      console.error("[CTXDBG] FINAL disclosed set:", JSON.stringify(disclosed.map(d=>({t:(d.templateId||"").split(":").pop(),c:(d.contractId||"").slice(0,20)}))));
+      dbg("[CTXDBG] settlementCid:", (settlementCid||"").slice(0,24));
+      dbg("[CTXDBG] offLeg.cid:", (offLeg.cid||"").slice(0,24), "wantLeg.cid:", (wantLeg.cid||"").slice(0,24));
+      dbg("[CTXDBG] FINAL disclosed set:", JSON.stringify(disclosed.map(d=>({t:(d.templateId||"").split(":").pop(),c:(d.contractId||"").slice(0,20)}))));
       try {
         await realSubmit(execCmd, "rexecreal");
       } catch (execErr) {
