@@ -1274,11 +1274,17 @@ app.post("/api/real/withdraw/:cid", async (req, res) => {
       } }],
       disclosedContracts: disclosed,
     };
-    const r = await ledgerFetch("/v2/commands/submit-and-wait", { method: "POST", body: JSON.stringify(cmd) });
-    const text = await r.text();
-    if (!r.ok) return res.status(500).json({ error: humanize(`${r.status} ${text}`),
-      hint_disclosed_templateIds: disclosed.map(d => d.templateId),
-      hint_context_keys: Object.keys((cdata.values) || {}) });
+    // SIGNED-aware submit: in signed mode the wallet party owns the allocation, so an
+    // operator submit-and-wait is rejected (PERMISSION_DENIED / "security-sensitive
+    // error"). realSubmit party-signs (prepareSignExecuteMulti) in signed mode and does
+    // an operator submit in demo mode.
+    try {
+      await realSubmit(cmd, "rwithdraw");
+    } catch (subErr) {
+      return res.status(500).json({ error: humanize(String(subErr.message || subErr)),
+        hint_disclosed_templateIds: disclosed.map(d => d.templateId),
+        hint_context_keys: Object.keys((cdata.values) || {}) });
+    }
     res.json({ ok: true, withdrawn: cid, instrument: al.instrument, amount: al.amount, unlocked: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1353,6 +1359,78 @@ async function executeContext(registryUrl, registrar, allocationCid) {
 // ---- ATOMIC SETTLEMENT: execute N real allocations in one transaction -------
 // scan-proxy-aware execute-transfer choice-context (unlike executeContext, this
 // routes CC/scan-proxy correctly and carries the ledger token).
+// Fetch specific allocation contracts WITH their createdEventBlob, so a single-party
+// (requester) interactive prepare can DISCLOSE + reference contracts it owns or not
+// (e.g. the dealer's want-leg allocation). Without this the ExecuteRealSwap prepare
+// fails CONTRACT_NOT_FOUND on the dealer's allocation.
+async function allocDisclosure(cids, anyParty) {
+  const want = new Set(cids.filter(Boolean));
+  if (!want.size) return [];
+  const offset = await ledgerEnd();
+  const body = {
+    filter: { filtersByParty: { [anyParty]: { cumulative: [{
+      identifierFilter: { InterfaceFilter: { value: {
+        interfaceId: ALLOC_IFACE,
+        includeInterfaceView: false,
+        includeCreatedEventBlob: true,
+      } } },
+    }] } } },
+    verbose: false,
+    activeAtOffset: offset,
+  };
+  const r = await ledgerFetch("/v2/state/active-contracts", { method: "POST", body: JSON.stringify(body) });
+  const text = await r.text();
+  if (!r.ok) throw new Error(humanize(`${r.status} ${text}`));
+  let items;
+  try { items = JSON.parse(text); }
+  catch { items = text.trim().split("\n").filter(Boolean).map(l => JSON.parse(l)); }
+  const arr = Array.isArray(items) ? items : [items];
+  const out = [];
+  for (const x of arr) {
+    const ce = x?.contractEntry?.JsActiveContract?.createdEvent || x?.activeContract?.createdEvent || x?.createdEvent;
+    if (!ce || !want.has(ce.contractId)) continue;
+    if (!ce.createdEventBlob) continue;
+    out.push({
+      templateId: ce.templateId,
+      contractId: ce.contractId,
+      createdEventBlob: ce.createdEventBlob,
+      synchronizerId: ce.synchronizerId || "",
+    });
+  }
+  return out;
+}
+
+// Fetch a specific Umbra template contract WITH its createdEventBlob so a single-party
+// prepare can disclose+reference it (e.g. the SwapSettlement created by the dealer's accept,
+// which the requester's participant would otherwise not have disclosed).
+async function templateDisclosure(templateSuffix, wantCid, anyParty) {
+  const offset = await ledgerEnd();
+  const body = {
+    filter: { filtersByParty: { [anyParty]: { cumulative: [{
+      identifierFilter: { TemplateFilter: { value: {
+        templateId: `#${PKGN}:${templateSuffix}`,
+        includeCreatedEventBlob: true,
+      } } },
+    }] } } },
+    verbose: false,
+    activeAtOffset: offset,
+  };
+  const r = await ledgerFetch("/v2/state/active-contracts", { method: "POST", body: JSON.stringify(body) });
+  const text = await r.text();
+  if (!r.ok) throw new Error(humanize(`${r.status} ${text}`));
+  let items;
+  try { items = JSON.parse(text); }
+  catch { items = text.trim().split("\n").filter(Boolean).map(l => JSON.parse(l)); }
+  const arr = Array.isArray(items) ? items : [items];
+  for (const x of arr) {
+    const ce = x?.contractEntry?.JsActiveContract?.createdEvent || x?.activeContract?.createdEvent || x?.createdEvent;
+    if (!ce || ce.contractId !== wantCid || !ce.createdEventBlob) continue;
+    return { templateId: ce.templateId, contractId: ce.contractId,
+      createdEventBlob: ce.createdEventBlob, synchronizerId: ce.synchronizerId || "" };
+  }
+  return null;
+}
+
 async function execTransferContext(registryUrl, registrar, allocationCid) {
   const url = regPath(registryUrl, registrar, "allocations/v1/" + allocationCid + "/choice-contexts/execute-transfer");
   const r = await regFetch(registryUrl, url, {
@@ -1530,8 +1608,26 @@ app.get("/api/swap/history", async (req, res) => {
       queryHistory(party, "UmbraSwap:SwapSettlement").catch(() => []),
       queryHistory(party, "UmbraSwap:SwapRfq").catch(() => [])
     ]);
+    // A SwapSettlement only represents a COMPLETED trade if it was consumed by
+    // ExecuteSwap / ExecuteRealSwap (both consuming). A settlement that was created but
+    // never executed (swap failed -> rolled back) stays ACTIVE and must NOT appear in
+    // "Your book" as a completed trade. The archive events ride along in the same
+    // updates stream, so collect them here -- no extra ledger query.
+    const _archived = new Set();
+    for (const it of (settlements || [])) {
+      const _tx = it && it.update && it.update.Transaction && it.update.Transaction.value;
+      for (const ev of ((_tx && _tx.events) || [])) {
+        const ae = ev && ev.ArchivedEvent;
+        if (ae && ae.contractId) _archived.add(ae.contractId);
+      }
+    }
+    const _allSettlements = flattenUpdates(settlements);
+    const _done = _allSettlements.filter(x => _archived.has(x.contractId));
+    const _showAll = String(req.query.all || "") === "1";
     res.json({ ok: true, role,
-      settlements: flattenUpdates(settlements),
+      settlements: _showAll ? _allSettlements : _done,
+      settlementsCreated: _allSettlements.length,
+      settlementsExecuted: _done.length,
       rfqs: flattenUpdates(rfqs) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1644,32 +1740,81 @@ async function withdrawLeg(leg, adminHint) {
 // On settlement failure: archive the orphaned SwapProposal and re-invite the dealer
 // so it can quote again (its invitation+quote were consumed by quote+accept). This
 // makes the failure path symmetric -- the dealer that quoted isn't silently frozen out.
-async function recoverFailedSwap(requester, proposalCid, dealerRole, offerAsset, wantAsset) {
+// Dealer-facing alerts for failed swaps. In-memory (resets on restart) -- enough to tell
+// a dealer "your trade failed, please re-quote". Read via GET /api/swap/alerts?role=...
+const SWAP_ALERTS = [];
+function pushSwapAlert(dealerRole, offerAsset, wantAsset, reason) {
+  SWAP_ALERTS.push({
+    at: new Date().toISOString(),
+    dealer: String(dealerRole || "").toLowerCase(),
+    kind: "swap-failed",
+    pair: `${(offerAsset && offerAsset.symbol) || "?"}/${(wantAsset && wantAsset.symbol) || "?"}`,
+    reason: String(reason || "settlement failed"),
+  });
+  while (SWAP_ALERTS.length > 50) SWAP_ALERTS.shift();
+}
+
+async function recoverFailedSwap(requester, proposalCid, dealerRole, offerAsset, wantAsset, reason) {
+  let reinvited = false;
+
+  // 1. Archive the dead proposal. NOTE: SwapProposal.Archive needs ALL signatories
+  //    (requester AND dealer). act() is single-party, so in SIGNED mode this cannot
+  //    succeed -- that is expected, not fatal. Log it; never let it block step 2.
   try {
-    // archive the dead proposal (best-effort)
     await act("requester", "swap-prop-archive", [{ ExerciseCommand: {
       templateId: `#${PKGN}:UmbraSwap:SwapProposal`, contractId: proposalCid,
-      choice: "Archive", choiceArgument: {} } }]).catch(() => {});
-  } catch (e) {}
+      choice: "Archive", choiceArgument: {} } }]);
+  } catch (e) {
+    console.log("[recoverFailedSwap] proposal archive failed (expected in signed mode):",
+                e && e.message);
+  }
+
+  // 2. Re-invite the dealer on the still-live RFQ so it can quote again. InviteDealer is
+  //    controlled by the requester alone, so this DOES work single-party in signed mode.
   try {
-    // find the still-live RFQ for this pair and re-invite the dealer
     const rfqs = await queryActive(requester, "UmbraSwap:SwapRfq");
     const rfq = rfqs.find(r => r.payload &&
       r.payload.offerAsset && r.payload.offerAsset.symbol === offerAsset.symbol &&
       r.payload.wantAsset && r.payload.wantAsset.symbol === wantAsset.symbol);
-    if (!rfq) return false;
-    const dealerParty = await partyIdFor(dealerRole);
-    // already has a live invitation? then nothing to do.
-    const invs = await queryActive(requester, "UmbraSwap:SwapInvitation");
-    const has = invs.some(iv => iv.payload && iv.payload.rfqCid === rfq.contractId &&
-      iv.payload.dealer === dealerParty);
-    if (has) return true;
-    await act("requester", "swap-reinvite", [{ ExerciseCommand: {
-      templateId: `#${PKGN}:UmbraSwap:SwapRfq`, contractId: rfq.contractId,
-      choice: "InviteDealer", choiceArgument: { dealer: dealerParty } } }]);
-    return true;
-  } catch (e) { return false; }
+    if (!rfq) {
+      console.log("[recoverFailedSwap] no live RFQ for", offerAsset && offerAsset.symbol,
+                  "/", wantAsset && wantAsset.symbol, "- cannot re-invite");
+    } else {
+      const dealerParty = await partyIdFor(dealerRole);
+      const invs = await queryActive(requester, "UmbraSwap:SwapInvitation");
+      const has = invs.some(iv => iv.payload && iv.payload.rfqCid === rfq.contractId &&
+        iv.payload.dealer === dealerParty);
+      if (has) {
+        reinvited = true;                     // dealer can already quote again
+      } else {
+        await act("requester", "swap-reinvite", [{ ExerciseCommand: {
+          templateId: `#${PKGN}:UmbraSwap:SwapRfq`, contractId: rfq.contractId,
+          choice: "InviteDealer", choiceArgument: { dealer: dealerParty } } }]);
+        reinvited = true;
+        console.log("[recoverFailedSwap] re-invited", dealerRole, "on rfq",
+                    String(rfq.contractId).slice(0, 16));
+      }
+    }
+  } catch (e) {
+    console.log("[recoverFailedSwap] re-invite FAILED:", e && e.message);
+  }
+
+  // 3. Always leave the dealer a signal, even if the re-invite failed.
+  try { pushSwapAlert(dealerRole, offerAsset, wantAsset, reason); } catch (e) {}
+
+  return reinvited;
 }
+
+// Dealer polls this to learn a swap it quoted on failed (and that it may re-quote).
+app.get("/api/swap/alerts", async (req, res) => {
+  try {
+    const role = String(req.query.role || "").toLowerCase();
+    const since = req.query.since ? String(req.query.since) : null;
+    let out = role ? SWAP_ALERTS.filter(a => a.dealer === role) : SWAP_ALERTS.slice();
+    if (since) out = out.filter(a => a.at > since);
+    res.json({ ok: true, role: role || null, alerts: out.slice(-10).reverse() });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
   const steps = [];
@@ -1707,12 +1852,40 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
     let refMid = null;
     try { refMid = await refMidFor(offerAsset.symbol, wantAsset.symbol); } catch (e) {}
     const b = await idSetSwap(requester, "UmbraSwap:SwapSettlement");
-    await actMulti(["requester", dealerRole], "swap-record-real", [{
-      ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapProposal`,
-        contractId: req.params.cid, choice: "RecordRealSwap",
-        choiceArgument: { realOfferAllocCid: offLeg.cid, realWantAllocCid: wantLeg.cid, realRefMid: refMid } } }]);
-    const settlementCid = await pollNewCid(requester, "UmbraSwap:SwapSettlement", b);
-    steps.push("recorded on-ledger SwapSettlement (settledVia=real)");
+    let settlementCid;
+    if (SIGNED_MODE) {
+      // single-party propose/accept (interactive-submission is single-party only):
+      // requester proposes (signs), dealer accepts (signs) -> SwapSettlement.
+      const pb = await idSetSwap(requester, "UmbraSwap:RealSwapPending");
+      try {
+        await act("requester", "swap-propose-real", [{
+          ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapProposal`,
+            contractId: req.params.cid, choice: "ProposeRealSwap",
+            choiceArgument: { realOfferAllocCid: offLeg.cid, realWantAllocCid: wantLeg.cid, realRefMid: refMid } } }]);
+        const pendingCid = await pollNewCid(requester, "UmbraSwap:RealSwapPending", pb);
+        steps.push("requester proposed real settlement (party-signed)");
+        await act(dealerRole, "swap-accept-real", [{
+          ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:RealSwapPending`,
+            contractId: pendingCid, choice: "AcceptRealSwap", choiceArgument: {} } }]);
+        settlementCid = await pollNewCid(requester, "UmbraSwap:SwapSettlement", b);
+        steps.push("dealer accepted -> on-ledger SwapSettlement (settledVia=real, party-signed)");
+      } catch (paErr) {
+        console.error("[settle-real][SIGNED][propose/accept] FAILED:", paErr && (paErr.stack || paErr.message || paErr));
+        // propose/accept failed AFTER both legs were allocated -> roll back so the
+        // real cBTC/CC don't strand locked (same protection the execute step has).
+        await withdrawLeg(offLeg); await withdrawLeg(wantLeg);
+        await recoverFailedSwap(requester, req.params.cid, dealerRole, offerAsset, wantAsset);
+        steps.push("propose/accept failed \u2014 rolled back allocations + re-opened the request for " + dealerRole);
+        throw paErr;
+      }
+    } else {
+      await actMulti(["requester", dealerRole], "swap-record-real", [{
+        ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapProposal`,
+          contractId: req.params.cid, choice: "RecordRealSwap",
+          choiceArgument: { realOfferAllocCid: offLeg.cid, realWantAllocCid: wantLeg.cid, realRefMid: refMid } } }]);
+      settlementCid = await pollNewCid(requester, "UmbraSwap:SwapSettlement", b);
+      steps.push("recorded on-ledger SwapSettlement (settledVia=real)");
+    }
 
     // Atomic settle. Two paths, chosen by mode:
     //  DEMO   -> /api/real/settle: two Allocation_ExecuteTransfer in one tx. Robust:
@@ -1723,6 +1896,12 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
     if (SIGNED_MODE) {
       const offerCtx = await execTransferContext(offLeg.registry, offAdmin, offLeg.cid);
       const wantCtx  = await execTransferContext(wantLeg.registry, wantAdmin, wantLeg.cid);
+      console.error("[CTXDBG] offerCtx keys:", Object.keys(offerCtx||{}));
+      console.error("[CTXDBG] offerCtx.disclosedContracts:", JSON.stringify((offerCtx.disclosedContracts||[]).map(d=>({t:d.templateId,c:(d.contractId||"").slice(0,20)}))));
+      console.error("[CTXDBG] offerCtx.choiceContextData:", JSON.stringify(offerCtx.choiceContextData||{}).slice(0,1200));
+      console.error("[CTXDBG] wantCtx keys:", Object.keys(wantCtx||{}));
+      console.error("[CTXDBG] wantCtx.disclosedContracts:", JSON.stringify((wantCtx.disclosedContracts||[]).map(d=>({t:d.templateId,c:(d.contractId||"").slice(0,20)}))));
+      console.error("[CTXDBG] wantCtx.choiceContextData:", JSON.stringify(wantCtx.choiceContextData||{}).slice(0,1200));
       const _dseen = {}; const disclosed = [];
       for (const ctx of [offerCtx, wantCtx]) {
         for (const d of (ctx.disclosedContracts || [])) {
@@ -1731,10 +1910,44 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
             createdEventBlob: d.createdEventBlob, synchronizerId: d.synchronizerId || "" });
         }
       }
-      const dealerParty = await partyIdFor(dealerRole);
+      // ALSO disclose both allocation contracts themselves, so the single-party
+      // (requester) prepare can reference the dealer's want-leg allocation (which the
+      // requester's participant would otherwise not have visibility to) -> avoids
+      // CONTRACT_NOT_FOUND at /v2/interactive-submission/prepare.
+      try {
+        // The OFFER leg belongs to the requester -> visible in requester's view.
+        // The WANT leg belongs to the DEALER -> NOT visible to requester; must be fetched
+        // from the dealer's view. (Found via CTXDBG: want-leg cid was missing from the
+        // disclosed set because it was queried as requester.)
+        const dealerParty = await partyIdFor(dealerRole);
+        const offDiscs  = await allocDisclosure([offLeg.cid], requester);
+        const wantDiscs = await allocDisclosure([wantLeg.cid], dealerParty);
+        for (const d of [...offDiscs, ...wantDiscs]) {
+          if (_dseen[d.contractId]) continue; _dseen[d.contractId] = true;
+          disclosed.push(d);
+        }
+        if (!wantDiscs.length) console.error("[settle-real][SIGNED] WARN: want-leg blob not found even in dealer view for", wantLeg.cid);
+      } catch (adErr) {
+        console.error("[settle-real][SIGNED] allocDisclosure failed (continuing):", adErr && adErr.message);
+      }
+      // ALSO disclose the SwapSettlement contract itself: the requester exercises
+      // ExecuteRealSwap on it, but it was created by the dealer's AcceptRealSwap, so the
+      // requester's participant doesn't have it disclosed -> CONTRACT_NOT_FOUND without this.
+      try {
+        const setDisc = await templateDisclosure("UmbraSwap:SwapSettlement", settlementCid, requester);
+        if (setDisc && !_dseen[setDisc.contractId]) { _dseen[setDisc.contractId] = true; disclosed.push(setDisc); }
+        else if (!setDisc) console.error("[settle-real][SIGNED] settlement blob not found for", settlementCid);
+      } catch (sdErr) {
+        console.error("[settle-real][SIGNED] settlement disclosure failed (continuing):", sdErr && sdErr.message);
+      }
+      // ExecuteRealSwap is `controller operator` -> single-party. In this app the
+      // operator IS the requester (operator == partyIdFor("requester")). Authority for
+      // the nested Allocation_ExecuteTransfer comes from the SwapSettlement signatories
+      // (requester+dealer, gathered via propose/accept), NOT from actAs. So actAs is
+      // the operator/requester alone -> satisfies single-party interactive submission.
       const execCmd = {
         commandId: "execreal-" + Date.now(),
-        actAs: [...new Set([requester, dealerParty])],
+        actAs: [requester],
         commands: [{ ExerciseCommand: {
           templateId: `#${PKGN}:UmbraSwap:SwapSettlement`,
           contractId: settlementCid,
@@ -1746,9 +1959,13 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
         } }],
         disclosedContracts: disclosed,
       };
+      console.error("[CTXDBG] settlementCid:", (settlementCid||"").slice(0,24));
+      console.error("[CTXDBG] offLeg.cid:", (offLeg.cid||"").slice(0,24), "wantLeg.cid:", (wantLeg.cid||"").slice(0,24));
+      console.error("[CTXDBG] FINAL disclosed set:", JSON.stringify(disclosed.map(d=>({t:(d.templateId||"").split(":").pop(),c:(d.contractId||"").slice(0,20)}))));
       try {
         await realSubmit(execCmd, "rexecreal");
       } catch (execErr) {
+        console.error("[settle-real][SIGNED][execute] FAILED:", execErr && (execErr.stack || execErr.message || execErr));
         await withdrawLeg(offLeg); await withdrawLeg(wantLeg);
         await recoverFailedSwap(requester, req.params.cid, dealerRole, offerAsset, wantAsset);
         steps.push("settlement failed \u2014 rolled back allocations + re-opened the request for " + dealerRole);
@@ -1793,7 +2010,11 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
     res.json({ ok: true, real: true, atomic: true, settlementCid,
       offerSym: offerAsset.symbol, offerAmount, wantSym: wantAsset.symbol, wantAmount,
       signed: SIGNED_MODE, steps });
-  } catch (e) { res.status(500).json({ error: e.message, steps }); }
+  } catch (e) {
+    console.error("[settle-real][OUTER] FAILED:", e && (e.stack || e.message || e));
+    console.error("[settle-real][OUTER] steps so far:", JSON.stringify(steps));
+    res.status(500).json({ error: e.message, steps });
+  }
 });
 
 app.post("/api/swap/proposals/:cid/commit-offer", async (req, res) => {

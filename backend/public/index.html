@@ -645,6 +645,10 @@
   .mr-pair{font:600 10px/1 ui-monospace,monospace;color:var(--dim)}
   .mr-mid{font:650 34px/1 ui-monospace,monospace;font-variant-numeric:tabular-nums;color:var(--text)}
   .mr-mid span{margin-left:9px;font-size:11px;font-weight:600;color:var(--dim)}
+/* a tiny rate (e.g. CC/cETH) renders through fmtNum as a <span>; it is the NUMBER,
+   not the pair label, so it must keep the big .mr-mid typography. */
+.mr-mid .fnum{margin-left:0;font-size:inherit;font-weight:inherit;color:inherit;letter-spacing:inherit}
+.mr-mid .fnum sub{font-size:.62em;font-weight:inherit}
   .mr-spark{width:100%;height:44px;margin:14px 0 10px;display:block}
   .mr-spark.empty{height:44px;border-bottom:1px dashed var(--line2)}
   .mr-foot{display:flex;align-items:center;gap:8px;font:500 10px/1 ui-monospace,monospace;color:var(--dim)}
@@ -1497,11 +1501,14 @@ function OperatorConsole({ onExit }) {
       // Map REAL /api/real/holdings (raw, issuer-issued only) into the panel's
       // holding shape. Skip self-issued stand-ins (admin hint in our own parties)
       // and null views. "Amulet" -> "CC" for display consistency.
-      const OURS = { Requester: 1, Dealer1: 1, Dealer2: 1, Observer: 1 };
+      // REAL = issued by a known external registry. WHITELIST, never blacklist: in
+      // signed mode the WALLET parties mint self-issued stand-ins too, so excluding only
+      // the demo party names let those fakes through as "real".
+      const REAL_ISS = { "cbtc-network": 1, "DSO": 1, "rails-cethMain-1-dev": 1 };
       const realAssets = (rh, ownerHint) => ((rh && rh.raw) || [])
         .filter(h => {
           const iss = String(h.admin || "").split("::")[0];
-          return h.id && h.admin && !OURS[iss];
+          return h.id && h.admin && REAL_ISS[iss];
         })
         .map(h => ({
           contractId: h.contractId,
@@ -1511,20 +1518,22 @@ function OperatorConsole({ onExit }) {
             owner: h.owner || ownerHint
           }
         }));
+      // Real DevNet tokens only. The stand-in cash/instruments (USD, UST-2030 from
+      // /api/holdings) are demo scaffolding and are no longer shown anywhere.
       setHold({
         requester: {
-          cash: hr.cash || [],
-          instruments: hr.instruments || [],
+          cash: [],
+          instruments: [],
           assets: realAssets(rhr, "requester")
         },
         dealer1: {
-          cash: hd1.cash || [],
-          instruments: hd1.instruments || [],
+          cash: [],
+          instruments: [],
           assets: realAssets(rhd1, "dealer1")
         },
         dealer2: {
-          cash: hd2.cash || [],
-          instruments: hd2.instruments || [],
+          cash: [],
+          instruments: [],
           assets: realAssets(rhd2, "dealer2")
         }
       });
@@ -2489,9 +2498,9 @@ function Login({ onPick }) {
 // contracts is still one cBTC balance. Aggregate per symbol before showing a
 // number to a human, or the header reads "1 cBTC" and "9 cBTC" side by side.
 // Map /api/real/holdings raw -> panel holding shape; keep only issuer-issued (real).
-const OURS_ISS = { Requester: 1, Dealer1: 1, Dealer2: 1, Observer: 1 };
+const REAL_ISS_M = { "cbtc-network": 1, "DSO": 1, "rails-cethMain-1-dev": 1 };
 const mapRealHoldings = (rh, ownerHint) => ((rh && rh.raw) || [])
-  .filter(h => h.id && h.admin && !OURS_ISS[String(h.admin).split("::")[0]])
+  .filter(h => h.id && h.admin && REAL_ISS_M[String(h.admin).split("::")[0]])
   .map(h => ({
     contractId: h.contractId,
     payload: {
@@ -2545,7 +2554,7 @@ const fmtNum = (v) => {
   const dec = s.split(".")[1] || "";
   let zeros = 0; while (dec[zeros] === "0") zeros++;
   const sig = dec.slice(zeros).replace(/0+$/, "").slice(0, 4) || "0";
-  return React.createElement("span", null,
+  return React.createElement("span", { className: "fnum" },
     (n < 0 ? "-" : ""), "0.0",
     React.createElement("sub", null, zeros),
     sig);
@@ -2569,7 +2578,15 @@ const ThemeBtn = ({ theme, flip }) => React.createElement("button", {
 const DEALER_NAMES = { dealer1: "Meridian Capital", dealer2: "Halcyon Markets" };
 const DEALER_NAME = p => DEALER_NAMES[cleanRole(p)] || cleanRole(p) || "Dealer";
 const ASSET_LONGS = { cBTC: "Bitcoin", cETH: "Ethereum", CC: "Canton Coin" };
-const ASSET_LONG = sym => ASSET_LONGS[sym] || sym;
+// Who actually ISSUES each real token on DevNet. These are the registries whose assets
+// Umbra settles atomically -- name them, don't just name the underlying.
+const ASSET_ISSUERS = { cBTC: "BitSafe", cETH: "onRails", CC: "Canton Foundation" };
+const ASSET_ISSUER = sym => ASSET_ISSUERS[sym] || "";
+const ASSET_LONG = sym => {
+  const long = ASSET_LONGS[sym] || sym;
+  const iss = ASSET_ISSUERS[sym];
+  return iss ? long + " \u00b7 " + iss : long;
+};
 
 function RequesterDesk(P) {
   const { meta, signed, onExit, note, rfqs, quotes, holdings, rate, series, usd, rateNote,
@@ -3036,14 +3053,37 @@ function TradeBook({ settled }) {
 function DealerDesk(P) {
   const { meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, usd, price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid, role } = P;
   const [proof, setProof] = useState(null); // dealer ledger-proof modal cid
+  // Failed-swap alert. The backend records one (GET /api/swap/alerts) when a swap this
+  // dealer quoted on fails to settle and the RFQ is re-opened. Dismissible, and cleared
+  // automatically as soon as the dealer starts a new quote (via the existing `busy`
+  // flag) so a stale warning never lingers.
+  const [swapAlert, setSwapAlert] = useState(null);
+  const [alertHidden, setAlertHidden] = useState(false);
+  React.useEffect(() => {
+    let stop = false;
+    const load = () => api("/api/swap/alerts?role=" + role)
+      .then(r => {
+        if (stop || !r || !r.alerts || !r.alerts.length) return;
+        setSwapAlert(r.alerts[0]);
+        setAlertHidden(false);
+      })
+      .catch(() => {});
+    load();
+    const t = setInterval(load, 8000);
+    return () => { stop = true; clearInterval(t); };
+  }, [role]);
+  React.useEffect(() => { if (busy) setAlertHidden(true); }, [busy]);
   const [theme, flipTheme] = useTheme();
   // Split invitations by ledger-enforced expiry -- an expired one must never hold
   // the active slot (Canton refuses a late quote anyway). The dealer clicks a LIVE
   // request to make it active; default is the first live invitation.
   const _now = Date.now();
   const _isLive = iv => { const t = new Date(iv.payload.expiresAt).getTime(); return isNaN(t) || t > _now; };
-  const liveInv = inv.filter(_isLive);
-  const expiredInv = inv.filter(iv => !_isLive(iv));
+  // Order the desk: live requests by SOONEST expiry (what needs a price now sits at the
+  // top), resolved/expired ones most-recently-resolved first, underneath.
+  const _expAt = iv => { const t = new Date(iv.payload.expiresAt).getTime(); return isNaN(t) ? Infinity : t; };
+  const liveInv = inv.filter(_isLive).sort((a, b) => _expAt(a) - _expAt(b));
+  const expiredInv = inv.filter(iv => !_isLive(iv)).sort((a, b) => _expAt(b) - _expAt(a));
   const active = liveInv.find(iv => iv.contractId === selInvCid) || liveInv[0] || null;
   const rest   = liveInv.filter(iv => !active || iv.contractId !== active.contractId);
   const settled = (history && history.settlements) || [];
@@ -3091,6 +3131,21 @@ function DealerDesk(P) {
   const queueCount = inv.length + settled.length;
 
   return React.createElement("div", { className: "prt" },
+    (swapAlert && !alertHidden) ? React.createElement("div", {
+        className: "prt-alert",
+        style: { display: "flex", alignItems: "center", gap: "10px",
+                 margin: "10px 14px 0", padding: "10px 12px", borderRadius: "8px",
+                 background: "rgba(214,64,64,.10)", border: "1px solid rgba(214,64,64,.38)",
+                 fontSize: "13px", lineHeight: "1.4" } },
+      React.createElement("span", { style: { fontSize: "15px" } }, "\u26A0"),
+      React.createElement("span", { style: { flex: 1 } },
+        "A trade you quoted" + (swapAlert.pair ? " (" + swapAlert.pair + ")" : "") +
+        " failed to settle. The request is open again - you can re-quote."),
+      React.createElement("button", {
+        onClick: () => setAlertHidden(true), title: "Dismiss",
+        style: { background: "transparent", border: "none", cursor: "pointer",
+                 fontSize: "16px", fontWeight: 600, opacity: .65, padding: "0 2px" } },
+        "\u00D7")) : null,
     // header with REF + countdown
     React.createElement("header", { className: "prt-bar" },
       React.createElement("div", { className: "prt-id" },
