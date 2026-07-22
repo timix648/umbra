@@ -8,6 +8,8 @@ import DA.Optional (isSome)
 import Splice.Api.Token.HoldingV1
 import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.AllocationV1
+import Splice.Api.Token.AllocationRequestV1
+import qualified DA.TextMap as TextMap
 
 -- ============================================================================
 -- UMBRA SWAP -- the unified any-to-any settlement engine.
@@ -384,6 +386,45 @@ template SwapProposal
 -- A requester-signed proposal to settle a real swap. The dealer accepts to gather
 -- its authority onto the SwapSettlement -- the propose/accept equivalent of the
 -- two-party RecordRealSwap, but as two single-party transactions.
+    -- CIP-56 AllocationRequest (Trojan Horse): a standard Canton wallet reads this view
+    -- and prompts each sender to allocate their leg -- no custom-DAR vetting needed.
+    interface instance AllocationRequest for SwapProposal where
+      allocationRequest_RejectImpl _self _arg =
+        pure (ChoiceExecutionMetadata with meta = emptyMetadata)
+      allocationRequest_WithdrawImpl _self _arg =
+        pure (ChoiceExecutionMetadata with meta = emptyMetadata)
+      view = AllocationRequestView with
+        settlement = SettlementInfo with
+          executor = operator
+          settlementRef = Reference with
+            id = offerAsset.symbol <> "/" <> wantAsset.symbol
+            cid = None
+          requestedAt = time (date 2024 Jan 1) 0 0 0
+          allocateBefore = time (date 2099 Jan 1) 0 0 0
+          settleBefore = time (date 2099 Jan 1) 0 0 0
+          meta = emptyMetadata
+        transferLegs = TextMap.fromList
+          [ ( "offer"
+            , TransferLeg with
+                sender = requester
+                receiver = dealer
+                amount = offerAmount
+                instrumentId = InstrumentId with
+                  admin = offerAsset.admin
+                  id = offerAsset.symbol
+                meta = emptyMetadata )
+          , ( "want"
+            , TransferLeg with
+                sender = dealer
+                receiver = requester
+                amount = price
+                instrumentId = InstrumentId with
+                  admin = wantAsset.admin
+                  id = wantAsset.symbol
+                meta = emptyMetadata )
+          ]
+        meta = emptyMetadata
+
 template RealSwapPending
   with
     requester    : Party
