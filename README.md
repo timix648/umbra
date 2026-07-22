@@ -21,6 +21,8 @@ Targeting the **cBTC** (BitSafe) and **cETH** (onRails) asset challenges with a 
 
 - **Live app:** https://um-bra.app/
 - **Contact:** https://x.com/UmbraOnCanton
+- **Demo:** https://youtu.be/bclZUlSeiE0?si=w7SfAyIYbb5juLzF
+- **Presentation Deck:** https://docs.google.com/presentation/d/1WoZ2BQWhdrjZlP-PPh5HQ4Jc2g2BCceG/edit?usp=sharing&ouid=111114609282721158539&rtpof=true&sd=true
 
 ---
 
