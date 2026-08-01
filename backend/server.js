@@ -251,9 +251,25 @@ async function cleanupRfq(rfqId) {
   }
 }
 
-const POLL_TRIES = Number(process.env.POLL_TRIES || 12);          // pre-verdict guess
+// 20 x 1200ms = 24s. Was 12 (14.4s), which is where the RealSwapPending timeouts
+// came from: the proposes DID commit, just after we stopped looking. cBTC settles
+// comfortably inside the old window and two cETH swaps did too, so the shortfall is
+// small -- this widens it without changing anything else. Raise POLL_TRIES if a
+// commit ever needs longer; nothing here fails faster because of it.
+const POLL_TRIES = Number(process.env.POLL_TRIES || 20);
 const POLL_TRIES_COMMITTED = Number(process.env.POLL_TRIES_COMMITTED || 30); // post-verdict
-const COMPLETION_TIMEOUT_MS = Number(process.env.COMPLETION_TIMEOUT_MS || 90000);
+const ALLOC_POLL_TRIES = Number(process.env.ALLOC_POLL_TRIES || 12); // 12 x 400ms = 4.8s, unchanged
+const COMPLETION_TIMEOUT_MS = Number(process.env.COMPLETION_TIMEOUT_MS || 60000);
+// Allocations commit fast when they commit at all, so they get a much smaller
+// budget: a leg that has not reached a verdict in this long is not worth blocking
+// a live settlement for -- fall back to polling instead of stalling both legs.
+const ALLOC_COMPLETION_TIMEOUT_MS = Number(process.env.ALLOC_COMPLETION_TIMEOUT_MS || 20000);
+// OFF BY DEFAULT, opt in with UMBRA_COMPLETIONS=1 (same fail-safe shape as the
+// DISCLOSE_INPUT_HOLDING probe). While off, awaitCompletion() reports "no verdict"
+// and every caller runs its original contract-polling path, so the working cBTC
+// settlement path is byte-identical to before. Turn it on to get real rejection
+// reasons instead of a bare timeout -- ideally on a run you expect to fail.
+const COMPLETIONS_ENABLED = /^(1|true|yes)$/i.test(String(process.env.UMBRA_COMPLETIONS || ""));
 const LEDGER_USER_ID = process.env.LEDGER_USER_ID || "6";
 
 async function pollNewCid(party, templateModuleEntity, beforeSet, tries = POLL_TRIES) {
@@ -307,7 +323,7 @@ function completionOf(row) {
 //   { found:false }                      unreadable/timed out -> caller falls back
 // Never throws: if completions are unavailable the caller must still work.
 async function awaitCompletion(party, commandId, beginExclusive, timeoutMs = COMPLETION_TIMEOUT_MS) {
-  if (!commandId) return { found: false };
+  if (!commandId || !COMPLETIONS_ENABLED) return { found: false };
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     let rows;
@@ -2474,13 +2490,13 @@ async function locateAllocation(j, senderParty, beforeIds, instrId, amount, labe
   let committed = false;
   if (j && j.commandId) {
     const v = await awaitCompletion(senderParty, j.commandId,
-      j.offBefore !== undefined ? j.offBefore : 0);
+      j.offBefore !== undefined ? j.offBefore : 0, ALLOC_COMPLETION_TIMEOUT_MS);
     if (v.found && !v.ok) {
       throw new Error(humanize(`allocation rejected by the ledger: ${v.message || "code " + v.code}`));
     }
     committed = !!v.found;
   }
-  const tries = committed ? POLL_TRIES_COMMITTED : 12;
+  const tries = committed ? POLL_TRIES_COMMITTED : ALLOC_POLL_TRIES;
   for (let i = 0; i < tries; i++) {
     const now = await queryAllocations(senderParty);
     const fresh = now.find(a => !beforeIds.has(a.contractId) &&
