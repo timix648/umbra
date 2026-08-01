@@ -155,8 +155,11 @@ async function realSubmit(body, tag) {
       recs.push(await recFor(role));
     }
     if (!recs.length) throw new Error("signed mode: no signers resolved for real submit");
-    await prepareSignExecuteMulti(recs, body.commands, tag || "rsub", body.disclosedContracts || []);
-    return;
+    // Return the execute result so callers can look the submission up in
+    // /v2/commands/completions -- otherwise an async-accepted allocation that was
+    // actually REJECTED looks identical to one that just committed slowly, and the
+    // retry loop re-submits it (producing LOCAL_VERDICT_INACTIVE_CONTRACTS).
+    return await prepareSignExecuteMulti(recs, body.commands, tag || "rsub", body.disclosedContracts || []);
   }
   const r = await ledgerFetch("/v2/commands/submit-and-wait", { method: "POST", body: JSON.stringify(body) });
   const text = await r.text();
@@ -248,7 +251,12 @@ async function cleanupRfq(rfqId) {
   }
 }
 
-async function pollNewCid(party, templateModuleEntity, beforeSet, tries = 12) {
+const POLL_TRIES = Number(process.env.POLL_TRIES || 12);          // pre-verdict guess
+const POLL_TRIES_COMMITTED = Number(process.env.POLL_TRIES_COMMITTED || 30); // post-verdict
+const COMPLETION_TIMEOUT_MS = Number(process.env.COMPLETION_TIMEOUT_MS || 90000);
+const LEDGER_USER_ID = process.env.LEDGER_USER_ID || "6";
+
+async function pollNewCid(party, templateModuleEntity, beforeSet, tries = POLL_TRIES) {
   for (let i = 0; i < tries; i++) {
     const ids = (await queryActive(party, templateModuleEntity)).map((c) => c.contractId);
     const fresh = ids.find((id) => !beforeSet.has(id));
@@ -256,6 +264,85 @@ async function pollNewCid(party, templateModuleEntity, beforeSet, tries = 12) {
     await sleep(1200);
   }
   throw new Error(`timed out waiting for new ${templateModuleEntity} for ${party.slice(0, 24)}…`);
+}
+
+// ---------------------------------------------------------------------------
+// COMMAND COMPLETIONS -- the ledger's actual verdict on a submission.
+//
+// In SIGNED mode execute is async-accepted: HTTP 200 means "admitted for
+// processing", NOT "committed". This codebase used to infer the outcome purely
+// from whether a contract showed up within a fixed poll window, which cannot
+// distinguish these three cases:
+//     committed slowly | rejected outright | never sequenced
+// They were all reported as "timed out waiting for new X". Reading completions
+// tells them apart, and surfaces the rejection REASON instead of discarding it.
+// ---------------------------------------------------------------------------
+async function readCompletions(party, beginExclusive, idleMs = 3000) {
+  const r = await ledgerFetch(
+    `/v2/commands/completions?limit=200&stream_idle_timeout_ms=${idleMs}`,
+    { method: "POST", body: JSON.stringify({
+        userId: LEDGER_USER_ID, parties: [party], beginExclusive }) });
+  const text = await r.text();
+  if (!r.ok) throw new Error(`${r.status} ${text.slice(0, 200)}`);
+  let rows;
+  try { rows = JSON.parse(text); }
+  catch {
+    rows = text.trim().split("\n").filter(Boolean)
+      .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  }
+  return [].concat(rows);
+}
+
+// Shape varies across Canton builds; unwrap defensively.
+function completionOf(row) {
+  return (row && row.completionResponse && row.completionResponse.Completion &&
+          row.completionResponse.Completion.value) ||
+         (row && row.Completion && row.Completion.value) ||
+         (row && row.completion) || row;
+}
+
+// Wait for `commandId` to reach a verdict. Returns:
+//   { found:true,  ok:true  }            committed
+//   { found:true,  ok:false, message }   rejected, with the ledger's reason
+//   { found:false }                      unreadable/timed out -> caller falls back
+// Never throws: if completions are unavailable the caller must still work.
+async function awaitCompletion(party, commandId, beginExclusive, timeoutMs = COMPLETION_TIMEOUT_MS) {
+  if (!commandId) return { found: false };
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    let rows;
+    try { rows = await readCompletions(party, beginExclusive); }
+    catch (e) {
+      console.log("[completion] unreadable (falling back to polling):", e.message);
+      return { found: false, error: e.message };
+    }
+    for (const row of rows) {
+      const c = completionOf(row);
+      if (!c || c.commandId !== commandId) continue;
+      const code = c.status && c.status.code;
+      const ok = code === undefined || code === 0;
+      return { found: true, ok, code,
+               message: (c.status && c.status.message) || "" };
+    }
+    await sleep(800);
+  }
+  return { found: false, timedOut: true };
+}
+
+// Turn an async-accepted submission into a definite answer.
+//   true  -> committed (caller may poll for the contract with confidence)
+//   false -> no verdict readable (caller falls back to its old best-effort poll)
+//   throw -> the ledger REJECTED it, carrying the real reason
+async function confirmCommitted(party, execRes, beginExclusive, what) {
+  const commandId = execRes && execRes.commandId;
+  if (!commandId) return false;                 // demo mode: already synchronous
+  const v = await awaitCompletion(party, commandId, beginExclusive);
+  if (v.found && !v.ok) {
+    throw new Error(humanize(`${what} rejected by the ledger: ${v.message || "code " + v.code}`));
+  }
+  if (v.found) { dbg(`[completion] ${what} committed (${commandId})`); return true; }
+  console.log(`[completion] no verdict for ${what} (${commandId}) - falling back to contract polling`);
+  return false;
 }
 
 // ---- existing operator submit (demo-mode path, synchronous commit) ----
@@ -1144,9 +1231,13 @@ app.post("/api/real/allocate", async (req, res) => {
       } }],
       disclosedContracts: disclosed,
     };
-    await realSubmit(cmd, "rallocate");
+    // Capture the offset BEFORE submitting so the caller can scan completions from
+    // here; commandId + sender are what allocateRealLeg needs to read the verdict.
+    const offBefore = await ledgerEnd();
+    const subRes = await realSubmit(cmd, "rallocate");
     res.json({ ok: true, allocated: { id, amount, sender: senderRole, receiver, executor },
-      factoryId: fc.factoryId, disclosed: disclosed.length });
+      factoryId: fc.factoryId, disclosed: disclosed.length,
+      commandId: (subRes && subRes.commandId) || null, senderParty: sender, offBefore });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1900,24 +1991,46 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
       // single-party propose/accept (interactive-submission is single-party only):
       // requester proposes (signs), dealer accepts (signs) -> SwapSettlement.
       const pb = await idSetSwap(requester, "UmbraSwap:RealSwapPending");
+      // Tracks whether ProposeRealSwap actually reached the ledger. If it did, rolling
+      // back the allocations would strand a LIVE RealSwapPending pointing at withdrawn
+      // allocations -- that is precisely how the orphaned pending contracts were made.
+      let proposeCommitted = false;
       try {
-        await act("requester", "swap-propose-real", [{
+        const offBefore = await ledgerEnd();
+        const propRes = await act("requester", "swap-propose-real", [{
           ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapProposal`,
             contractId: req.params.cid, choice: "ProposeRealSwap",
             choiceArgument: { realOfferAllocCid: offLeg.cid, realWantAllocCid: wantLeg.cid, realRefMid: refMid } } }]);
-        const pendingCid = await pollNewCid(requester, "UmbraSwap:RealSwapPending", pb);
+        // Ask the ledger what happened instead of guessing from a 14.4s poll. A
+        // rejection now throws with its real reason; a slow commit is waited out.
+        proposeCommitted = await confirmCommitted(requester, propRes, offBefore, "ProposeRealSwap");
+        const pendingCid = await pollNewCid(requester, "UmbraSwap:RealSwapPending", pb,
+          proposeCommitted ? POLL_TRIES_COMMITTED : POLL_TRIES);
         steps.push("requester proposed real settlement (party-signed)");
-        await act(dealerRole, "swap-accept-real", [{
+
+        const dealerParty = await partyIdFor(dealerRole);
+        const accBefore = await ledgerEnd();
+        const accRes = await act(dealerRole, "swap-accept-real", [{
           ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:RealSwapPending`,
             contractId: pendingCid, choice: "AcceptRealSwap", choiceArgument: {} } }]);
-        settlementCid = await pollNewCid(requester, "UmbraSwap:SwapSettlement", b);
+        const accCommitted = await confirmCommitted(dealerParty, accRes, accBefore, "AcceptRealSwap");
+        settlementCid = await pollNewCid(requester, "UmbraSwap:SwapSettlement", b,
+          accCommitted ? POLL_TRIES_COMMITTED : POLL_TRIES);
         steps.push("dealer accepted -> on-ledger SwapSettlement (settledVia=real, party-signed)");
       } catch (paErr) {
         console.error("[settle-real][SIGNED][propose/accept] FAILED:", paErr && (paErr.stack || paErr.message || paErr));
-        // propose/accept failed AFTER both legs were allocated -> roll back so the
-        // real cBTC/CC don't strand locked (same protection the execute step has).
+        if (proposeCommitted) {
+          // The propose IS on the ledger. Withdrawing the legs would orphan it and
+          // strand the trade; leave everything intact so it stays recoverable.
+          console.error("[settle-real][SIGNED] propose COMMITTED - not rolling back (would orphan the pending swap)");
+          steps.push("propose committed but the follow-up failed \u2014 allocations left intact for recovery");
+          throw paErr;
+        }
+        // propose never landed -> roll back so the real cBTC/CC don't strand locked
+        // (same protection the execute step has).
         await withdrawLeg(offLeg); await withdrawLeg(wantLeg);
-        await recoverFailedSwap(requester, req.params.cid, dealerRole, offerAsset, wantAsset);
+        await recoverFailedSwap(requester, req.params.cid, dealerRole, offerAsset, wantAsset,
+          paErr && paErr.message);
         steps.push("propose/accept failed \u2014 rolled back allocations + re-opened the request for " + dealerRole);
         throw paErr;
       }
@@ -2347,6 +2460,42 @@ async function realHoldingBySymbol(role, sym, need) {
   return [];  // genuinely insufficient total
 }
 
+// Locate the allocation an /api/real/allocate call just produced.
+//
+// The old code polled 12 x 400ms = 4.8s and, on a miss, set "allocated but could
+// not locate new allocation cid" and RETRIED the whole allocation. When the first
+// submission had in fact committed, that retry referenced a now-spent holding and
+// came back LOCAL_VERDICT_INACTIVE_CONTRACTS -- turning one slow commit into a
+// cascade of failures. cETH commits slower than cBTC, which is why it was hit and
+// cBTC was not. So: get the verdict first, then poll proportionately.
+//   returns a cid, or null to let the caller retry
+//   throws  if the ledger REJECTED the allocation (retrying cannot help)
+async function locateAllocation(j, senderParty, beforeIds, instrId, amount, label) {
+  let committed = false;
+  if (j && j.commandId) {
+    const v = await awaitCompletion(senderParty, j.commandId,
+      j.offBefore !== undefined ? j.offBefore : 0);
+    if (v.found && !v.ok) {
+      throw new Error(humanize(`allocation rejected by the ledger: ${v.message || "code " + v.code}`));
+    }
+    committed = !!v.found;
+  }
+  const tries = committed ? POLL_TRIES_COMMITTED : 12;
+  for (let i = 0; i < tries; i++) {
+    const now = await queryAllocations(senderParty);
+    const fresh = now.find(a => !beforeIds.has(a.contractId) &&
+      a.instrument === instrId && Math.abs(parseFloat(a.amount) - Number(amount)) < 1e-6);
+    if (fresh) return fresh.contractId;
+    await new Promise(z => setTimeout(z, committed ? 1200 : 400));
+  }
+  if (committed) {
+    // Committed but invisible: retrying would double-allocate, so refuse loudly.
+    throw new Error(`${label} committed on the ledger but its allocation never became ` +
+      `visible - do NOT retry (would double-allocate). Check /v2/state/active-contracts.`);
+  }
+  return null;
+}
+
 // allocate one real leg via the existing endpoint's logic, then return the new alloc cid
 async function allocateRealLeg(senderRole, receiverRole, admin, instrId, sym, amount, settleId, legId) {
   const registry = registryForAdmin(admin);
@@ -2381,13 +2530,9 @@ async function allocateRealLeg(senderRole, receiverRole, admin, instrId, sym, am
         lastErr = "combo(" + cids.length + "): " + (j.error || JSON.stringify(j));
         await new Promise(z => setTimeout(z, 2000 + attempt * 1000)); continue;
       }
-      for (let i = 0; i < 12; i++) {
-        const now = await queryAllocations(senderParty);
-        const fresh = now.find(a => !beforeIds.has(a.contractId) &&
-          a.instrument === instrId && Math.abs(parseFloat(a.amount) - Number(amount)) < 1e-6);
-        if (fresh) return { cid: fresh.contractId, registry, senderRole, senderParty };
-        await new Promise(z => setTimeout(z, 400));
-      }
+      const comboCid = await locateAllocation(j, senderParty, beforeIds, instrId, amount,
+        "combo allocation of " + sym);
+      if (comboCid) return { cid: comboCid, registry, senderRole, senderParty };
       lastErr = "combo allocated but could not locate new allocation cid";
       continue;
     }
@@ -2408,13 +2553,9 @@ async function allocateRealLeg(senderRole, receiverRole, admin, instrId, sym, am
         if (/invalid|not found|unlocked/i.test(lastErr)) { advanced = true; break; }
         continue;
       }
-      for (let i = 0; i < 12; i++) {
-        const now = await queryAllocations(senderParty);
-        const fresh = now.find(a => !beforeIds.has(a.contractId) &&
-          a.instrument === instrId && Math.abs(parseFloat(a.amount) - Number(amount)) < 1e-6);
-        if (fresh) return { cid: fresh.contractId, registry, senderRole, senderParty };
-        await new Promise(z => setTimeout(z, 400));
-      }
+      const singleCid = await locateAllocation(j, senderParty, beforeIds, instrId, amount,
+        "allocation of " + sym);
+      if (singleCid) return { cid: singleCid, registry, senderRole, senderParty };
       lastErr = "allocated but could not locate new allocation cid";
     }
     if (advanced) await new Promise(z => setTimeout(z, 2000 + attempt * 1000)); // registry lag: back off longer each time
