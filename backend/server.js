@@ -356,8 +356,12 @@ async function confirmCommitted(party, execRes, beginExclusive, what) {
   if (v.found && !v.ok) {
     throw new Error(humanize(`${what} rejected by the ledger: ${v.message || "code " + v.code}`));
   }
-  if (v.found) { dbg(`[completion] ${what} committed (${commandId})`); return true; }
-  console.log(`[completion] no verdict for ${what} (${commandId}) - falling back to contract polling`);
+  if (v.found) { console.log(`[completion] ${what} COMMITTED (${commandId})`); return true; }
+  // Distinguish "switched off" from "asked and got no answer" -- the first is normal
+  // and says nothing; only the second is evidence about the ledger.
+  if (!COMPLETIONS_ENABLED) { dbg(`[completion] disabled; skipping verdict for ${what}`); return false; }
+  console.log(`[completion] NO VERDICT for ${what} (${commandId}) within ` +
+              `${COMPLETION_TIMEOUT_MS}ms - falling back to contract polling`);
   return false;
 }
 

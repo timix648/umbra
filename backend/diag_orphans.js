@@ -92,7 +92,11 @@ const short = (s) => (s ? String(s).slice(0, 24) + "…" : "(none)");
   if (!pend.length) console.log("none.");
   for (const c of pend) {
     const p = c.payload || {};
-    const offCid = p.realOfferAllocCid, wantCid = p.realWantAllocCid;
+    // The TEMPLATE fields are offerAllocCid/wantAllocCid. realOfferAllocCid /
+    // realWantAllocCid are the ProposeRealSwap CHOICE argument names -- reading those
+    // off the payload yields undefined, which silently made every orphan look intact.
+    const offCid = p.offerAllocCid || p.realOfferAllocCid;
+    const wantCid = p.wantAllocCid || p.realWantAllocCid;
     const offLive = offCid ? activeAllocs.has(offCid) : null;
     const wantLive = wantCid ? activeAllocs.has(wantCid) : null;
     console.log("\ncid            :", c.contractId);
@@ -104,10 +108,15 @@ const short = (s) => (s ? String(s).slice(0, 24) + "…" : "(none)");
     if (p.expiresAt) console.log("  expiresAt    :", p.expiresAt);
     console.log("  offerAlloc   :", short(offCid), offLive === null ? "" : (offLive ? "STILL ACTIVE" : "WITHDRAWN"));
     console.log("  wantAlloc    :", short(wantCid), wantLive === null ? "" : (wantLive ? "STILL ACTIVE" : "WITHDRAWN"));
-    const dead = (offCid && !offLive) || (wantCid && !wantLive);
-    console.log("  verdict      :", dead
-      ? "DEAD - its allocations were withdrawn; AcceptRealSwap can never succeed"
-      : "allocations intact - this one may still be completable");
+    if (!offCid && !wantCid) {
+      console.log("  verdict      : UNKNOWN - no allocation cids on the payload " +
+                  "(field names changed?) - do not trust this line");
+    } else {
+      const dead = (offCid && !offLive) || (wantCid && !wantLive);
+      console.log("  verdict      :", dead
+        ? "DEAD - its allocations were withdrawn; AcceptRealSwap can never succeed"
+        : "allocations intact - this one may still be completable");
+    }
   }
 
   // ---- the backlog -------------------------------------------------------
