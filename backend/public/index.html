@@ -2590,7 +2590,8 @@ const ASSET_LONG = sym => {
 
 function RequesterDesk(P) {
   const { meta, signed, onExit, note, rfqs, quotes, holdings, rate, series, usd, rateNote,
-          onCreate, onAward, awarding, awardStep, onPair, history, composedPair, composing, setComposing, ratePair } = P;
+          onCreate, onAward, awarding, awardStep, onPair, history, composedPair, composing, setComposing, ratePair,
+          selRfqCid, setSelRfqCid } = P;
   const settled = (history && history.settlements) || [];
   // the reference is for the pair the requester is composing -- matches the fetch
   // in load() (requester prices composedPair), so label and value agree and
@@ -2599,8 +2600,12 @@ function RequesterDesk(P) {
   // the vs-mkt bps; only the form pair when there is no live request.
   // Focus: while composing (or none live) the reference follows the form;
   // otherwise the live RFQ. Matches load(), so value + label always agree.
-  const [selRfqCid, setSelRfqCid] = React.useState(null); // requester-selected live RFQ
-  const _liveRef = rfqs.find(r => new Date(r.payload.expiresAt).getTime() > Date.now());
+  // selRfqCid is now owned by PartyPortal (so the rate FETCH can see it too);
+  // it arrives via props. The REF label must key off the SAME selected RFQ as the
+  // fetched value, else label and value disagree when the requester switches trades
+  // or the list reorders.
+  const _liveRefs = rfqs.filter(r => new Date(r.payload.expiresAt).getTime() > Date.now());
+  const _liveRef = _liveRefs.find(r => r.contractId === selRfqCid) || _liveRefs[0];
   const refPair = (composing || !_liveRef)
     ? (composedPair || { base: "cBTC", quote: "cETH" })
     : { base: _liveRef.payload.offerAsset.symbol, quote: _liveRef.payload.wantAsset.symbol };
@@ -3324,6 +3329,7 @@ function PartyPortal({ role, onExit }) {
   const [composedPair, setComposedPair] = useState({ base: "cBTC", quote: "cETH" });
   const onPair = useCallback(p => { setComposedPair(p); }, []);
   const [selInvCid, setSelInvCid] = useState(null);  // dealer-selected invitation
+  const [selRfqCid, setSelRfqCid] = useState(null);  // requester-selected live RFQ (drives REF fetch)
   const [composing, setComposing] = useState(false); // requester composing a new RFQ (focuses REF on the form)
 
   const say = (m, bad) => { setNote({ m, bad }); setTimeout(() => setNote(null), 3400); };
@@ -3370,12 +3376,15 @@ function PartyPortal({ role, onExit }) {
         pairRef.current = _act ? { base: _act.payload.offerAsset.symbol, quote: _act.payload.wantAsset.symbol } : null;
       } else {
         // Focus: while composing a new request (or none live) the REF follows the
-        // form (null here -> composedPair at top); otherwise the live RFQ.
-        const _lrfq = ((rq && rq.rfqs) || []).find(r => { const t = new Date(r.payload.expiresAt).getTime(); return isNaN(t) || t > Date.now(); });
+        // form (null here -> composedPair at top); otherwise the SELECTED live RFQ
+        // (falls back to the first live one) so the fetched rate tracks whichever
+        // request the requester is looking at -- not whatever happens to be first.
+        const _liveRfqs = ((rq && rq.rfqs) || []).filter(r => { const t = new Date(r.payload.expiresAt).getTime(); return isNaN(t) || t > Date.now(); });
+        const _lrfq = _liveRfqs.find(r => r.contractId === selRfqCid) || _liveRfqs[0] || null;
         pairRef.current = (composing || !_lrfq) ? null : { base: _lrfq.payload.offerAsset.symbol, quote: _lrfq.payload.wantAsset.symbol };
       }
     } catch (e) {}
-  }, [role, composedPair, selInvCid, composing]);
+  }, [role, composedPair, selInvCid, selRfqCid, composing]);
 
   useEffect(() => { load(); const t = setInterval(load, 2500); return () => clearInterval(t); }, [load]);
 
@@ -3475,7 +3484,7 @@ function PartyPortal({ role, onExit }) {
       meta, signed, onExit, note,
       rfqs, quotes: myQuotes, holdings, rate, series, usd, rateNote, onPair, history, composedPair,
       onCreate: createRfq, onAward: awardQuote, awarding, awardStep,
-      composing, setComposing, ratePair
+      composing, setComposing, ratePair, selRfqCid, setSelRfqCid
     }),
     React.createElement(SettlementVault, { trade: vault, role, onClose: () => setVault(null) }));
 
