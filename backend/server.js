@@ -1095,6 +1095,43 @@ app.post("/api/real/allocate", async (req, res) => {
       createdEventBlob: d.createdEventBlob, synchronizerId: d.synchronizerId || "",
     }));
 
+    // PROBE (opt-in: DISCLOSE_INPUT_HOLDING=1). Also forward the INPUT HOLDINGS'
+    // own createdEventBlobs as disclosed contracts. Hypothesis: after the
+    // synchronizer recovery, the cETH registrar needs the input holding disclosed
+    // for external-party allocations (cBTC does not). Fail-safe: on ANY error, or
+    // when the flag is unset, the command is byte-identical to current behaviour,
+    // so the working cBTC/CC path is never at risk.
+    if (process.env.DISCLOSE_INPUT_HOLDING === "1") {
+      try {
+        const _off = await ledgerEnd();
+        const _q = { filter: { filtersByParty: { [sender]: { cumulative: [{
+          identifierFilter: { InterfaceFilter: { value: {
+            interfaceId: "#splice-api-token-holding-v1:Splice.Api.Token.HoldingV1:Holding",
+            includeInterfaceView: false, includeCreatedEventBlob: true,
+          } } } }] } } }, verbose: false, activeAtOffset: _off };
+        const _r = await ledgerFetch("/v2/state/active-contracts", { method: "POST", body: JSON.stringify(_q) });
+        const _t = await _r.text();
+        let _items; try { _items = JSON.parse(_t); }
+        catch { _items = _t.trim().split("\n").filter(Boolean).map(l => JSON.parse(l)); }
+        const _arr = Array.isArray(_items) ? _items : [_items];
+        const _want = new Set(holdingCids);
+        let _added = 0;
+        for (const _x of _arr) {
+          const _jac = _x && _x.contractEntry && _x.contractEntry.JsActiveContract;
+          const _ce = (_jac && _jac.createdEvent) || (_x && _x.createdEvent);
+          if (!_ce || !_want.has(_ce.contractId) || !_ce.createdEventBlob) continue;
+          if (disclosed.some(d => d.contractId === _ce.contractId)) continue;
+          disclosed.push({
+            templateId: _ce.templateId, contractId: _ce.contractId,
+            createdEventBlob: _ce.createdEventBlob,
+            synchronizerId: (_jac && _jac.synchronizerId) || _ce.synchronizerId || "",
+          });
+          _added++;
+        }
+        console.log("[ALLOC-PROBE] input-holding disclosures added:", _added, "of", holdingCids.length, "for", id);
+      } catch (_e) { console.log("[ALLOC-PROBE] holding-disclosure probe failed (ignored):", _e.message); }
+    }
+
     // 2. exercise AllocationFactory_Allocate with the REAL context + disclosures
     const cmd = {
       commandId: "allocate-" + Date.now(),
@@ -2347,7 +2384,7 @@ async function allocateRealLeg(senderRole, receiverRole, admin, instrId, sym, am
       for (let i = 0; i < 12; i++) {
         const now = await queryAllocations(senderParty);
         const fresh = now.find(a => !beforeIds.has(a.contractId) &&
-          a.instrument === instrId && a.amount.startsWith(String(amount)));
+          a.instrument === instrId && Math.abs(parseFloat(a.amount) - Number(amount)) < 1e-6);
         if (fresh) return { cid: fresh.contractId, registry, senderRole, senderParty };
         await new Promise(z => setTimeout(z, 400));
       }
@@ -2374,7 +2411,7 @@ async function allocateRealLeg(senderRole, receiverRole, admin, instrId, sym, am
       for (let i = 0; i < 12; i++) {
         const now = await queryAllocations(senderParty);
         const fresh = now.find(a => !beforeIds.has(a.contractId) &&
-          a.instrument === instrId && a.amount.startsWith(String(amount)));
+          a.instrument === instrId && Math.abs(parseFloat(a.amount) - Number(amount)) < 1e-6);
         if (fresh) return { cid: fresh.contractId, registry, senderRole, senderParty };
         await new Promise(z => setTimeout(z, 400));
       }
