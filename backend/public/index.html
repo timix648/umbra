@@ -2062,7 +2062,8 @@ function AssetIcon({
 }
 function SwapRfqForm({
   onCreate,
-  onPair
+  onPair,
+  holdings
 }) {
   const FALLBACK = [{ symbol: "cBTC" }, { symbol: "cETH" }, { symbol: "CC" }];
   const [assets, setAssets] = useState(FALLBACK);
@@ -2110,6 +2111,15 @@ function SwapRfqForm({
   const findAsset = sym => assets.find(a => a.symbol === sym) || { symbol: sym };
   const opt = sym => /*#__PURE__*/React.createElement("option", { key: sym, value: sym }, sym);
 
+  // You cannot offer what you do not hold -- same guard the dealer desk applies to a
+  // quote. `holdings` is optional: where it isn't supplied we can't know the balance,
+  // so we must not block (a false "insufficient" is worse than no check at all).
+  const _offerHeld = (holdings || [])
+    .filter(h => h.payload.asset.symbol === offerSym)
+    .reduce((s, h) => s + Number(h.payload.amount), 0);
+  const _amt = Number(amount);
+  const _short = !!holdings && isFinite(_amt) && _amt > 0 && _amt > _offerHeld;
+
   return /*#__PURE__*/React.createElement("div", {
     className: "pane"
   }, /*#__PURE__*/React.createElement("div", {
@@ -2141,9 +2151,9 @@ function SwapRfqForm({
     onChange: e => setWantSym(e.target.value)
   }, syms.filter(x => x !== offerSym).map(opt)))), /*#__PURE__*/React.createElement("button", {
     className: "btn prime",
-    disabled: busy || offerSym === wantSym,
+    disabled: busy || offerSym === wantSym || _short,
     onClick: async () => {
-      if (busy) return;
+      if (busy || _short) return;
       setBusy(true);
       try {
         await onCreate({
@@ -2153,8 +2163,11 @@ function SwapRfqForm({
         });
       } finally { setBusy(false); }
     },
-    "data-tip": "Request quotes to swap one asset for another — dealers compete, winner settles atomically"
-  }, busy ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", { className: "spinr" }), "Creating") : "Create Swap RFQ")));
+    "data-tip": _short
+      ? ("You hold " + _offerHeld + " " + offerSym + " — not enough to offer " + amount)
+      : "Request quotes to swap one asset for another — dealers compete, winner settles atomically"
+  }, busy ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", { className: "spinr" }), "Creating")
+     : (_short ? ("Insufficient " + offerSym) : "Create Swap RFQ"))));
 }
 function RfqForm({
   onCreate
@@ -2510,13 +2523,25 @@ const mapRealHoldings = (rh, ownerHint) => ((rh && rh.raw) || [])
     }
   }));
 
-const aggHoldings = (hs) => {
+// Aggregated per symbol and, when live prices are supplied, ordered by USD value
+// descending -- the biggest position reads first, and the order re-sorts itself as
+// balances move. Unpriced assets can't be ranked by value, so they sort last by
+// raw amount rather than being interleaved on a number that doesn't exist.
+const aggHoldings = (hs, usd) => {
   const m = new Map();
   for (const h of (hs || [])) {
     const sym = h.payload.asset.symbol;
     m.set(sym, (m.get(sym) || 0) + Number(h.payload.amount));
   }
-  return Array.from(m, ([symbol, amount]) => ({ symbol, amount }));
+  const out = Array.from(m, ([symbol, amount]) => ({ symbol, amount }));
+  if (!usd) return out;
+  return out.sort((a, b) => {
+    const av = usdOf(usd, a.symbol, a.amount), bv = usdOf(usd, b.symbol, b.amount);
+    if (av != null && bv != null) return bv - av;
+    if (av != null) return -1;
+    if (bv != null) return 1;
+    return Number(b.amount) - Number(a.amount);
+  });
 };
 
 // Total portfolio value at live rates. null when NOTHING can be priced -- we
@@ -2708,7 +2733,7 @@ function RequesterDesk(P) {
           ? React.createElement("section", { className: "mod mod-focal" },
               React.createElement("div", { className: "mod-h" }, React.createElement("h2", null, "New request")),
               React.createElement("div", { className: "mod-b" },
-                React.createElement(SwapRfqForm, { onPair, onCreate: async (f) => { await onCreate(f); setComposing(false); } })))
+                React.createElement(SwapRfqForm, { onPair, holdings, onCreate: async (f) => { await onCreate(f); setComposing(false); } })))
           : null,
 
         _liveRfqs.length > 1 ? React.createElement("section", { className: "mod" },
@@ -2864,14 +2889,14 @@ function RequesterDesk(P) {
         React.createElement("section", { className: "mod" },
           React.createElement("div", { className: "mod-h" },
             React.createElement("h2", null, "Holdings"),
-            React.createElement("span", { className: "mod-c m" }, aggHoldings(holdings).length)),
+            React.createElement("span", { className: "mod-c m" }, aggHoldings(holdings, usd).length)),
           React.createElement("div", { className: "mod-b" },
             holdings.length === 0
               ? React.createElement("div", { className: "void" },
                   React.createElement("div", { className: "void-t" }, "No assets yet"),
                   React.createElement("div", { className: "void-s" }, "Your balances appear here once funded."))
               : React.createElement("div", { className: "hl" },
-                  aggHoldings(holdings).map(h => React.createElement("div", { className: "hl-r", key: h.symbol },
+                  aggHoldings(holdings, usd).map(h => React.createElement("div", { className: "hl-r", key: h.symbol },
                     React.createElement(AssetIcon, { symbol: h.symbol }),
                     React.createElement("div", { className: "hl-n" },
                       React.createElement("div", { className: "hl-s" }, h.symbol),
@@ -3299,14 +3324,14 @@ function DealerDesk(P) {
         React.createElement("section", { className: "mod" },
           React.createElement("div", { className: "mod-h" },
             React.createElement("h2", null, "Holdings"),
-            React.createElement("span", { className: "mod-c m" }, aggHoldings(holdings).length)),
+            React.createElement("span", { className: "mod-c m" }, aggHoldings(holdings, usd).length)),
           React.createElement("div", { className: "mod-b" },
             holdings.length === 0
               ? React.createElement("div", { className: "void" },
                   React.createElement("div", { className: "void-t" }, "No assets yet"),
                   React.createElement("div", { className: "void-s" }, "Your balances appear here once funded."))
               : React.createElement("div", { className: "hl" },
-                  aggHoldings(holdings).map(h => React.createElement("div", { className: "hl-r", key: h.symbol },
+                  aggHoldings(holdings, usd).map(h => React.createElement("div", { className: "hl-r", key: h.symbol },
                     React.createElement(AssetIcon, { symbol: h.symbol }),
                     React.createElement("div", { className: "hl-n" },
                       React.createElement("div", { className: "hl-s" }, h.symbol),
@@ -3513,7 +3538,7 @@ function PartyPortal({ role, onExit }) {
             React.createElement("div", { className: "void-t" }, "No assets yet"),
             React.createElement("div", { className: "void-s" }, "Your cBTC, cETH and CC balances appear here once funded."))
         : React.createElement("div", { className: "hl" },
-            aggHoldings(holdings).map(h => React.createElement("div", { className: "hl-r", key: h.symbol },
+            aggHoldings(holdings, usd).map(h => React.createElement("div", { className: "hl-r", key: h.symbol },
               React.createElement(AssetIcon, { symbol: h.symbol }),
               React.createElement("div", { className: "hl-n" },
                 React.createElement("div", { className: "hl-s" }, h.symbol),
@@ -3590,7 +3615,7 @@ function PartyPortal({ role, onExit }) {
               React.createElement("div", { className: "mod-h" },
                 React.createElement("h2", null, "Request a price")),
               React.createElement("div", { className: "mod-b" },
-                React.createElement(SwapRfqForm, { onCreate: createRfq }))),
+                React.createElement(SwapRfqForm, { onCreate: createRfq, holdings }))),
         Holdings),
 
       // ---------- RIGHT ----------
