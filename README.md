@@ -21,6 +21,8 @@ Targeting the **cBTC** (BitSafe) and **cETH** (onRails) asset challenges with a 
 
 - **Live app:** https://um-bra.app/
 - **Contact:** https://x.com/UmbraOnCanton
+- **Demo:** https://youtu.be/bclZUlSeiE0?si=w7SfAyIYbb5juLzF
+- **Presentation Deck:** https://docs.google.com/presentation/d/1WoZ2BQWhdrjZlP-PPh5HQ4Jc2g2BCceG/edit?usp=sharing&ouid=111114609282721158539&rtpof=true&sd=true
 
 ---
 
@@ -70,8 +72,15 @@ Everything below runs against the live 5North Canton DevNet. Nothing here is moc
 **Honest limits:**
 - Signed mode holds each party's external key **server-side** and signs on their behalf. The
   signatures are real and party-specific -- the venue cannot forge a party's authority -- but
-  a user does not yet approve in their own wallet app. Connecting a third-party Canton wallet
-  (dApp SDK / CIP-0103) is the next step, not a shipped feature; see Roadmap.
+  a user does not yet approve in their own wallet app. Letting a user approve in their own
+  wallet is the next step, not a shipped feature; see Roadmap.
+
+  *Foundation proven:* Umbra's `SwapProposal` also implements the standard CIP-56
+  `AllocationRequestV1` interface, verified rendering on live 5North DevNet
+  (`viewStatus` code 0, both swap legs projected). Because a wallet reads the **standard**
+  interface rather than Umbra's custom template, any compliant Canton wallet can read and
+  sign the swap legs without vetting Umbra's DAR. This is the groundwork for the wallet
+  front-door -- see the `wallet-integration` branch.
 - Runs on DevNet, which resets periodically; balances are re-funded from the issuers' faucets.
 - The market reference is a real spot mid. Umbra shows no bid/ask spread, because a public
   feed does not provide one and inventing it would be dishonest.
