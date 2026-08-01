@@ -352,11 +352,15 @@ async function awaitCompletion(party, commandId, beginExclusive, timeoutMs = COM
 async function confirmCommitted(party, execRes, beginExclusive, what) {
   const commandId = execRes && execRes.commandId;
   if (!commandId) return false;                 // demo mode: already synchronous
+  // Time it. Every window in this file (14.4s, 24s, 4.8s) has been a guess because
+  // nobody ever measured how long a commit actually takes. Log it and stop guessing.
+  const t0 = Date.now();
   const v = await awaitCompletion(party, commandId, beginExclusive);
+  const ms = Date.now() - t0;
   if (v.found && !v.ok) {
-    throw new Error(humanize(`${what} rejected by the ledger: ${v.message || "code " + v.code}`));
+    throw new Error(humanize(`${what} rejected by the ledger after ${ms}ms: ${v.message || "code " + v.code}`));
   }
-  if (v.found) { console.log(`[completion] ${what} COMMITTED (${commandId})`); return true; }
+  if (v.found) { console.log(`[completion] ${what} COMMITTED after ${ms}ms (${commandId})`); return true; }
   // Distinguish "switched off" from "asked and got no answer" -- the first is normal
   // and says nothing; only the second is evidence about the ledger.
   if (!COMPLETIONS_ENABLED) { dbg(`[completion] disabled; skipping verdict for ${what}`); return false; }
