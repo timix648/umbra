@@ -273,13 +273,22 @@ const COMPLETIONS_ENABLED = /^(1|true|yes)$/i.test(String(process.env.UMBRA_COMP
 const LEDGER_USER_ID = process.env.LEDGER_USER_ID || "6";
 
 async function pollNewCid(party, templateModuleEntity, beforeSet, tries = POLL_TRIES) {
+  // Time to CONTRACT VISIBILITY, which is a different quantity from time to commit:
+  // a completion can land before the active-contracts index catches up. The window
+  // that kept expiring is this one, so this is the number to size it against.
+  const t0 = Date.now();
   for (let i = 0; i < tries; i++) {
     const ids = (await queryActive(party, templateModuleEntity)).map((c) => c.contractId);
     const fresh = ids.find((id) => !beforeSet.has(id));
-    if (fresh) return fresh;
+    if (fresh) {
+      console.log(`[poll] ${templateModuleEntity} visible after ${Date.now() - t0}ms ` +
+                  `(try ${i + 1}/${tries})`);
+      return fresh;
+    }
     await sleep(1200);
   }
-  throw new Error(`timed out waiting for new ${templateModuleEntity} for ${party.slice(0, 24)}…`);
+  throw new Error(`timed out waiting for new ${templateModuleEntity} for ` +
+                  `${party.slice(0, 24)}… after ${Date.now() - t0}ms (${tries} tries)`);
 }
 
 // ---------------------------------------------------------------------------
