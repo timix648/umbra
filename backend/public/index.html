@@ -3059,25 +3059,33 @@ function DealerDesk(P) {
   const { meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, usd, price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid, role } = P;
   const [proof, setProof] = useState(null); // dealer ledger-proof modal cid
   // Failed-swap alert. The backend records one (GET /api/swap/alerts) when a swap this
-  // dealer quoted on fails to settle and the RFQ is re-opened. Dismissible, and cleared
-  // automatically as soon as the dealer starts a new quote (via the existing `busy`
-  // flag) so a stale warning never lingers.
+  // dealer quoted on fails to settle. Dismissal is now recorded SERVER-side: the old
+  // version kept it in a local `alertHidden` flag that this very poll reset to false
+  // every 8 seconds, so Close never stuck and the banner outlived the trade, the RFQ
+  // and its expiry -- only a backend restart cleared it. The server also drops alerts
+  // past SWAP_ALERT_TTL_MS, so an empty list genuinely means "nothing to show".
   const [swapAlert, setSwapAlert] = useState(null);
-  const [alertHidden, setAlertHidden] = useState(false);
   React.useEffect(() => {
     let stop = false;
     const load = () => api("/api/swap/alerts?role=" + role)
       .then(r => {
-        if (stop || !r || !r.alerts || !r.alerts.length) return;
-        setSwapAlert(r.alerts[0]);
-        setAlertHidden(false);
+        if (stop) return;
+        setSwapAlert((r && r.alerts && r.alerts.length) ? r.alerts[0] : null);
       })
       .catch(() => {});
     load();
     const t = setInterval(load, 8000);
     return () => { stop = true; clearInterval(t); };
   }, [role]);
-  React.useEffect(() => { if (busy) setAlertHidden(true); }, [busy]);
+  // Acknowledge server-side so it stays gone for good, then clear it locally at once
+  // rather than waiting for the next poll.
+  const dismissAlert = React.useCallback((a) => {
+    if (!a) return;
+    setSwapAlert(null);
+    post("/api/swap/alerts/ack", { role, id: a.id }).catch(() => {});
+  }, [role]);
+  // Starting a new quote means the dealer has moved on; retire the warning too.
+  React.useEffect(() => { if (busy && swapAlert) dismissAlert(swapAlert); }, [busy]);
   const [theme, flipTheme] = useTheme();
   // Split invitations by ledger-enforced expiry -- an expired one must never hold
   // the active slot (Canton refuses a late quote anyway). The dealer clicks a LIVE
@@ -3136,7 +3144,7 @@ function DealerDesk(P) {
   const queueCount = inv.length + settled.length;
 
   return React.createElement("div", { className: "prt" },
-    (swapAlert && !alertHidden) ? React.createElement("div", {
+    swapAlert ? React.createElement("div", {
         className: "prt-alert",
         style: { display: "flex", alignItems: "center", gap: "10px",
                  margin: "10px 14px 0", padding: "10px 12px", borderRadius: "8px",
@@ -3145,9 +3153,16 @@ function DealerDesk(P) {
       React.createElement("span", { style: { fontSize: "15px" } }, "\u26A0"),
       React.createElement("span", { style: { flex: 1 } },
         "A trade you quoted" + (swapAlert.pair ? " (" + swapAlert.pair + ")" : "") +
-        " failed to settle. The request is open again - you can re-quote."),
+        // Only claim the request is re-quotable when the backend actually re-opened
+        // it; otherwise there is no invitation waiting and the promise is a dead end.
+        (swapAlert.reinvited
+          ? " failed to settle. The request is open again - you can re-quote."
+          : " failed to settle. The request was not re-opened, so there is nothing to re-quote."),
+        swapAlert.reason ? React.createElement("span", {
+          style: { display: "block", opacity: .7, marginTop: "3px", fontSize: "12px" } },
+          swapAlert.reason) : null),
       React.createElement("button", {
-        onClick: () => setAlertHidden(true), title: "Dismiss",
+        onClick: () => dismissAlert(swapAlert), title: "Dismiss",
         style: { background: "transparent", border: "none", cursor: "pointer",
                  fontSize: "16px", fontWeight: 600, opacity: .65, padding: "0 2px" } },
         "\u00D7")) : null,

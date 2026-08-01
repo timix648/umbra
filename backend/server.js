@@ -1893,15 +1893,34 @@ async function withdrawLeg(leg, adminHint) {
 // Dealer-facing alerts for failed swaps. In-memory (resets on restart) -- enough to tell
 // a dealer "your trade failed, please re-quote". Read via GET /api/swap/alerts?role=...
 const SWAP_ALERTS = [];
-function pushSwapAlert(dealerRole, offerAsset, wantAsset, reason) {
+let SWAP_ALERT_SEQ = 0;
+// Alerts used to live forever: no id, no expiry, no way to acknowledge one. The
+// dealer's Close button only set a local flag, and the 8s poll re-showed the same
+// alert immediately -- so a failed trade sat on the dealer desk until the server
+// was restarted. Now each alert has an id, can be acknowledged, and ages out.
+const SWAP_ALERT_TTL_MS = Number(process.env.SWAP_ALERT_TTL_MS || 30 * 60000);
+function pushSwapAlert(dealerRole, offerAsset, wantAsset, reason, opts) {
   SWAP_ALERTS.push({
+    id: ++SWAP_ALERT_SEQ,
     at: new Date().toISOString(),
     dealer: String(dealerRole || "").toLowerCase(),
     kind: "swap-failed",
     pair: `${(offerAsset && offerAsset.symbol) || "?"}/${(wantAsset && wantAsset.symbol) || "?"}`,
     reason: String(reason || "settlement failed"),
+    // Whether the RFQ was actually re-opened. The banner used to promise "you can
+    // re-quote" unconditionally, including when no live RFQ was found to re-invite
+    // on -- which is why it pointed at a quote that was not there.
+    reinvited: !!(opts && opts.reinvited),
+    dismissed: false,
   });
   while (SWAP_ALERTS.length > 50) SWAP_ALERTS.shift();
+}
+function liveSwapAlerts(role) {
+  const cutoff = Date.now() - SWAP_ALERT_TTL_MS;
+  return SWAP_ALERTS.filter(a =>
+    !a.dismissed &&
+    new Date(a.at).getTime() >= cutoff &&
+    (!role || a.dealer === role));
 }
 
 async function recoverFailedSwap(requester, proposalCid, dealerRole, offerAsset, wantAsset, reason) {
@@ -1949,8 +1968,10 @@ async function recoverFailedSwap(requester, proposalCid, dealerRole, offerAsset,
     console.log("[recoverFailedSwap] re-invite FAILED:", e && e.message);
   }
 
-  // 3. Always leave the dealer a signal, even if the re-invite failed.
-  try { pushSwapAlert(dealerRole, offerAsset, wantAsset, reason); } catch (e) {}
+  // 3. Always leave the dealer a signal, even if the re-invite failed -- but say
+  //    which of the two happened, so the banner never promises a re-quote that
+  //    isn't actually available.
+  try { pushSwapAlert(dealerRole, offerAsset, wantAsset, reason, { reinvited }); } catch (e) {}
 
   return reinvited;
 }
@@ -1960,9 +1981,26 @@ app.get("/api/swap/alerts", async (req, res) => {
   try {
     const role = String(req.query.role || "").toLowerCase();
     const since = req.query.since ? String(req.query.since) : null;
-    let out = role ? SWAP_ALERTS.filter(a => a.dealer === role) : SWAP_ALERTS.slice();
+    let out = liveSwapAlerts(role);
     if (since) out = out.filter(a => a.at > since);
     res.json({ ok: true, role: role || null, alerts: out.slice(-10).reverse() });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Dealer acknowledges an alert (or all of theirs). Without this the only way to
+// clear a failed-swap banner was to restart the backend.
+app.post("/api/swap/alerts/ack", async (req, res) => {
+  try {
+    const b = req.body || {};
+    const role = String(b.role || "").toLowerCase();
+    const id = b.id === undefined || b.id === null ? null : Number(b.id);
+    let n = 0;
+    for (const a of SWAP_ALERTS) {
+      if (role && a.dealer !== role) continue;
+      if (id !== null && a.id !== id) continue;
+      if (!a.dismissed) { a.dismissed = true; n++; }
+    }
+    res.json({ ok: true, dismissed: n, remaining: liveSwapAlerts(role).length });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
