@@ -170,6 +170,14 @@ async function realSubmit(body, tag) {
   if (SIGNED_MODE) {
     const recs = [];
     for (const pid of (body.actAs || [])) {
+      // Same guard as act(): we have no key for a wallet party. Without this,
+      // roleOfParty returns the party id, recFor treats it as a role name and
+      // onboardExternalParty tries to ALLOCATE A NEW PARTY using it as a partyHint --
+      // which fails deep inside topology with "reserved delimiter `::`".
+      if (isWalletParty(pid)) {
+        throw new Error(`no signing key for wallet party ${String(pid).slice(0, 28)}… - ` +
+          `build the command with build=1 and have the wallet sign it via /api/ext/prepare`);
+      }
       const role = await roleOfParty(pid);
       if (!role) throw new Error("signed mode: no external signer for party " + pid);
       recs.push(await recFor(role));
@@ -1923,6 +1931,27 @@ app.get("/api/swap/quotes", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Awarded-but-unsettled proposals. There was no way to list these, so anything
+// driving a trade programmatically (a wallet client, a test) could not find the
+// SwapProposal it had just created.
+app.get("/api/swap/proposals", async (req, res) => {
+  try {
+    const role = req.query.role || "requester";
+    const proposals = await queryActive(await partyIdFor(role), "UmbraSwap:SwapProposal");
+    res.json({ ok: true, role, count: proposals.length, proposals });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Recorded-but-unexecuted settlements. AcceptRealSwap CONSUMES the SwapProposal, so
+// after it a caller has no handle on the trade; this is how it finds one.
+app.get("/api/swap/settlements", async (req, res) => {
+  try {
+    const role = req.query.role || "requester";
+    const settlements = await queryActive(await partyIdFor(role), "UmbraSwap:SwapSettlement");
+    res.json({ ok: true, role, count: settlements.length, settlements });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // requester accepts a quote -> SwapProposal
 // cid-returning swap endpoints
 app.post("/api/swap/quotes/:cid/accept", async (req, res) => {
@@ -2196,16 +2225,6 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
     const offerAsset = p.offerAsset, wantAsset = p.wantAsset;
     const offerAmount = p.offerAmount, wantAmount = p.price;
 
-    // real instrument ids come OFF the holdings (case-correct), like /api/real/award
-    const offCands = await realHoldingBySymbol("requester", offerAsset.symbol, offerAmount);
-    const offPick = offCands.length ? offCands[0] : (offCands.combo && offCands.combo[0]);
-    if (!offPick) throw new Error("requester has no real " + offerAsset.symbol + " totalling >= " + offerAmount);
-    const wantCands = await realHoldingBySymbol(dealerRole, wantAsset.symbol, wantAmount);
-    const wantPick = wantCands.length ? wantCands[0] : (wantCands.combo && wantCands.combo[0]);
-    if (!wantPick) throw new Error(dealerRole + " has no real " + wantAsset.symbol + " totalling >= " + wantAmount);
-    const offAdmin = offPick.admin, offInstr = offPick.id;
-    const wantAdmin = wantPick.admin, wantInstr = wantPick.id;
-
     // The settlement reference and leg names MUST match what the AllocationRequest view
     // advertises, or a leg allocated by an external wallet can never be matched to this
     // trade. The view uses the proposal's tradeId and the leg keys "offer"/"want".
@@ -2213,26 +2232,74 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
     const settleId = p.tradeId || ("umbra-uiswap-" + Date.now());
     const dealerPartyId = await partyIdFor(dealerRole);
 
+    // Look for ALREADY-ALLOCATED legs before looking for spendable holdings. Allocating
+    // a leg locks the holding, so on a resumed call the sender legitimately has no free
+    // balance left -- checking holdings first reported "has no real cETH" about a party
+    // that had just committed exactly that cETH.
+    const offInstrExp = instrumentIdForSymbol(offerAsset.symbol);
+    const wantInstrExp = instrumentIdForSymbol(wantAsset.symbol);
+    const offPre = await findExistingAllocation(requester, settleId, "offer", offInstrExp, offerAmount);
+    const wantPre = await findExistingAllocation(dealerPartyId, settleId, "want", wantInstrExp, wantAmount);
+
+    // Instrument + admin come off the allocation when there is one, off a spendable
+    // holding otherwise, and off the proposal as a last resort (a wallet that has not
+    // allocated yet may have nothing free for us to inspect).
+    let offAdmin = offerAsset.admin, offInstr = offInstrExp;
+    if (offPre) { offAdmin = offPre.admin || offAdmin; offInstr = offPre.instrument || offInstr; }
+    else {
+      const offCands = await realHoldingBySymbol("requester", offerAsset.symbol, offerAmount);
+      const offPick = offCands.length ? offCands[0] : (offCands.combo && offCands.combo[0]);
+      if (offPick) { offAdmin = offPick.admin; offInstr = offPick.id; }
+      else if (!isWalletParty(requester)) {
+        throw new Error("requester has no real " + offerAsset.symbol + " totalling >= " + offerAmount);
+      }
+    }
+    let wantAdmin = wantAsset.admin, wantInstr = wantInstrExp;
+    if (wantPre) { wantAdmin = wantPre.admin || wantAdmin; wantInstr = wantPre.instrument || wantInstr; }
+    else {
+      const wantCands = await realHoldingBySymbol(dealerRole, wantAsset.symbol, wantAmount);
+      const wantPick = wantCands.length ? wantCands[0] : (wantCands.combo && wantCands.combo[0]);
+      if (wantPick) { wantAdmin = wantPick.admin; wantInstr = wantPick.id; }
+      else if (!isWalletParty(dealerPartyId)) {
+        throw new Error(dealerRole + " has no real " + wantAsset.symbol + " totalling >= " + wantAmount);
+      }
+    }
+
     // Prefer a leg the sender allocated with their OWN wallet; allocate on their behalf
     // only when they haven't. This is what lets a party bring their own Canton wallet:
     // Umbra stops needing their key for the leg they already committed themselves.
-    const offPre = await findExistingAllocation(requester, settleId, "offer", offInstr, offerAmount);
-    const offLeg = offPre
-      ? { cid: offPre.contractId, registry: registryForAdmin(offAdmin), senderRole: "requester", senderParty: requester, external: true }
-      : await allocateRealLeg("requester", dealerRole, offAdmin, offInstr,
-          offerAsset.symbol, offerAmount, settleId, "offer");
-    steps.push(offPre
-      ? "offer leg was already allocated by the requester's own wallet (" + offerAmount + " " + offerAsset.symbol + ")"
-      : "allocated real offer leg (" + offerAmount + " " + offerAsset.symbol + ")");
+    // A leg whose sender signs for itself must be allocated BY that party. If it has
+    // not done so yet, stop and say what is needed rather than trying to sign for it.
+    const needAlloc = (party, instr) => res.status(202).json({
+      ok: false, status: "awaiting-allocation",
+      awaiting: instr, proposalCid: req.params.cid, settleId, steps,
+      note: "This leg belongs to a party that signs for itself. Allocate it with that " +
+            "party's own key, then call settle-real again -- it resumes from here.",
+    });
 
-    const wantPre = await findExistingAllocation(dealerPartyId, settleId, "want", wantInstr, wantAmount);
-    const wantLeg = wantPre
-      ? { cid: wantPre.contractId, registry: registryForAdmin(wantAdmin), senderRole: dealerRole, senderParty: dealerPartyId, external: true }
-      : await allocateRealLeg(dealerRole, "requester", wantAdmin, wantInstr,
-          wantAsset.symbol, wantAmount, settleId, "want");
-    steps.push(wantPre
-      ? "want leg was already allocated by " + dealerRole + "'s own wallet (" + wantAmount + " " + wantAsset.symbol + ")"
-      : "allocated real want leg (" + wantAmount + " " + wantAsset.symbol + ")");
+    let offLeg;
+    if (offPre) {
+      offLeg = { cid: offPre.contractId, registry: registryForAdmin(offAdmin), senderRole: "requester", senderParty: requester, external: true };
+      steps.push("offer leg was already allocated by the requester's own wallet (" + offerAmount + " " + offerAsset.symbol + ")");
+    } else if (isWalletParty(requester)) {
+      return needAlloc(requester, allocationInstruction(requester, dealerPartyId, offAdmin, offInstr, offerAmount, settleId, "offer"));
+    } else {
+      offLeg = await allocateRealLeg("requester", dealerRole, offAdmin, offInstr,
+        offerAsset.symbol, offerAmount, settleId, "offer");
+      steps.push("allocated real offer leg (" + offerAmount + " " + offerAsset.symbol + ")");
+    }
+
+    let wantLeg;
+    if (wantPre) {
+      wantLeg = { cid: wantPre.contractId, registry: registryForAdmin(wantAdmin), senderRole: dealerRole, senderParty: dealerPartyId, external: true };
+      steps.push("want leg was already allocated by the dealer's own wallet (" + wantAmount + " " + wantAsset.symbol + ")");
+    } else if (isWalletParty(dealerPartyId)) {
+      return needAlloc(dealerPartyId, allocationInstruction(dealerPartyId, requester, wantAdmin, wantInstr, wantAmount, settleId, "want"));
+    } else {
+      wantLeg = await allocateRealLeg(dealerRole, "requester", wantAdmin, wantInstr,
+        wantAsset.symbol, wantAmount, settleId, "want");
+      steps.push("allocated real want leg (" + wantAmount + " " + wantAsset.symbol + ")");
+    }
 
     // record the real settlement on the awarded proposal (both principals authorize)
     let refMid = null;
@@ -2247,28 +2314,61 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
       // back the allocations would strand a LIVE RealSwapPending pointing at withdrawn
       // allocations -- that is precisely how the orphaned pending contracts were made.
       let proposeCommitted = false;
-      try {
-        const offBefore = await ledgerEnd();
-        const propRes = await act("requester", "swap-propose-real", [{
-          ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapProposal`,
-            contractId: req.params.cid, choice: "ProposeRealSwap",
-            choiceArgument: { realOfferAllocCid: offLeg.cid, realWantAllocCid: wantLeg.cid, realRefMid: refMid } } }]);
-        // Ask the ledger what happened instead of guessing from a 14.4s poll. A
-        // rejection now throws with its real reason; a slow commit is waited out.
-        proposeCommitted = await confirmCommitted(requester, propRes, offBefore, "ProposeRealSwap");
-        const pendingCid = await pollNewCid(requester, "UmbraSwap:RealSwapPending", pb,
-          proposeCommitted ? POLL_TRIES_COMMITTED : POLL_TRIES);
-        steps.push("requester proposed real settlement (party-signed)");
+      // Who signs for themselves? A wallet party has no key here, so we must hand it
+      // the command instead of calling act() -- which would (correctly) refuse.
+      const requesterIsWallet = isWalletParty(requester);
+      const dealerIsWallet = isWalletParty(dealerPartyId);
+      const proposeCmd = [{ ExerciseCommand: {
+        templateId: `#${PKGN}:UmbraSwap:SwapProposal`, contractId: req.params.cid,
+        choice: "ProposeRealSwap",
+        choiceArgument: { realOfferAllocCid: offLeg.cid, realWantAllocCid: wantLeg.cid, realRefMid: refMid } } }];
+      const awaitSig = (step, party, commands) => res.status(202).json({
+        ok: false, status: "awaiting-signature",
+        awaiting: { step, party, commands },
+        proposalCid: req.params.cid, settleId, steps,
+        note: "This party signs for itself. POST { party, commands } to /api/ext/prepare, " +
+              "sign preparedTransactionHash, POST to /api/ext/execute, then call settle-real " +
+              "again -- it resumes from where it stopped.",
+      });
 
-        const dealerParty = await partyIdFor(dealerRole);
-        const accBefore = await ledgerEnd();
-        const accRes = await act(dealerRole, "swap-accept-real", [{
-          ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:RealSwapPending`,
-            contractId: pendingCid, choice: "AcceptRealSwap", choiceArgument: {} } }]);
-        const accCommitted = await confirmCommitted(dealerParty, accRes, accBefore, "AcceptRealSwap");
-        settlementCid = await pollNewCid(requester, "UmbraSwap:SwapSettlement", b,
-          accCommitted ? POLL_TRIES_COMMITTED : POLL_TRIES);
-        steps.push("dealer accepted -> on-ledger SwapSettlement (settledVia=real, party-signed)");
+      try {
+        // --- step 1: ProposeRealSwap (controller: requester) ---
+        let pendingCid = null;
+        const prevPending = await findPendingForLegs(requester, offLeg.cid, wantLeg.cid);
+        if (prevPending) {
+          pendingCid = prevPending.contractId;
+          proposeCommitted = true;
+          steps.push("resumed: RealSwapPending for these legs already exists");
+        } else if (requesterIsWallet) {
+          return awaitSig("ProposeRealSwap", requester, proposeCmd);
+        } else {
+          const offBefore = await ledgerEnd();
+          const propRes = await act("requester", "swap-propose-real", proposeCmd);
+          // Ask the ledger what happened instead of guessing from a 14.4s poll. A
+          // rejection now throws with its real reason; a slow commit is waited out.
+          proposeCommitted = await confirmCommitted(requester, propRes, offBefore, "ProposeRealSwap");
+          pendingCid = await pollNewCid(requester, "UmbraSwap:RealSwapPending", pb,
+            proposeCommitted ? POLL_TRIES_COMMITTED : POLL_TRIES);
+          steps.push("requester proposed real settlement (party-signed)");
+        }
+
+        // --- step 2: AcceptRealSwap (controller: dealer) ---
+        const prevSettlement = await findSettlementForLegs(requester, offLeg.cid, wantLeg.cid);
+        if (prevSettlement) {
+          settlementCid = prevSettlement.contractId;
+          steps.push("resumed: SwapSettlement for these legs already exists");
+        } else {
+          const acceptCmd = [{ ExerciseCommand: {
+            templateId: `#${PKGN}:UmbraSwap:RealSwapPending`, contractId: pendingCid,
+            choice: "AcceptRealSwap", choiceArgument: {} } }];
+          if (dealerIsWallet) return awaitSig("AcceptRealSwap", dealerPartyId, acceptCmd);
+          const accBefore = await ledgerEnd();
+          const accRes = await act(dealerRole, "swap-accept-real", acceptCmd);
+          const accCommitted = await confirmCommitted(dealerPartyId, accRes, accBefore, "AcceptRealSwap");
+          settlementCid = await pollNewCid(requester, "UmbraSwap:SwapSettlement", b,
+            accCommitted ? POLL_TRIES_COMMITTED : POLL_TRIES);
+          steps.push("dealer accepted -> on-ledger SwapSettlement (settledVia=real, party-signed)");
+        }
       } catch (paErr) {
         console.error("[settle-real][SIGNED][propose/accept] FAILED:", paErr && (paErr.stack || paErr.message || paErr));
         if (proposeCommitted) {
@@ -2677,8 +2777,7 @@ async function realHoldingBySymbol(role, sym, need) {
   // both the demo parties AND the external WALLET parties (which mint their own fakes
   // in signed mode). registryForAdmin() returns non-null only for real issuers.
   const isReal = h => registryForAdmin(h.admin) != null;
-  const alias = { CBTC: "CBTC", CETH: "cETH", CC: "Amulet", AMULET: "Amulet" };
-  const target = alias[String(sym).toUpperCase()] || sym;
+  const target = instrumentIdForSymbol(sym);
   const want = Number(need);
   // Real, externally-issued holdings of this instrument only (skip stand-ins).
   let cands = hs.filter(h =>
@@ -2773,6 +2872,47 @@ async function findExistingAllocation(senderParty, settleId, legId, instrId, amo
     isFinite(parseFloat(a.amount)) &&
     Math.abs(parseFloat(a.amount) - want) < 1e-6
   ) || null;
+}
+
+// UI symbol -> the instrument id the registry actually uses. "CC" is Canton Coin's
+// display symbol; the ledger calls the instrument "Amulet".
+const INSTRUMENT_ALIAS = { CBTC: "CBTC", CETH: "cETH", CC: "Amulet", AMULET: "Amulet" };
+function instrumentIdForSymbol(sym) {
+  return INSTRUMENT_ALIAS[String(sym).toUpperCase()] || sym;
+}
+
+// Resumability. When a counterparty signs with its own wallet, settle-real cannot run
+// to completion in one request: it has to stop, let the wallet sign, and be called
+// again. So each step must be able to recognise its own output from a previous call.
+//
+// Matching is on the ALLOCATION CIDS, not on amounts. Amount matching would happily
+// adopt one of the dead orphans from an earlier attempt -- same parties, same pair,
+// same price -- and settle against allocations that were long since withdrawn.
+async function findPendingForLegs(requester, offerAllocCid, wantAllocCid) {
+  const list = await queryActive(requester, "UmbraSwap:RealSwapPending").catch(() => []);
+  return list.find(c => c.payload &&
+    c.payload.offerAllocCid === offerAllocCid &&
+    c.payload.wantAllocCid === wantAllocCid) || null;
+}
+async function findSettlementForLegs(requester, offerAllocCid, wantAllocCid) {
+  const list = await queryActive(requester, "UmbraSwap:SwapSettlement").catch(() => []);
+  return list.find(c => c.payload &&
+    c.payload.offerAllocCid === offerAllocCid &&
+    c.payload.wantAllocCid === wantAllocCid) || null;
+}
+
+// What a wallet must allocate for a leg it owns. We describe the leg rather than
+// building the command: choosing which holdings to spend is the owner's business, not
+// ours, and it is the same information the CIP-56 AllocationRequest view publishes.
+function allocationInstruction(senderParty, receiverParty, admin, instrId, amount, settleId, legId) {
+  return {
+    step: "AllocateLeg", party: senderParty, legId,
+    allocate: { admin, instrument: instrId, amount, receiver: receiverParty,
+                settlementRef: settleId, registry: registryForAdmin(admin) },
+    how: "POST { build:true, senderRole:<party>, receiver, admin, id, amount, holdingCids:[...yours], " +
+         "settleId, legId } to /api/real/allocate?build=1, sign via /api/ext/prepare + /api/ext/execute, " +
+         "then call settle-real again.",
+  };
 }
 
 // allocate one real leg via the existing endpoint's logic, then return the new alloc cid
