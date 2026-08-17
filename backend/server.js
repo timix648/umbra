@@ -116,19 +116,31 @@ async function recFor(role) {
   return rec;
 }
 
+// Is this party one that onboarded with its own wallet? Those have no key here, so
+// anything that would sign on their behalf must refuse rather than fail obscurely.
+function isWalletParty(pid) {
+  if (!pid || !String(pid).includes("::")) return false;
+  try { return !!loadWallets()[pid]; } catch { return false; }
+}
+
 // Resolve a role name to the party id that is ACTIVE for the current mode.
+// A wallet party is addressed by its full party id, which passes through unchanged --
+// it has no short role name because it isn't one of ours.
 async function partyIdFor(role) {
-  const r = String(role || "").toLowerCase();
+  const raw = String(role || "");
+  if (raw.includes("::")) return raw;                  // already a party id (incl. wallets)
+  const r = raw.toLowerCase();
   if (r === "public") return PARTIES.public;
   if (SIGNED_MODE && SIGNING_ROLES.includes(r)) return (await recFor(r)).partyId;
   const p = PARTIES[r];
-  if (!p) throw new Error(`unknown role '${role}'. use requester|dealer1|dealer2|public`);
+  if (!p) throw new Error(`unknown role '${role}'. use requester|dealer1|dealer2|public, or a full party id`);
   return p;
 }
 
 // Reverse lookup: given a party id, which role is it (in the current mode)?
 async function roleOfParty(pid) {
   for (const r of SIGNING_ROLES) if ((await partyIdFor(r)) === pid) return r;
+  if (isWalletParty(pid)) return pid;   // its own id IS its handle; partyIdFor passes it through
   return null;
 }
 
@@ -137,6 +149,12 @@ async function roleOfParty(pid) {
 //  - demo mode    -> operator submits via CanActAs (submit-and-wait)
 async function act(role, tag, commands) {
   const r = String(role || "").toLowerCase();
+  // Refuse loudly rather than fail somewhere deeper: we cannot sign for a party whose
+  // key we deliberately do not have. The caller must route this through the wallet.
+  if (isWalletParty(String(role || ""))) {
+    throw new Error(`no signing key for wallet party ${String(role).slice(0, 28)}… - ` +
+      `build the commands and have the wallet sign them via /api/ext/prepare + /api/ext/execute`);
+  }
   if (SIGNED_MODE && SIGNING_ROLES.includes(r)) {
     const rec = await recFor(r);
     return prepareSignExecute(rec, commands, tag); // async-accepted ({} on success)
@@ -1120,13 +1138,18 @@ app.post("/api/real/pending/:cid/accept", async (req, res) => {
     const role = req.query.role || (req.body && req.body.role) || "requester";
     const party = await partyIdFor(role);
     const cid = req.params.cid;
-    const registryUrl = req.query.registry || REGISTRY_URL_DEFAULT;
-
     // Confirm the offer exists for this party and get its registrar (instrument admin).
     const offers = await queryPendingTransfers(party);
     const offer = offers.find(o => o.contractId === cid);
     if (!offer) return res.status(404).json({ error: "no pending offer '" + cid + "' for " + role });
     if (!offer.admin) return res.status(400).json({ error: "offer has no instrument admin (registrar)" });
+
+    // Resolve the registry from the instrument's admin, the way /api/real/send does.
+    // Defaulting to REGISTRY_URL_DEFAULT asked the wrong registry about the offer and
+    // came back "Transfer offer not found" -- which reads like a missing contract but
+    // is really a question posed to the wrong registrar (e.g. Amulet lives on the DSO
+    // scan-proxy, not the default registry).
+    const registryUrl = req.query.registry || registryForAdmin(offer.admin) || REGISTRY_URL_DEFAULT;
 
     const ctx = await acceptContext(registryUrl, offer.admin, cid);
     const disclosed = (ctx.disclosedContracts || []).map(d => ({
@@ -1150,6 +1173,15 @@ app.post("/api/real/pending/:cid/accept", async (req, res) => {
       }],
       disclosedContracts: disclosed,
     };
+    // BUILD MODE. Registry choices need a choice-context and disclosed contracts that
+    // only the server can assemble, but signing them is the party's business. With
+    // build=1 we hand back the commands and disclosures and submit nothing -- the
+    // wallet feeds them to /api/ext/prepare, signs, and posts to /api/ext/execute.
+    if (req.query.build === "1" || (req.body && req.body.build)) {
+      return res.json({ ok: true, build: true, party, commands: body.commands,
+        disclosedContracts: disclosed,
+        note: "POST { party, commands, disclosedContracts } to /api/ext/prepare, sign the hash, then /api/ext/execute" });
+    }
     await realSubmit(body, "raccept");
     res.json({ ok: true, accepted: cid, instrument: offer.instrument, amount: offer.amount, disclosed: disclosed.length });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1266,6 +1298,14 @@ app.post("/api/real/allocate", async (req, res) => {
       } }],
       disclosedContracts: disclosed,
     };
+    // BUILD MODE (see /api/real/pending/:cid/accept): return the assembled command so
+    // the sender's own wallet can sign it. This is how a party allocates its own leg
+    // without Umbra holding its key -- settle-real then adopts that allocation.
+    if (req.query.build === "1" || b.build) {
+      return res.json({ ok: true, build: true, party: sender, commands: cmd.commands,
+        disclosedContracts: disclosed, settleId: b.settleId || null, legId: b.legId || null,
+        note: "POST { party, commands, disclosedContracts } to /api/ext/prepare, sign the hash, then /api/ext/execute" });
+    }
     // Capture the offset BEFORE submitting so the caller can scan completions from
     // here; commandId + sender are what allocateRealLeg needs to read the verdict.
     const offBefore = await ledgerEnd();
