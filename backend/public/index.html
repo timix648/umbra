@@ -3262,7 +3262,10 @@ function SettlementVault({ trade, onClose, role }) {
   },
     React.createElement(AssetIcon, { symbol: sym, size: "lg" }),
     React.createElement("div", { className: "vl-lt" },
-      React.createElement("div", { className: "vl-amt m" }, Number(amt).toLocaleString()),
+      // fmtNum, not toLocaleString: the default caps at 3 fraction digits, so a
+      // 0.0003 cBTC leg rendered as "0" — the receipt told the user they were
+      // getting nothing. fmtNum keeps significant digits on small amounts.
+      React.createElement("div", { className: "vl-amt m" }, fmtNum(amt)),
       React.createElement("div", { className: "vl-sym" }, sym)),
     React.createElement("div", { className: "vl-dir" },
       side === "top" ? "to " + (trade.dealerName || "the dealer") : "to you"));
