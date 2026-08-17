@@ -3744,13 +3744,17 @@ function PartyPortal({ role, wallet, onExit }) {
       title: d === "requester" ? "Ask dealers for a price" : "Price what you are shown"
     }, d === "requester" ? "Requesting" : "Dealing"))) : null;
 
-  if (isDealer) return DealerDesk({
+  // createElement, NOT a bare call. Called as functions these two run their hooks
+  // inside PartyPortal's own hook list, so the moment a wallet party can switch
+  // desks mid-session the hook count changes between renders and React throws
+  // #311. As elements each desk owns its hooks and a switch remounts cleanly.
+  if (isDealer) return React.createElement(DealerDesk, {
     meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, usd,
     price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid, role, deskSwitch
   });
 
   return React.createElement(React.Fragment, null,
-    RequesterDesk({
+    React.createElement(RequesterDesk, {
       meta, signed, onExit, note, deskSwitch,
       rfqs, quotes: myQuotes, holdings, rate, series, usd, rateNote, onPair, history, composedPair,
       onCreate: createRfq, onAward: awardQuote, awarding, awardStep,
