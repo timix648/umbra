@@ -1737,7 +1737,12 @@ app.post("/api/real/settle", async (req, res) => {
 // Default 15 min; override with body.expiresAt (ISO-8601) or body.ttlMins.
 app.post("/api/swap/rfq", async (req, res) => {
   try {
-    const requester = await partyIdFor("requester");
+    // The requester may be any party, including one that signs for itself. The OPERATOR
+    // stays the venue either way -- it is an observer on the RFQ and its children, which
+    // is what lets Umbra coordinate a trade it cannot sign for.
+    const requester = req.body.requester
+      ? await partyIdFor(req.body.requester)
+      : await partyIdFor("requester");
     const operator = await partyIdFor("requester");
     const offerAsset = await resolveAsset(req.body.offerAsset);
     const wantAsset = await resolveAsset(req.body.wantAsset);
@@ -1747,13 +1752,23 @@ app.post("/api/swap/rfq", async (req, res) => {
     const expiresAt = req.body.expiresAt ||
       new Date(Date.now() + Number(req.body.ttlMins || 15) * 60000).toISOString();
 
-    const rfqBefore = await idSetSwap(requester, "UmbraSwap:SwapRfq");
-    await act("requester", "swap-rfq", [{
+    const createCmd = [{
       CreateCommand: { templateId: `#${PKGN}:UmbraSwap:SwapRfq`,
         createArguments: {
           requester, operator,
           offerAsset, offerAmount: String(req.body.offerAmount),
-          wantAsset, invited, expiresAt } } }]);
+          wantAsset, invited, expiresAt } } }];
+    // A wallet requester signs the create itself, then invites via
+    // /api/swap/rfqs/:cid/invite?build=1 once it knows the rfq cid.
+    if (req.query.build === "1" || req.body.build || isWalletParty(requester)) {
+      return res.json({ ok: true, build: true, party: requester, commands: createCmd,
+        invited, expiresAt,
+        note: "sign via /api/ext/prepare + /api/ext/execute, then invite each dealer " +
+              "with POST /api/swap/rfqs/<rfqCid>/invite?build=1" });
+    }
+
+    const rfqBefore = await idSetSwap(requester, "UmbraSwap:SwapRfq");
+    await act("requester", "swap-rfq", createCmd);
     const rfqCid = await pollNewCid(requester, "UmbraSwap:SwapRfq", rfqBefore);
 
     const invitations = [];
@@ -1872,10 +1887,18 @@ app.get("/api/swap/rfqs", async (req, res) => {
 app.post("/api/swap/rfqs/:cid/invite", async (req, res) => {
   try {
     const dealer = await partyIdFor(req.body.dealer);
-    const result = await act("requester", "swap-invite", [{
+    const cmds = [{
       ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapRfq`,
         contractId: req.params.cid, choice: "InviteDealer",
-        choiceArgument: { dealer } } }]);
+        choiceArgument: { dealer } } }];
+    // InviteDealer is controller `requester`. If the requester signs for itself, hand
+    // the command back instead of signing it here.
+    const asParty = req.body.requester || req.query.requester;
+    if (req.query.build === "1" || req.body.build || isWalletParty(asParty)) {
+      return res.json({ ok: true, build: true, party: asParty || await partyIdFor("requester"),
+        commands: cmds, note: "sign via /api/ext/prepare + /api/ext/execute" });
+    }
+    const result = await act("requester", "swap-invite", cmds);
     res.json({ ok: true, signed: SIGNED_MODE, result });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1942,6 +1965,17 @@ app.get("/api/swap/proposals", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Proposed-but-unaccepted real swaps, the state between ProposeRealSwap and
+// AcceptRealSwap. Without this a trade is invisible during exactly the window in which
+// it is waiting on a counterparty's signature.
+app.get("/api/swap/pending-real", async (req, res) => {
+  try {
+    const role = req.query.role || "requester";
+    const pending = await queryActive(await partyIdFor(role), "UmbraSwap:RealSwapPending");
+    res.json({ ok: true, role, count: pending.length, pending });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Recorded-but-unexecuted settlements. AcceptRealSwap CONSUMES the SwapProposal, so
 // after it a caller has no handle on the trade; this is how it finds one.
 app.get("/api/swap/settlements", async (req, res) => {
@@ -1956,11 +1990,23 @@ app.get("/api/swap/settlements", async (req, res) => {
 // cid-returning swap endpoints
 app.post("/api/swap/quotes/:cid/accept", async (req, res) => {
   try {
-    const requester = await partyIdFor("requester");
-    const before = await idSetSwap(requester, "UmbraSwap:SwapProposal");
-    await act("requester", "swap-accept", [{
+    const operator = await partyIdFor("requester");
+    // AcceptSwapQuote is controller `requester`. The caller must say who it is, because
+    // the OPERATOR CANNOT SEE QUOTES: SwapQuote is `signatory dealer, observer requester`
+    // and the venue is deliberately not on it -- that is the blind auction working. So
+    // there is no server-side lookup to fall back on; an unnamed caller is the demo party.
+    const requester = req.body && req.body.requester
+      ? await partyIdFor(req.body.requester)
+      : operator;
+    const cmds = [{
       ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapQuote`,
-        contractId: req.params.cid, choice: "AcceptSwapQuote", choiceArgument: {} } }]);
+        contractId: req.params.cid, choice: "AcceptSwapQuote", choiceArgument: {} } }];
+    if (req.query.build === "1" || (req.body && req.body.build) || isWalletParty(requester)) {
+      return res.json({ ok: true, build: true, party: requester, commands: cmds,
+        note: "sign via /api/ext/prepare + /api/ext/execute" });
+    }
+    const before = await idSetSwap(requester, "UmbraSwap:SwapProposal");
+    await act("requester", "swap-accept", cmds);
     const proposalCid = await pollNewCid(requester, "UmbraSwap:SwapProposal", before);
     res.json({ ok: true, signed: SIGNED_MODE, proposalCid });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -2224,6 +2270,10 @@ app.post("/api/ext/execute", async (req, res) => {
 // must not unilaterally withdraw a counterparty's allocation.
 async function executeRealSettlement(o) {
   const { requester, dealerParty, settlementCid, offLeg, wantLeg, offAdmin, wantAdmin } = o;
+  // ExecuteRealSwap is `controller operator`. That was indistinguishable from the
+  // requester while the venue WAS the requester; with a wallet requester they differ,
+  // and submitting as the requester would be submitting as the wrong party.
+  const operator = o.operator || requester;
   const offerCtx = await execTransferContext(offLeg.registry, offAdmin, offLeg.cid);
   const wantCtx  = await execTransferContext(wantLeg.registry, wantAdmin, wantLeg.cid);
   const _dseen = {}; const disclosed = [];
@@ -2249,7 +2299,7 @@ async function executeRealSettlement(o) {
   // And the SwapSettlement itself: it was created by the dealer's AcceptRealSwap, so
   // the requester's participant has no copy to exercise against without this.
   try {
-    const setDisc = await templateDisclosure("UmbraSwap:SwapSettlement", settlementCid, requester);
+    const setDisc = await templateDisclosure("UmbraSwap:SwapSettlement", settlementCid, operator);
     if (setDisc && !_dseen[setDisc.contractId]) { _dseen[setDisc.contractId] = true; disclosed.push(setDisc); }
     else if (!setDisc) console.error("[exec-real] settlement blob not found for", settlementCid);
   } catch (sdErr) { console.error("[exec-real] settlement disclosure failed (continuing):", sdErr && sdErr.message); }
@@ -2259,7 +2309,7 @@ async function executeRealSettlement(o) {
   // (gathered via propose/accept), not from actAs -- so a single-party submission works.
   const execCmd = {
     commandId: "execreal-" + Date.now(),
-    actAs: [requester],
+    actAs: [operator],
     commands: [{ ExerciseCommand: {
       templateId: `#${PKGN}:UmbraSwap:SwapSettlement`,
       contractId: settlementCid,
@@ -2276,12 +2326,46 @@ async function executeRealSettlement(o) {
   await realSubmit(execCmd, "rexecreal");
 }
 
+// Accept a pending real swap. ProposeRealSwap is CONSUMING: it archives the
+// SwapProposal and leaves a RealSwapPending, so once the requester has proposed there
+// is no proposal left for settle-real to resume from. This is the rung between them.
+// AcceptRealSwap is `controller dealer`, so a wallet dealer gets the command to sign.
+app.post("/api/swap/pending/:cid/accept-real", async (req, res) => {
+  try {
+    const operator = await partyIdFor("requester");   // observer on RealSwapPending
+    const pend = (await queryActive(operator, "UmbraSwap:RealSwapPending"))
+      .find(c => c.contractId === req.params.cid);
+    if (!pend) return res.status(404).json({ error: "pending swap not found: " + req.params.cid });
+    const dealerParty = pend.payload.dealer;
+    const cmds = [{ ExerciseCommand: {
+      templateId: `#${PKGN}:UmbraSwap:RealSwapPending`, contractId: req.params.cid,
+      choice: "AcceptRealSwap", choiceArgument: {} } }];
+    if (req.query.build === "1" || (req.body && req.body.build) || isWalletParty(dealerParty)) {
+      return res.json({ ok: true, build: true, party: dealerParty, commands: cmds,
+        note: "sign via /api/ext/prepare + /api/ext/execute, then POST /api/swap/settlements/<cid>/execute-real" });
+    }
+    let dealerRole = await roleOfParty(dealerParty);
+    if (!dealerRole) dealerRole = String(dealerParty).split("::")[0].toLowerCase();
+    const before = await idSetSwap(operator, "UmbraSwap:SwapSettlement");
+    const accBefore = await ledgerEnd();
+    const accRes = await act(dealerRole, "swap-accept-real", cmds);
+    const committed = await confirmCommitted(dealerParty, accRes, accBefore, "AcceptRealSwap");
+    const settlementCid = await pollNewCid(operator, "UmbraSwap:SwapSettlement", before,
+      committed ? POLL_TRIES_COMMITTED : POLL_TRIES);
+    res.json({ ok: true, settlementCid,
+      note: "now POST /api/swap/settlements/" + settlementCid + "/execute-real" });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Execute a settlement that already exists on-ledger. This is the step that actually
 // moves the assets; both parties have already committed by allocating and accepting.
 app.post("/api/swap/settlements/:cid/execute-real", async (req, res) => {
   try {
-    const requester = await partyIdFor("requester");
-    const setl = (await queryActive(requester, "UmbraSwap:SwapSettlement"))
+    // Read as the OPERATOR (observer on every SwapSettlement) and take the parties from
+    // the payload: with a wallet requester the venue is not the requester, and querying
+    // as the demo party found neither the settlement nor the requester's allocation.
+    const operator = await partyIdFor("requester");
+    const setl = (await queryActive(operator, "UmbraSwap:SwapSettlement"))
       .find(c => c.contractId === req.params.cid);
     if (!setl) return res.status(404).json({ error: "settlement not found: " + req.params.cid });
     const p = setl.payload || {};
@@ -2290,6 +2374,7 @@ app.post("/api/swap/settlements/:cid/execute-real", async (req, res) => {
     }
     // Rebuild each leg from the allocation it points at -- the registry and admin come
     // off the allocation itself, so no proposal is needed.
+    const requester = p.requester || operator;
     const dealerParty = p.dealer;
     const allocs = [...await queryAllocations(requester), ...await queryAllocations(dealerParty)];
     const findAl = cid => allocs.find(a => a.contractId === cid);
@@ -2298,7 +2383,7 @@ app.post("/api/swap/settlements/:cid/execute-real", async (req, res) => {
     if (!wantAl) return res.status(409).json({ error: "want allocation is gone (withdrawn or already executed): " + p.wantAllocCid });
 
     await executeRealSettlement({
-      requester, dealerParty, settlementCid: req.params.cid,
+      requester, dealerParty, operator, settlementCid: req.params.cid,
       offLeg: { cid: p.offerAllocCid, registry: registryForAdmin(offAl.admin) },
       wantLeg: { cid: p.wantAllocCid, registry: registryForAdmin(wantAl.admin) },
       offAdmin: offAl.admin, wantAdmin: wantAl.admin,
@@ -2312,12 +2397,16 @@ app.post("/api/swap/settlements/:cid/execute-real", async (req, res) => {
 app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
   const steps = [];
   try {
-    const requester = await partyIdFor("requester");
-    // read the proposal to learn the trade (assets/amounts/dealer) off-ledger
-    const prop = (await queryActive(requester, "UmbraSwap:SwapProposal"))
+    // Read the proposal AS THE OPERATOR (the venue), which is an observer on every
+    // SwapProposal, then take the requester from the payload. Hardcoding the demo
+    // requester here meant a proposal raised by a wallet party was invisible, and the
+    // isWalletParty(requester) branch below could never fire.
+    const operator = await partyIdFor("requester");
+    const prop = (await queryActive(operator, "UmbraSwap:SwapProposal"))
       .find(c => c.contractId === req.params.cid);
     if (!prop) return res.status(404).json({ error: "proposal not found: " + req.params.cid });
     const p = prop.payload;
+    const requester = p.requester || operator;
     let dealerRole = await roleOfParty(p.dealer);
     if (!dealerRole) dealerRole = String(p.dealer).split("::")[0].toLowerCase(); // hint fallback
     const offerAsset = p.offerAsset, wantAsset = p.wantAsset;
@@ -2382,7 +2471,10 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
     } else if (isWalletParty(requester)) {
       return needAlloc(requester, allocationInstruction(requester, dealerPartyId, offAdmin, offInstr, offerAmount, settleId, "offer"));
     } else {
-      offLeg = await allocateRealLeg("requester", dealerRole, offAdmin, offInstr,
+      // Pass the actual party ids, not the literal role "requester": with a wallet
+      // requester that string resolves to the DEMO party, and the want leg was paid to
+      // the venue instead of to the party that raised the RFQ.
+      offLeg = await allocateRealLeg(requester, dealerPartyId, offAdmin, offInstr,
         offerAsset.symbol, offerAmount, settleId, "offer");
       steps.push("allocated real offer leg (" + offerAmount + " " + offerAsset.symbol + ")");
     }
@@ -2394,7 +2486,7 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
     } else if (isWalletParty(dealerPartyId)) {
       return needAlloc(dealerPartyId, allocationInstruction(dealerPartyId, requester, wantAdmin, wantInstr, wantAmount, settleId, "want"));
     } else {
-      wantLeg = await allocateRealLeg(dealerRole, "requester", wantAdmin, wantInstr,
+      wantLeg = await allocateRealLeg(dealerRole, requester, wantAdmin, wantInstr,
         wantAsset.symbol, wantAmount, settleId, "want");
       steps.push("allocated real want leg (" + wantAmount + " " + wantAsset.symbol + ")");
     }
@@ -2502,7 +2594,7 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
     if (SIGNED_MODE) {
       try {
         await executeRealSettlement({
-          requester, dealerParty: dealerPartyId, settlementCid,
+          requester, dealerParty: dealerPartyId, operator, settlementCid,
           offLeg, wantLeg, offAdmin, wantAdmin,
         });
       } catch (execErr) {
