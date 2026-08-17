@@ -1892,6 +1892,14 @@ app.post("/api/swap/quotes/:cid/accept", async (req, res) => {
 async function withdrawLeg(leg, adminHint) {
   try {
     if (!leg || !leg.cid) return;
+    // A leg the sender allocated with their own wallet is not ours to unwind: we have
+    // no authority over it, and undoing someone's own commitment is theirs to do. The
+    // allocation's allocateBefore/settleBefore deadline releases it if the trade dies.
+    if (leg.external) {
+      console.log("[withdrawLeg] skipping externally-allocated leg", String(leg.cid).slice(0, 16),
+                  "- owner must withdraw it (or let it expire)");
+      return;
+    }
     const party = leg.senderParty; // may be undefined; withdraw resolves via role too
     const body = { registry: leg.registry };
     // find which role owns it (sender) so withdraw can actAs it
@@ -2045,13 +2053,33 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
     const offAdmin = offPick.admin, offInstr = offPick.id;
     const wantAdmin = wantPick.admin, wantInstr = wantPick.id;
 
-    const settleId = "umbra-uiswap-" + Date.now();
-    const offLeg = await allocateRealLeg("requester", dealerRole, offAdmin, offInstr,
-      offerAsset.symbol, offerAmount, settleId, "offer-leg");
-    steps.push("allocated real offer leg (" + offerAmount + " " + offerAsset.symbol + ")");
-    const wantLeg = await allocateRealLeg(dealerRole, "requester", wantAdmin, wantInstr,
-      wantAsset.symbol, wantAmount, settleId, "want-leg");
-    steps.push("allocated real want leg (" + wantAmount + " " + wantAsset.symbol + ")");
+    // The settlement reference and leg names MUST match what the AllocationRequest view
+    // advertises, or a leg allocated by an external wallet can never be matched to this
+    // trade. The view uses the proposal's tradeId and the leg keys "offer"/"want".
+    // v8 proposals have no tradeId, so fall back to the previous generated id.
+    const settleId = p.tradeId || ("umbra-uiswap-" + Date.now());
+    const dealerPartyId = await partyIdFor(dealerRole);
+
+    // Prefer a leg the sender allocated with their OWN wallet; allocate on their behalf
+    // only when they haven't. This is what lets a party bring their own Canton wallet:
+    // Umbra stops needing their key for the leg they already committed themselves.
+    const offPre = await findExistingAllocation(requester, settleId, "offer", offInstr, offerAmount);
+    const offLeg = offPre
+      ? { cid: offPre.contractId, registry: registryForAdmin(offAdmin), senderRole: "requester", senderParty: requester, external: true }
+      : await allocateRealLeg("requester", dealerRole, offAdmin, offInstr,
+          offerAsset.symbol, offerAmount, settleId, "offer");
+    steps.push(offPre
+      ? "offer leg was already allocated by the requester's own wallet (" + offerAmount + " " + offerAsset.symbol + ")"
+      : "allocated real offer leg (" + offerAmount + " " + offerAsset.symbol + ")");
+
+    const wantPre = await findExistingAllocation(dealerPartyId, settleId, "want", wantInstr, wantAmount);
+    const wantLeg = wantPre
+      ? { cid: wantPre.contractId, registry: registryForAdmin(wantAdmin), senderRole: dealerRole, senderParty: dealerPartyId, external: true }
+      : await allocateRealLeg(dealerRole, "requester", wantAdmin, wantInstr,
+          wantAsset.symbol, wantAmount, settleId, "want");
+    steps.push(wantPre
+      ? "want leg was already allocated by " + dealerRole + "'s own wallet (" + wantAmount + " " + wantAsset.symbol + ")"
+      : "allocated real want leg (" + wantAmount + " " + wantAsset.symbol + ")");
 
     // record the real settlement on the awarded proposal (both principals authorize)
     let refMid = null;
@@ -2565,6 +2593,33 @@ async function locateAllocation(j, senderParty, beforeIds, instrId, amount, labe
       `visible - do NOT retry (would double-allocate). Check /v2/state/active-contracts.`);
   }
   return null;
+}
+
+// Has the sender ALREADY allocated this leg themselves?
+//
+// A wallet that reads the CIP-56 AllocationRequest view off a SwapProposal allocates
+// its own leg, keyed by the settlementRef id (the proposal's tradeId) and the leg name
+// the view advertises ("offer"/"want"). If such an allocation exists, Umbra must USE it
+// rather than allocate on the party's behalf -- that is the whole difference between a
+// venue that holds your signing key and one that merely coordinates.
+//
+// Matching is deliberately strict: same sender, same leg, same settlement reference,
+// same instrument and amount. A near-miss must NOT be adopted, because executing the
+// wrong allocation moves real assets.
+async function findExistingAllocation(senderParty, settleId, legId, instrId, amount) {
+  if (!senderParty || !settleId) return null;
+  let allocs;
+  try { allocs = await queryAllocations(senderParty); }
+  catch (e) { dbg("[wallet-alloc] query failed:", e.message); return null; }
+  const want = Number(amount);
+  return allocs.find(a =>
+    a.sender === senderParty &&
+    a.transferLegId === legId &&
+    a.settlementRef && a.settlementRef.id === settleId &&
+    a.instrument === instrId &&
+    isFinite(parseFloat(a.amount)) &&
+    Math.abs(parseFloat(a.amount) - want) < 1e-6
+  ) || null;
 }
 
 // allocate one real leg via the existing endpoint's logic, then return the new alloc cid
