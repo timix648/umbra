@@ -285,6 +285,20 @@
   .prt-desk-b:hover{color:var(--mute)}
   .prt-desk-b.on{background:var(--accentbg);color:var(--accent)}
 
+  /* dealer directory: discovery, not permissioning */
+  .dlrpick-l{display:flex;flex-wrap:wrap;gap:7px}
+  .dlrpick-b{display:inline-flex;align-items:center;gap:7px;cursor:pointer;
+    background:var(--bg3);border:1px solid var(--line);border-radius:4px;color:var(--mute);
+    padding:8px 11px;font:500 11.5px/1 ui-monospace,monospace;transition:border-color .14s,color .14s}
+  .dlrpick-b:hover{border-color:var(--accentline);color:var(--text)}
+  .dlrpick-b.on{border-color:var(--accent);color:var(--text);background:var(--accentbg)}
+  .dlrpick-b .dlrpick-d{width:7px;height:7px;border-radius:50%;background:var(--line2);flex:0 0 auto}
+  .dlrpick-b.on .dlrpick-d{background:var(--accent)}
+  .dlrpick-b i{font-style:normal;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--dim)}
+  .dlrpick-n{display:block;margin-top:7px;font:400 11px/1.4 ui-sans-serif,system-ui,sans-serif;
+    color:var(--dim);font-style:normal}
+
   .sgn-dealers{flex:1;display:grid;grid-template-columns:1fr 74px 1fr;min-height:0}
   @media(max-width:1000px){.sgn-dealers{grid-template-columns:1fr;gap:16px}}
   .sgn-card{display:flex;flex-direction:column;justify-content:space-between;gap:13px;
@@ -1772,7 +1786,7 @@ function OperatorConsole({ onExit }) {
         offerAsset: f.offerAsset,
         offerAmount: f.offerAmount,
         wantAsset: f.wantAsset,
-        invited: ["dealer1", "dealer2"]
+        invited: (f.invited && f.invited.length) ? f.invited : ["dealer1", "dealer2"]
       });
       push("Swap RFQ created");
       addlog("SWAP " + f.offerAmount + " " + f.offerAsset.symbol + " \u2192 " + f.wantAsset.symbol + (mode ? " (requester-signed)" : ""), "ok");
@@ -2227,7 +2241,8 @@ function AssetIcon({
 function SwapRfqForm({
   onCreate,
   onPair,
-  holdings
+  holdings,
+  role
 }) {
   const FALLBACK = [{ symbol: "cBTC" }, { symbol: "cETH" }, { symbol: "CC" }];
   const [assets, setAssets] = useState(FALLBACK);
@@ -2235,6 +2250,24 @@ function SwapRfqForm({
   const [wantSym, setWantSym] = useState("cETH");
   const [amount, setAmount] = useState("1");
   const [busy, setBusy] = useState(false);
+  const [dealers, setDealers] = useState([]);
+  const [invited, setInvited] = useState([]);
+
+  // Who is out there to ask. Inviting MORE dealers is not automatically better:
+  // the winner's curse sharpens as the field grows, so the default is the two
+  // venue dealers and widening it is a deliberate act.
+  useEffect(() => {
+    let live = true;
+    api("/api/dealers?role=" + encodeURIComponent(role || "requester"))
+      .then(r => {
+        if (!live) return;
+        const list = (r && r.dealers) || [];
+        setDealers(list);
+        setInvited(list.filter(d => d.kind === "venue").map(d => d.id));
+      })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [role]);
 
   useEffect(() => {
     let live = true;
@@ -2313,25 +2346,47 @@ function SwapRfqForm({
   }, /*#__PURE__*/React.createElement(AssetIcon, { symbol: wantSym }), /*#__PURE__*/React.createElement("select", {
     value: wantSym,
     onChange: e => setWantSym(e.target.value)
-  }, syms.filter(x => x !== offerSym).map(opt)))), /*#__PURE__*/React.createElement("button", {
+  }, syms.filter(x => x !== offerSym).map(opt)))),
+
+  dealers.length ? /*#__PURE__*/React.createElement("div", { className: "fld dlrpick" },
+    /*#__PURE__*/React.createElement("span", null, "invite dealers"),
+    /*#__PURE__*/React.createElement("div", { className: "dlrpick-l" },
+      dealers.map(d => /*#__PURE__*/React.createElement("button", {
+        key: d.id,
+        type: "button",
+        className: "dlrpick-b" + (invited.includes(d.id) ? " on" : ""),
+        onClick: () => setInvited(v => v.includes(d.id) ? v.filter(x => x !== d.id) : v.concat(d.id)),
+        "data-tip": d.kind === "wallet"
+          ? "Signs with its own wallet. The venue holds no key for it."
+          : "A venue desk. The operator signs on its behalf."
+      }, /*#__PURE__*/React.createElement("span", { className: "dlrpick-d" }),
+         d.name,
+         d.kind === "wallet" ? /*#__PURE__*/React.createElement("i", null, "self-signing") : null))),
+    /*#__PURE__*/React.createElement("em", { className: "dlrpick-n" },
+      "Only those you invite can see this block — or price it.")) : null,
+
+  /*#__PURE__*/React.createElement("button", {
     className: "btn prime",
-    disabled: busy || offerSym === wantSym || _short,
+    disabled: busy || offerSym === wantSym || _short || !invited.length,
     onClick: async () => {
-      if (busy || _short) return;
+      if (busy || _short || !invited.length) return;
       setBusy(true);
       try {
         await onCreate({
           offerAsset: findAsset(offerSym),
           offerAmount: amount,
-          wantAsset: findAsset(wantSym)
+          wantAsset: findAsset(wantSym),
+          invited: invited.slice()
         });
       } finally { setBusy(false); }
     },
     "data-tip": _short
       ? ("You hold " + _offerHeld + " " + offerSym + " — not enough to offer " + amount)
-      : "Request quotes to swap one asset for another — dealers compete, winner settles atomically"
+      : (!invited.length ? "Pick at least one dealer to ask"
+        : "Request quotes to swap one asset for another — dealers compete, winner settles atomically")
   }, busy ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", { className: "spinr" }), "Creating")
-     : (_short ? ("Insufficient " + offerSym) : "Create Swap RFQ"))));
+     : (_short ? ("Insufficient " + offerSym)
+        : (!invited.length ? "Pick a dealer" : "Create Swap RFQ")))));
 }
 function RfqForm({
   onCreate
@@ -2830,7 +2885,7 @@ const ASSET_LONG = sym => {
 function RequesterDesk(P) {
   const { meta, signed, onExit, note, rfqs, quotes, holdings, rate, series, usd, rateNote,
           onCreate, onAward, awarding, awardStep, onPair, history, composedPair, composing, setComposing, ratePair,
-          selRfqCid, setSelRfqCid, deskSwitch } = P;
+          selRfqCid, setSelRfqCid, deskSwitch, role } = P;
   const settled = (history && history.settlements) || [];
   // the reference is for the pair the requester is composing -- matches the fetch
   // in load() (requester prices composedPair), so label and value agree and
@@ -2948,7 +3003,7 @@ function RequesterDesk(P) {
           ? React.createElement("section", { className: "mod mod-focal" },
               React.createElement("div", { className: "mod-h" }, React.createElement("h2", null, "New request")),
               React.createElement("div", { className: "mod-b" },
-                React.createElement(SwapRfqForm, { onPair, holdings, onCreate: async (f) => { await onCreate(f); setComposing(false); } })))
+                React.createElement(SwapRfqForm, { onPair, holdings, role, onCreate: async (f) => { await onCreate(f); setComposing(false); } })))
           : null,
 
         _liveRfqs.length > 1 ? React.createElement("section", { className: "mod" },
@@ -3838,7 +3893,8 @@ function PartyPortal({ role, wallet, onExit }) {
       const r = await post("/api/swap/rfq", {
         requester: role,
         offerAsset: f.offerAsset, offerAmount: f.offerAmount,
-        wantAsset: f.wantAsset, invited: ["dealer1", "dealer2"]
+        wantAsset: f.wantAsset,
+        invited: (f.invited && f.invited.length) ? f.invited : ["dealer1", "dealer2"]
       });
       // A wallet requester signs the SwapRfq itself, and each InviteDealer after
       // it -- the invites need the rfq cid, which only exists once the create has
@@ -3882,7 +3938,7 @@ function PartyPortal({ role, wallet, onExit }) {
 
   return React.createElement(React.Fragment, null,
     React.createElement(RequesterDesk, {
-      meta, signed, onExit, note, deskSwitch,
+      meta, signed, onExit, note, deskSwitch, role,
       rfqs, quotes: myQuotes, holdings, rate, series, usd, rateNote, onPair, history, composedPair,
       onCreate: createRfq, onAward: awardQuote, awarding, awardStep,
       composing, setComposing, ratePair, selRfqCid, setSelRfqCid

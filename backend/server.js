@@ -451,6 +451,32 @@ app.get("/api/mode", async (req, res) => {
   res.json({ signedMode: SIGNED_MODE, parties: await activePartyMap() });
 });
 
+// ---- DEALER DIRECTORY -------------------------------------------------------
+// Who a requester can invite. Discovery only: this list confers NOTHING. Umbra
+// curates at the protocol level instead -- InviteDealer means a requester names
+// its own counterparties, and a dealer that was never invited cannot see, let
+// alone price, the block. So there is no reputation and no KYC here; those are
+// mainnet questions about who may trade, not about who exists.
+//
+// `?role=` excludes the caller: a party inviting itself would be quoting its own
+// block, and the ledger would reject the swap at settlement anyway.
+app.get("/api/dealers", async (req, res) => {
+  try {
+    const me = req.query.role ? await partyIdFor(req.query.role).catch(() => null) : null;
+    const out = [];
+    for (const r of ["dealer1", "dealer2"]) {
+      const pid = await partyIdFor(r).catch(() => null);
+      if (pid) out.push({ id: r, partyId: pid, name: r === "dealer1" ? "Dealer 1" : "Dealer 2",
+        kind: "venue", custody: "operator" });
+    }
+    for (const w of Object.values(loadWallets())) {
+      out.push({ id: w.partyId, partyId: w.partyId, name: String(w.partyId).split("::")[0],
+        kind: "wallet", custody: "self" });
+    }
+    res.json({ ok: true, dealers: out.filter(d => d.partyId !== me) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // body: { signed: true|false }. Turning ON pre-onboards the 3 roles so the
 // first signed trade isn't slow.
 app.post("/api/mode", async (req, res) => {
