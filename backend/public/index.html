@@ -3241,15 +3241,19 @@ function SettlementVault({ trade, onClose, role }) {
   const [phase, setPhase] = useState("idle");
   const [proof, setProof] = useState(null);
   const failed = !!(trade && trade.failed);
+  // A trade waiting on the counterparty is neither settled nor refused. It must not
+  // borrow the reverted styling, and it must never claim nothing moved.
+  const waiting = !!(trade && trade.waiting);
 
   useEffect(() => {
     if (!trade) return;
     const t = [];
     t.push(setTimeout(() => setPhase("settling"), 40));
+    if (waiting) return () => t.forEach(clearTimeout);   // hold at "settling"
     t.push(setTimeout(() => setPhase(failed ? "reverted" : "sealed"), 820));
     if (!failed) t.push(setTimeout(() => setPhase("settled"), 1380));
     return () => t.forEach(clearTimeout);
-  }, [trade, failed]);
+  }, [trade, failed, waiting]);
 
   if (!trade) return null;
 
@@ -3275,7 +3279,8 @@ function SettlementVault({ trade, onClose, role }) {
       React.createElement("div", { className: "vl-panel", "data-role": "panel" },
 
         React.createElement("div", { className: "vl-eyb" },
-          failed ? "Settlement refused" : "Atomic settlement \u00b7 CIP-56"),
+          waiting ? "Awaiting the counterparty"
+                  : failed ? "Settlement refused" : "Atomic settlement \u00b7 CIP-56"),
 
         React.createElement("div", { className: "vl-legs", "data-role": "legs" },
           leaf(trade.offerSym, trade.offerAmt, "top"),
@@ -3283,15 +3288,19 @@ function SettlementVault({ trade, onClose, role }) {
           leaf(trade.wantSym, trade.wantAmt, "bottom")),
 
         React.createElement("div", { className: "vl-say" },
-          phase === "settled"
+          waiting
             ? React.createElement(React.Fragment, null,
-                React.createElement("b", null, "Settled."),
-                " Both legs moved in one indivisible transaction.")
-            : phase === "reverted"
+                React.createElement("b", null, "Signed."),
+                " " + (trade.reason || "Waiting for the counterparty to accept."))
+            : phase === "settled"
               ? React.createElement(React.Fragment, null,
-                  React.createElement("b", { className: "rj" }, "Reverted."),
-                  " The ledger refused the trade. ", React.createElement("b", null, "Nothing moved."))
-              : "Committing both legs\u2026"),
+                  React.createElement("b", null, "Settled."),
+                  " Both legs moved in one indivisible transaction.")
+              : phase === "reverted"
+                ? React.createElement(React.Fragment, null,
+                    React.createElement("b", { className: "rj" }, "Reverted."),
+                    " The ledger refused the trade. ", React.createElement("b", null, "Nothing moved."))
+                : "Committing both legs\u2026"),
 
         React.createElement("div", { className: "vl-rc", "data-role": "receipt-ok" },
           row("Engine", "CIP-56 allocation", false),
@@ -3762,9 +3771,43 @@ function PartyPortal({ role, wallet, onExit }) {
   // settle-real is resumable: it returns 202 whenever the next step belongs to a
   // party that signs for itself, and continues from ledger state when called
   // again. Drive that loop, signing each step in the wallet.
+  // ProposeRealSwap is a CONSUMING choice: the moment the wallet signs it the
+  // SwapProposal is archived, and settle-real answers 404 for that cid. That is the
+  // trade advancing, not failing -- it is now a RealSwapPending waiting on the dealer,
+  // or already a SwapSettlement. Reporting it as a revert told the user "nothing
+  // moved" while their leg sat allocated on the ledger.
+  const afterProposalGone = useCallback(async (onStep) => {
+    const enc = encodeURIComponent;
+    const se = await api("/api/swap/settlements?role=" + enc(role)).catch(() => ({}));
+    const s = ((se && se.settlements) || []).filter(x => x.payload && x.payload.requester === role).pop();
+    if (s) {
+      // Both sides have committed; the atomic execute is the operator's to submit.
+      onStep("Executing the atomic swap…");
+      await post("/api/swap/settlements/" + s.contractId + "/execute-real", {});
+      return { ok: true, settlementCid: s.contractId };
+    }
+    const pe = await api("/api/swap/pending-real?role=" + enc(role)).catch(() => ({}));
+    const pnd = ((pe && pe.pending) || []).filter(x => x.payload && x.payload.requester === role).pop();
+    if (pnd) {
+      const e = new Error("Your side is signed and your " +
+        (pnd.payload.offerAsset && pnd.payload.offerAsset.symbol || "offer") +
+        " leg is allocated. Waiting for " + DEALER_NAME(pnd.payload.dealer) +
+        " to accept — nothing has moved yet, and nothing is lost.");
+      e.waiting = true;
+      throw e;
+    }
+    throw new Error("the proposal is gone, but no pending swap or settlement was found for it");
+  }, [role]);
+
   const settleWithWallet = useCallback(async (proposalCid, rfqCid, onStep) => {
     for (let round = 0; round < 8; round++) {
-      const rr = await post("/api/swap/proposals/" + proposalCid + "/settle-real", { rfqCid });
+      let rr;
+      try {
+        rr = await post("/api/swap/proposals/" + proposalCid + "/settle-real", { rfqCid });
+      } catch (e) {
+        if (/proposal not found/i.test(e && e.message || "")) return await afterProposalGone(onStep);
+        throw e;
+      }
       if (rr.ok) return rr;
 
       if (rr.status === "awaiting-signature") {
@@ -3804,7 +3847,7 @@ function PartyPortal({ role, wallet, onExit }) {
       throw new Error(rr.error || ("settlement stopped at " + (rr.status || "an unknown step")));
     }
     throw new Error("settlement did not finish after eight rounds");
-  }, [role, holdings]);
+  }, [role, holdings, afterProposalGone]);
 
   async function sendQuote(cid, wantSym) {
     if (busy[cid]) return;
@@ -3881,8 +3924,11 @@ function PartyPortal({ role, wallet, onExit }) {
     } catch (e) {
       // The ledger refusing a trade is not an error to be toasted away \u2014 it is
       // the soundness guarantee doing its job. Show it.
+      // "Waiting on the counterparty" is NOT a refusal. Saying "nothing moved" there
+      // is worse than unhelpful: the requester's leg is allocated and locked, and the
+      // trade is live until the dealer accepts or the deadline lapses.
       setVault({
-        failed: true, reason: e.message,
+        failed: !e.waiting, waiting: !!e.waiting, reason: e.message,
         offerSym, offerAmt: p.offerAmount,
         wantSym, wantAmt: p.price,
         dealerName: DEALER_NAME(p.dealer),
