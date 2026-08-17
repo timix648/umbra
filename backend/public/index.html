@@ -3648,6 +3648,105 @@ function PartyPortal({ role, wallet, onExit }) {
 
   useEffect(() => { load(); const t = setInterval(load, 2500); return () => clearInterval(t); }, [load]);
 
+  // ---- ACTING AS A PARTY THAT SIGNS FOR ITSELF ----
+  //
+  // The venue will not sign for a wallet party -- it has no key for one. Those
+  // endpoints hand the assembled commands back instead (`build: true`), and the
+  // half below is the other side of that bargain: push them to the wallet, then
+  // let the server pick the trade back up from ledger state.
+  const signBuilt = useCallback(async (r) => {
+    if (!r || !r.build) return r;
+    if (!wallet) throw new Error("this party signs for itself, but no wallet is connected");
+    await WalletLink.submit({ commands: r.commands, disclosedContracts: r.disclosedContracts });
+    return r;
+  }, [wallet]);
+
+  // The create was signed inside the wallet, so the server never saw the new cid.
+  // Match on requester + the expiry the server stamped -- NOT on the pair or the
+  // amount, which would cheerfully adopt a different request for the same block.
+  const findRfqCid = useCallback(async (requester, expiresAt) => {
+    for (let i = 0; i < 25; i++) {
+      const rq = await api("/api/swap/rfqs").catch(() => ({}));
+      const hit = ((rq && rq.rfqs) || []).find(x => x.payload &&
+        x.payload.requester === requester && x.payload.expiresAt === expiresAt);
+      if (hit) return hit.contractId;
+      await new Promise(r => setTimeout(r, 900));
+    }
+    throw new Error("signed, but the request never appeared on the ledger");
+  }, []);
+
+  // Same problem one stage later: AcceptSwapQuote is signed in the wallet, so the
+  // proposal cid has to be read back off the ledger. SwapProposal carries no quote
+  // cid, so the match is counterparty + pair + price, narrowed by `since` -- the
+  // moment we asked. Without that clock an abandoned proposal for the same block
+  // at the same price is indistinguishable from this one, and settling against it
+  // would work on withdrawn allocations.
+  const findProposalCid = useCallback(async (qp, since) => {
+    const same = p => p && p.requester === role && p.dealer === qp.dealer &&
+      String(p.price) === String(qp.price) &&
+      String(p.offerAmount) === String(qp.offerAmount) &&
+      p.offerAsset && p.offerAsset.symbol === qp.offerAsset.symbol &&
+      p.wantAsset && p.wantAsset.symbol === qp.wantAsset.symbol;
+    for (let i = 0; i < 25; i++) {
+      const pr = await api("/api/swap/proposals?role=" + encodeURIComponent(role)).catch(() => ({}));
+      const hits = ((pr && pr.proposals) || []).filter(x => same(x.payload) &&
+        x.payload.requestedAt && Date.parse(x.payload.requestedAt) >= since);
+      if (hits.length) {
+        hits.sort((a2, b2) => Date.parse(b2.payload.requestedAt) - Date.parse(a2.payload.requestedAt));
+        return hits[0].contractId;
+      }
+      await new Promise(r => setTimeout(r, 900));
+    }
+    throw new Error("accepted, but the proposal never appeared on the ledger");
+  }, [role]);
+
+  // settle-real is resumable: it returns 202 whenever the next step belongs to a
+  // party that signs for itself, and continues from ledger state when called
+  // again. Drive that loop, signing each step in the wallet.
+  const settleWithWallet = useCallback(async (proposalCid, rfqCid, onStep) => {
+    for (let round = 0; round < 8; round++) {
+      const rr = await post("/api/swap/proposals/" + proposalCid + "/settle-real", { rfqCid });
+      if (rr.ok) return rr;
+
+      if (rr.status === "awaiting-signature") {
+        const a = rr.awaiting || {};
+        if (a.party && a.party !== role) throw new Error("waiting on the counterparty to sign " + a.step);
+        onStep("Sign " + a.step + " in your wallet…");
+        await WalletLink.submit({ commands: a.commands });
+        continue;
+      }
+
+      if (rr.status === "awaiting-allocation") {
+        const ins = rr.awaiting || {}, al = ins.allocate || {};
+        if (ins.party && ins.party !== role) {
+          throw new Error("waiting on the counterparty to allocate its own leg");
+        }
+        const sym = al.instrument === "Amulet" ? "CC" : (al.instrument === "CBTC" ? "cBTC" : al.instrument);
+        // Allocating LOCKS a holding, so take the smallest set that covers the
+        // leg rather than offering up the whole balance.
+        const mine = holdings
+          .filter(h => h.payload.asset.symbol === sym)
+          .sort((a2, b2) => Number(b2.payload.amount) - Number(a2.payload.amount));
+        const cids = []; let got = 0;
+        for (const h of mine) { if (got >= Number(al.amount)) break; cids.push(h.contractId); got += Number(h.payload.amount); }
+        if (!cids.length || got < Number(al.amount)) {
+          throw new Error("not enough free " + sym + " to allocate " + al.amount + " (some may be locked in an earlier allocation)");
+        }
+        onStep("Allocate your " + sym + " leg in your wallet…");
+        const built = await post("/api/real/allocate?build=1", {
+          build: true, senderRole: ins.party, receiver: al.receiver,
+          admin: al.admin, id: al.instrument, amount: al.amount,
+          holdingCids: cids, settleId: al.settlementRef, legId: ins.legId
+        });
+        await WalletLink.submit({ commands: built.commands, disclosedContracts: built.disclosedContracts });
+        continue;
+      }
+
+      throw new Error(rr.error || ("settlement stopped at " + (rr.status || "an unknown step")));
+    }
+    throw new Error("settlement did not finish after eight rounds");
+  }, [role, holdings]);
+
   async function sendQuote(cid, wantSym) {
     if (busy[cid]) return;
     const p = price[cid];
@@ -3659,7 +3758,8 @@ function PartyPortal({ role, wallet, onExit }) {
     if (Number(p) > _wMax) { say("You cannot back that: your largest " + wantSym + " holding is " + _wMax.toLocaleString() + ". Quote at or below it.", true); return; }
     setBusy(b => ({ ...b, [cid]: true }));
     try {
-      await post("/api/swap/invitations/" + cid + "/quote", { dealer: role, price: p });
+      const r = await post("/api/swap/invitations/" + cid + "/quote", { dealer: role, price: p });
+      if (r.build) { say("Sign your quote in your wallet…"); await signBuilt(r); }
       say("Quote sent. Only the buyer can see it.");
       setPrice(x => { const n = { ...x }; delete n[cid]; return n; });
       load();
@@ -3684,19 +3784,32 @@ function PartyPortal({ role, wallet, onExit }) {
       setAwardStep("Accepting\u2026");
       // Accept the awarded quote -> SwapProposal, then settle it with REAL tokens
       // (backend validates real holdings + allocates both real legs + atomic settle).
-      const a = await post("/api/swap/quotes/" + q.contractId + "/accept", {});
-      // staged progress: real settlement is several ledger round-trips (~8-12s).
-      // Advance a visible ticker through the known stages so the wait isn't dead air.
-      const _stages = ["Allocating your " + offerSym + " leg\u2026",
-                       "Allocating " + DEALER_NAME(p.dealer) + "'s " + wantSym + " leg\u2026",
-                       "Recording settlement on ledger\u2026",
-                       "Executing atomic swap\u2026"];
-      let _si = 0; setAwardStep(_stages[0]);
-      const _tick = setInterval(() => { _si = Math.min(_si + 1, _stages.length - 1); setAwardStep(_stages[_si]); }, 2600);
+      const askedAt = Date.now();
+      const a = await post("/api/swap/quotes/" + q.contractId + "/accept", { requester: role });
+      let proposalCid = a.proposalCid;
+      if (a.build) {
+        setAwardStep("Sign the acceptance in your wallet\u2026");
+        await signBuilt(a);
+        proposalCid = await findProposalCid(p, askedAt);
+      }
       let rr;
-      try {
-        rr = await post("/api/swap/proposals/" + a.proposalCid + "/settle-real", { rfqCid: p.rfqCid });
-      } finally { clearInterval(_tick); }
+      if (wallet) {
+        // Each step the wallet has to sign is its own round trip, so the ticker
+        // would be lying about progress. Report the step actually being waited on.
+        rr = await settleWithWallet(proposalCid, p.rfqCid, setAwardStep);
+      } else {
+        // staged progress: real settlement is several ledger round-trips (~8-12s).
+        // Advance a visible ticker through the known stages so the wait isn't dead air.
+        const _stages = ["Allocating your " + offerSym + " leg\u2026",
+                         "Allocating " + DEALER_NAME(p.dealer) + "'s " + wantSym + " leg\u2026",
+                         "Recording settlement on ledger\u2026",
+                         "Executing atomic swap\u2026"];
+        let _si = 0; setAwardStep(_stages[0]);
+        const _tick = setInterval(() => { _si = Math.min(_si + 1, _stages.length - 1); setAwardStep(_stages[_si]); }, 2600);
+        try {
+          rr = await post("/api/swap/proposals/" + proposalCid + "/settle-real", { rfqCid: p.rfqCid });
+        } finally { clearInterval(_tick); }
+      }
       if (!rr.ok) throw new Error(rr.error || "real settlement failed");
       setAwardStep("Settled \u2713");
       setVault({
@@ -3722,10 +3835,24 @@ function PartyPortal({ role, wallet, onExit }) {
 
   async function createRfq(f) {
     try {
-      await post("/api/swap/rfq", {
+      const r = await post("/api/swap/rfq", {
+        requester: role,
         offerAsset: f.offerAsset, offerAmount: f.offerAmount,
         wantAsset: f.wantAsset, invited: ["dealer1", "dealer2"]
       });
+      // A wallet requester signs the SwapRfq itself, and each InviteDealer after
+      // it -- the invites need the rfq cid, which only exists once the create has
+      // committed, so they cannot be bundled into one signature.
+      if (r.build) {
+        say("Sign the request in your wallet…");
+        await signBuilt(r);
+        const rfqCid = await findRfqCid(r.party, r.expiresAt);
+        for (const dealer of (r.invited || [])) {
+          const inv = await post("/api/swap/rfqs/" + rfqCid + "/invite?build=1",
+            { dealer, requester: role });
+          await signBuilt(inv);
+        }
+      }
       say("Request sent to your dealers.");
       load();
     } catch (e) { say(e.message, true); }
