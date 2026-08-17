@@ -60,14 +60,19 @@ async function onboardExternalParty(role) {
 
 // prepare -> sign (with the party's OWN key) -> execute. The operator never signs.
 async function prepareSignExecute(rec, commands, tag = "ext", disclosed = []) {
+  // The commandId is the ONLY handle the caller has for looking this submission up
+  // in /v2/commands/completions afterwards. execute is async-accepted, so without it
+  // a rejection is indistinguishable from a slow commit. Generate it once and hand
+  // it back rather than burning it inline.
+  const commandId = `${tag}-${Date.now()}`;
   const prep = await jpost("/v2/interactive-submission/prepare", {
-    userId: USER_ID, actAs: [rec.partyId], commandId: `${tag}-${Date.now()}`,
+    userId: USER_ID, actAs: [rec.partyId], commandId,
     synchronizerId: SYNC, packageIdSelectionPreference: [], commands,
     disclosedContracts: disclosed,
   });
   const priv = crypto.createPrivateKey({ key: Buffer.from(rec.privDer, "base64"), format: "der", type: "pkcs8" });
   const sig = crypto.sign(null, Buffer.from(prep.preparedTransactionHash, "base64"), priv).toString("base64");
-  return jpost("/v2/interactive-submission/execute", {
+  const out = await jpost("/v2/interactive-submission/execute", {
     preparedTransaction: prep.preparedTransaction,
     hashingSchemeVersion: prep.hashingSchemeVersion,
     submissionId: `${tag}-${Date.now()}`, userId: USER_ID,
@@ -76,6 +81,7 @@ async function prepareSignExecute(rec, commands, tag = "ext", disclosed = []) {
       format: "SIGNATURE_FORMAT_RAW", signature: sig, signedBy: rec.fingerprint,
       signingAlgorithmSpec: "SIGNING_ALGORITHM_SPEC_ED25519" }] }] },
   });
+  return Object.assign({}, out, { commandId, actAs: [rec.partyId] });
 }
 
 // Multi-party prepare -> sign -> execute. Every party signs with its OWN key;
@@ -83,8 +89,9 @@ async function prepareSignExecute(rec, commands, tag = "ext", disclosed = []) {
 // external signatory (e.g. AssetHolding = signatory owner, asset.admin).
 async function prepareSignExecuteMulti(recs, commands, tag = "extm", disclosed = []) {
   const parties = recs.map((r) => r.partyId);
+  const commandId = `${tag}-${Date.now()}`;   // see note in prepareSignExecute
   const prep = await jpost("/v2/interactive-submission/prepare", {
-    userId: USER_ID, actAs: parties, commandId: `${tag}-${Date.now()}`,
+    userId: USER_ID, actAs: parties, commandId,
     synchronizerId: SYNC, packageIdSelectionPreference: [], commands,
     disclosedContracts: disclosed,
   });
@@ -98,13 +105,14 @@ async function prepareSignExecuteMulti(recs, commands, tag = "extm", disclosed =
       format: "SIGNATURE_FORMAT_RAW", signature: sig, signedBy: rec.fingerprint,
       signingAlgorithmSpec: "SIGNING_ALGORITHM_SPEC_ED25519" }] };
   });
-  return jpost("/v2/interactive-submission/execute", {
+  const out = await jpost("/v2/interactive-submission/execute", {
     preparedTransaction: prep.preparedTransaction,
     hashingSchemeVersion: prep.hashingSchemeVersion,
     submissionId: `${tag}-${Date.now()}`, userId: USER_ID,
     deduplicationPeriod: { Empty: {} },
     partySignatures: { signatures },
   });
+  return Object.assign({}, out, { commandId, actAs: parties });
 }
 
 module.exports = { onboardExternalParty, prepareSignExecute, prepareSignExecuteMulti };

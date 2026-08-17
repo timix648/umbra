@@ -32,3 +32,7 @@ spike/
 # scaffolding + backups (kept locally, never committed)
 *.bak
 wrap_dalf.py
+
+# npm lockfile from a stray `npm install`; this project uses pnpm-lock.yaml and
+# tracking both invites dependency drift.
+backend/package-lock.json
