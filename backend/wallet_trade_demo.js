@@ -187,8 +187,17 @@ async function until(label, fn, tries = 24, gap = 2500) {
                   setl.payload.price, setl.payload.wantAsset.symbol);
       // ExecuteRealSwap is controller `operator` (the venue), so this side needs no
       // wallet signature: both parties already committed via allocation + accept.
-      const ex = await j(`/api/swap/settlements/${setl.contractId}/execute`, {});
-      console.log("   EXECUTE:", ex.status, JSON.stringify(ex.body).slice(0, 400));
+      // /execute would exercise stand-in ExecuteSwap, which the ledger refuses for
+      // real legs -- /execute-real is the registry path.
+      const before = await must(`/api/real/holdings?role=${encodeURIComponent(wallet.partyId)}`);
+      console.log("   wallet before:", JSON.stringify(before.instruments || []));
+      const ex = await j(`/api/swap/settlements/${setl.contractId}/execute-real`, {});
+      console.log("   EXECUTE:", ex.status, JSON.stringify(ex.body).slice(0, 300));
+      if (ex.status === 200) {
+        await sleep(8000);
+        const after = await must(`/api/real/holdings?role=${encodeURIComponent(wallet.partyId)}`);
+        console.log("   wallet after :", JSON.stringify(after.instruments || []));
+      }
       break;
     }
     if (r.status >= 400) { console.log("   ERROR:", String(r.body.error).slice(0, 300)); break; }

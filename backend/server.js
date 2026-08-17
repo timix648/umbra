@@ -2211,6 +2211,104 @@ app.post("/api/ext/execute", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// The atomic registry execute, as ONE on-ledger choice.
+//
+// Extracted from settle-real so it can also be reached with nothing but a settlement
+// cid. That matters because AcceptRealSwap CONSUMES the SwapProposal: once a
+// counterparty signs its accept, settle-real can no longer find the trade by proposal
+// cid, and the execute step became unreachable. (The older
+// /api/swap/settlements/:cid/execute exercises stand-in ExecuteSwap, which the ledger
+// refuses for real legs: "ExecuteSwap is for stand-in settlements".)
+//
+// Throws on failure; rollback is the caller's decision, since a standalone execute
+// must not unilaterally withdraw a counterparty's allocation.
+async function executeRealSettlement(o) {
+  const { requester, dealerParty, settlementCid, offLeg, wantLeg, offAdmin, wantAdmin } = o;
+  const offerCtx = await execTransferContext(offLeg.registry, offAdmin, offLeg.cid);
+  const wantCtx  = await execTransferContext(wantLeg.registry, wantAdmin, wantLeg.cid);
+  const _dseen = {}; const disclosed = [];
+  for (const ctx of [offerCtx, wantCtx]) {
+    for (const d of (ctx.disclosedContracts || [])) {
+      if (_dseen[d.contractId]) continue; _dseen[d.contractId] = true;
+      disclosed.push({ templateId: d.templateId, contractId: d.contractId,
+        createdEventBlob: d.createdEventBlob, synchronizerId: d.synchronizerId || "" });
+    }
+  }
+  // Disclose both allocations. The WANT leg belongs to the dealer, so it must be read
+  // from the DEALER's view -- querying it as requester silently returns nothing and the
+  // prepare then fails with CONTRACT_NOT_FOUND.
+  try {
+    const offDiscs  = await allocDisclosure([offLeg.cid], requester);
+    const wantDiscs = await allocDisclosure([wantLeg.cid], dealerParty);
+    for (const d of [...offDiscs, ...wantDiscs]) {
+      if (_dseen[d.contractId]) continue; _dseen[d.contractId] = true;
+      disclosed.push(d);
+    }
+    if (!wantDiscs.length) console.error("[exec-real] WARN: want-leg blob not found even in dealer view for", wantLeg.cid);
+  } catch (adErr) { console.error("[exec-real] allocDisclosure failed (continuing):", adErr && adErr.message); }
+  // And the SwapSettlement itself: it was created by the dealer's AcceptRealSwap, so
+  // the requester's participant has no copy to exercise against without this.
+  try {
+    const setDisc = await templateDisclosure("UmbraSwap:SwapSettlement", settlementCid, requester);
+    if (setDisc && !_dseen[setDisc.contractId]) { _dseen[setDisc.contractId] = true; disclosed.push(setDisc); }
+    else if (!setDisc) console.error("[exec-real] settlement blob not found for", settlementCid);
+  } catch (sdErr) { console.error("[exec-real] settlement disclosure failed (continuing):", sdErr && sdErr.message); }
+
+  // ExecuteRealSwap is `controller operator`, and here operator == requester. Authority
+  // for the nested Allocation_ExecuteTransfer comes from the SwapSettlement signatories
+  // (gathered via propose/accept), not from actAs -- so a single-party submission works.
+  const execCmd = {
+    commandId: "execreal-" + Date.now(),
+    actAs: [requester],
+    commands: [{ ExerciseCommand: {
+      templateId: `#${PKGN}:UmbraSwap:SwapSettlement`,
+      contractId: settlementCid,
+      choice: "ExecuteRealSwap",
+      choiceArgument: {
+        offerArgs: { context: offerCtx.choiceContextData || { values: {} }, meta: { values: {} } },
+        wantArgs:  { context: wantCtx.choiceContextData  || { values: {} }, meta: { values: {} } },
+      },
+    } }],
+    disclosedContracts: disclosed,
+  };
+  dbg("[CTXDBG] settlementCid:", (settlementCid || "").slice(0, 24));
+  dbg("[CTXDBG] FINAL disclosed set:", JSON.stringify(disclosed.map(d => ({ t: (d.templateId || "").split(":").pop(), c: (d.contractId || "").slice(0, 20) }))));
+  await realSubmit(execCmd, "rexecreal");
+}
+
+// Execute a settlement that already exists on-ledger. This is the step that actually
+// moves the assets; both parties have already committed by allocating and accepting.
+app.post("/api/swap/settlements/:cid/execute-real", async (req, res) => {
+  try {
+    const requester = await partyIdFor("requester");
+    const setl = (await queryActive(requester, "UmbraSwap:SwapSettlement"))
+      .find(c => c.contractId === req.params.cid);
+    if (!setl) return res.status(404).json({ error: "settlement not found: " + req.params.cid });
+    const p = setl.payload || {};
+    if (p.settledVia !== "real") {
+      return res.status(400).json({ error: "settledVia=" + p.settledVia + "; use /execute for stand-in settlements" });
+    }
+    // Rebuild each leg from the allocation it points at -- the registry and admin come
+    // off the allocation itself, so no proposal is needed.
+    const dealerParty = p.dealer;
+    const allocs = [...await queryAllocations(requester), ...await queryAllocations(dealerParty)];
+    const findAl = cid => allocs.find(a => a.contractId === cid);
+    const offAl = findAl(p.offerAllocCid), wantAl = findAl(p.wantAllocCid);
+    if (!offAl) return res.status(409).json({ error: "offer allocation is gone (withdrawn or already executed): " + p.offerAllocCid });
+    if (!wantAl) return res.status(409).json({ error: "want allocation is gone (withdrawn or already executed): " + p.wantAllocCid });
+
+    await executeRealSettlement({
+      requester, dealerParty, settlementCid: req.params.cid,
+      offLeg: { cid: p.offerAllocCid, registry: registryForAdmin(offAl.admin) },
+      wantLeg: { cid: p.wantAllocCid, registry: registryForAdmin(wantAl.admin) },
+      offAdmin: offAl.admin, wantAdmin: wantAl.admin,
+    });
+    res.json({ ok: true, executed: req.params.cid,
+      offer: p.offerAmount + " " + (p.offerAsset && p.offerAsset.symbol),
+      want: p.price + " " + (p.wantAsset && p.wantAsset.symbol) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
   const steps = [];
   try {
@@ -2402,76 +2500,11 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
     //  SIGNED -> SwapSettlement.ExecuteRealSwap: ONE on-ledger command, so an external
     //            wallet can sign it (interactive-submission is one-command-only).
     if (SIGNED_MODE) {
-      const offerCtx = await execTransferContext(offLeg.registry, offAdmin, offLeg.cid);
-      const wantCtx  = await execTransferContext(wantLeg.registry, wantAdmin, wantLeg.cid);
-      dbg("[CTXDBG] offerCtx keys:", Object.keys(offerCtx||{}));
-      dbg("[CTXDBG] offerCtx.disclosedContracts:", JSON.stringify((offerCtx.disclosedContracts||[]).map(d=>({t:d.templateId,c:(d.contractId||"").slice(0,20)}))));
-      dbg("[CTXDBG] offerCtx.choiceContextData:", JSON.stringify(offerCtx.choiceContextData||{}).slice(0,1200));
-      dbg("[CTXDBG] wantCtx keys:", Object.keys(wantCtx||{}));
-      dbg("[CTXDBG] wantCtx.disclosedContracts:", JSON.stringify((wantCtx.disclosedContracts||[]).map(d=>({t:d.templateId,c:(d.contractId||"").slice(0,20)}))));
-      dbg("[CTXDBG] wantCtx.choiceContextData:", JSON.stringify(wantCtx.choiceContextData||{}).slice(0,1200));
-      const _dseen = {}; const disclosed = [];
-      for (const ctx of [offerCtx, wantCtx]) {
-        for (const d of (ctx.disclosedContracts || [])) {
-          if (_dseen[d.contractId]) continue; _dseen[d.contractId] = true;
-          disclosed.push({ templateId: d.templateId, contractId: d.contractId,
-            createdEventBlob: d.createdEventBlob, synchronizerId: d.synchronizerId || "" });
-        }
-      }
-      // ALSO disclose both allocation contracts themselves, so the single-party
-      // (requester) prepare can reference the dealer's want-leg allocation (which the
-      // requester's participant would otherwise not have visibility to) -> avoids
-      // CONTRACT_NOT_FOUND at /v2/interactive-submission/prepare.
       try {
-        // The OFFER leg belongs to the requester -> visible in requester's view.
-        // The WANT leg belongs to the DEALER -> NOT visible to requester; must be fetched
-        // from the dealer's view. (Found via CTXDBG: want-leg cid was missing from the
-        // disclosed set because it was queried as requester.)
-        const dealerParty = await partyIdFor(dealerRole);
-        const offDiscs  = await allocDisclosure([offLeg.cid], requester);
-        const wantDiscs = await allocDisclosure([wantLeg.cid], dealerParty);
-        for (const d of [...offDiscs, ...wantDiscs]) {
-          if (_dseen[d.contractId]) continue; _dseen[d.contractId] = true;
-          disclosed.push(d);
-        }
-        if (!wantDiscs.length) console.error("[settle-real][SIGNED] WARN: want-leg blob not found even in dealer view for", wantLeg.cid);
-      } catch (adErr) {
-        console.error("[settle-real][SIGNED] allocDisclosure failed (continuing):", adErr && adErr.message);
-      }
-      // ALSO disclose the SwapSettlement contract itself: the requester exercises
-      // ExecuteRealSwap on it, but it was created by the dealer's AcceptRealSwap, so the
-      // requester's participant doesn't have it disclosed -> CONTRACT_NOT_FOUND without this.
-      try {
-        const setDisc = await templateDisclosure("UmbraSwap:SwapSettlement", settlementCid, requester);
-        if (setDisc && !_dseen[setDisc.contractId]) { _dseen[setDisc.contractId] = true; disclosed.push(setDisc); }
-        else if (!setDisc) console.error("[settle-real][SIGNED] settlement blob not found for", settlementCid);
-      } catch (sdErr) {
-        console.error("[settle-real][SIGNED] settlement disclosure failed (continuing):", sdErr && sdErr.message);
-      }
-      // ExecuteRealSwap is `controller operator` -> single-party. In this app the
-      // operator IS the requester (operator == partyIdFor("requester")). Authority for
-      // the nested Allocation_ExecuteTransfer comes from the SwapSettlement signatories
-      // (requester+dealer, gathered via propose/accept), NOT from actAs. So actAs is
-      // the operator/requester alone -> satisfies single-party interactive submission.
-      const execCmd = {
-        commandId: "execreal-" + Date.now(),
-        actAs: [requester],
-        commands: [{ ExerciseCommand: {
-          templateId: `#${PKGN}:UmbraSwap:SwapSettlement`,
-          contractId: settlementCid,
-          choice: "ExecuteRealSwap",
-          choiceArgument: {
-            offerArgs: { context: offerCtx.choiceContextData || { values: {} }, meta: { values: {} } },
-            wantArgs:  { context: wantCtx.choiceContextData  || { values: {} }, meta: { values: {} } },
-          },
-        } }],
-        disclosedContracts: disclosed,
-      };
-      dbg("[CTXDBG] settlementCid:", (settlementCid||"").slice(0,24));
-      dbg("[CTXDBG] offLeg.cid:", (offLeg.cid||"").slice(0,24), "wantLeg.cid:", (wantLeg.cid||"").slice(0,24));
-      dbg("[CTXDBG] FINAL disclosed set:", JSON.stringify(disclosed.map(d=>({t:(d.templateId||"").split(":").pop(),c:(d.contractId||"").slice(0,20)}))));
-      try {
-        await realSubmit(execCmd, "rexecreal");
+        await executeRealSettlement({
+          requester, dealerParty: dealerPartyId, settlementCid,
+          offLeg, wantLeg, offAdmin, wantAdmin,
+        });
       } catch (execErr) {
         console.error("[settle-real][SIGNED][execute] FAILED:", execErr && (execErr.stack || execErr.message || execErr));
         await withdrawLeg(offLeg); await withdrawLeg(wantLeg);
