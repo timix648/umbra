@@ -2228,6 +2228,53 @@ app.post("/api/ext/onboard/confirm", async (req, res) => {
 });
 
 // Parties onboarded this way, and the point of the exercise: none of them has a key here.
+// ---- DEV WALLET (a test double, never a product feature) --------------------
+//
+// The browser signing path cannot be exercised without a CIP-0103 wallet, and on
+// DevNet there isn't one to hand: the SDK's default gateway list points at a
+// Splice Wallet Gateway on localhost:3030 that nobody is running. This endpoint
+// stands in for that wallet so the APP's plumbing can be proven.
+//
+// It proves nothing about custody -- it reads a private key off this machine, by
+// construction. The custody property is proven elsewhere, by the wallet_*_demo
+// scripts. Keep the two claims apart.
+//
+// OFF unless UMBRA_DEV_WALLET=1 *and* UMBRA_DEV_WALLET_KEY names a key file.
+const DEV_WALLET = process.env.UMBRA_DEV_WALLET === "1";
+const DEV_WALLET_KEY = process.env.UMBRA_DEV_WALLET_KEY || "";
+
+app.post("/api/dev/wallet/submit", async (req, res) => {
+  if (!DEV_WALLET || !DEV_WALLET_KEY) {
+    return res.status(404).json({ error: "dev wallet is disabled (set UMBRA_DEV_WALLET=1 and UMBRA_DEV_WALLET_KEY)" });
+  }
+  try {
+    const b = req.body || {};
+    const party = b.party;
+    if (!party || !String(party).includes("::")) return res.status(400).json({ error: "need party" });
+    const rec = loadWallets()[party];
+    if (!rec) return res.status(404).json({ error: "not an onboarded wallet party: " + party });
+    let key;
+    try { key = JSON.parse(require("fs").readFileSync(DEV_WALLET_KEY, "utf8")); }
+    catch (e) { return res.status(500).json({ error: "cannot read dev key: " + e.message }); }
+    if (!key.privDer) return res.status(500).json({ error: "dev key file has no privDer" });
+
+    const offBefore = await ledgerEnd();
+    const prep = await prepareInteractive(party, b.commands || [], b.tag || "devwallet",
+      b.disclosedContracts || []);
+    const sig = require("crypto").sign(null,
+      Buffer.from(prep.preparedTransactionHash, "base64"),
+      require("crypto").createPrivateKey({ key: Buffer.from(key.privDer, "base64"), format: "der", type: "pkcs8" })
+    ).toString("base64");
+    await executeSigned({ partyId: party, commandId: prep.commandId,
+      preparedTransaction: prep.preparedTransaction,
+      hashingSchemeVersion: prep.hashingSchemeVersion,
+      signature: sig, signedBy: rec.fingerprint });
+    const v = await awaitCompletion(party, prep.commandId, offBefore);
+    if (v.found && !v.ok) return res.status(400).json({ error: v.message || ("code " + v.code) });
+    res.json({ ok: true, commandId: prep.commandId, committed: !!v.found });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get("/api/ext/wallets", async (req, res) => {
   try {
     const s = loadWallets();

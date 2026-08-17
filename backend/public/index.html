@@ -1296,6 +1296,10 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
      arrive as a global. If it is missing (404, blocked, stale cache) it is just
      undefined: the wallet controls hide themselves and nothing else notices. -->
 <script src="/canton-dapp-sdk.js"></script>
+<!-- Test double for a CIP-0103 wallet. Inert unless the page is opened with
+     ?devwallet=1 AND the server was started with UMBRA_DEV_WALLET=1. It replaces
+     window.CantonDapp wholesale, so it must load AFTER the real SDK. -->
+<script src="/dev-wallet.js"></script>
 <script>
 /* @jsxRuntime classic */
 const {
