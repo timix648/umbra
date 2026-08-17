@@ -1,0 +1,16 @@
+{
+  "name": "umbra-sdk-build",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Prebundles the Canton CIP-0103 dApp SDK into a browser IIFE so backend/public can load it with a plain <script> tag. The app itself has no build step; this runs once, by hand, when the SDK version changes.",
+  "scripts": {
+    "build": "./build.sh"
+  },
+  "dependencies": {
+    "@canton-network/dapp-sdk": "1.5.1",
+    "@walletconnect/sign-client": "2.23.10"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

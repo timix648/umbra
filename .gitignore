@@ -36,3 +36,9 @@ wrap_dalf.py
 # npm lockfile from a stray `npm install`; this project uses pnpm-lock.yaml and
 # tracking both invites dependency drift.
 backend/package-lock.json
+
+# The SDK bundler's own install. Its OUTPUT (backend/public/canton-dapp-sdk.js)
+# IS committed on purpose -- the app has no build step and serves that file
+# straight from disk.
+sdk-build/node_modules/
+sdk-build/package-lock.json
