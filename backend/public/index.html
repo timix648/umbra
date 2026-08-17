@@ -254,6 +254,37 @@
   .sgn-btn:hover{background:#B08FFF}
   .sgn-btn:active{transform:translateY(1px)}
 
+  /* --- bring your own wallet (CIP-0103) --- */
+  .sgn-wl{display:flex;align-items:center;gap:clamp(14px,1.7vw,24px);flex-wrap:wrap;
+    background:var(--bg2);border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:5px;padding:clamp(14px,1.5vw,19px) clamp(15px,1.7vw,22px)}
+  .sgn-wl-t{flex:1 1 250px;min-width:210px;display:flex;flex-direction:column;gap:7px}
+  .sgn-wl-h{font:700 clamp(15px,1.2vw,18px)/1.2 ui-sans-serif,system-ui,sans-serif;color:var(--text)}
+  .sgn-wl-d{color:var(--mute);font:400 12.5px/1.5 ui-sans-serif,system-ui,sans-serif}
+  .sgn-wl-d b{color:var(--text);font-weight:600}
+  .sgn-wl-pid{font:500 11px/1.4 ui-monospace,monospace;color:var(--accent);word-break:break-all}
+  .sgn-wl-err{font:500 11.5px/1.4 ui-monospace,monospace;color:var(--red,#E5484D)}
+  .sgn-wl-a{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .sgn-wl-btn{cursor:pointer;background:transparent;border:1px solid var(--accent);color:var(--accent);
+    font:600 11.5px/1 ui-monospace,monospace;letter-spacing:.16em;text-transform:uppercase;
+    padding:14px 20px;border-radius:4px;white-space:nowrap;transition:background .16s,transform .08s}
+  .sgn-wl-btn:hover:not([disabled]){background:var(--accentbg)}
+  .sgn-wl-btn:active:not([disabled]){transform:translateY(1px)}
+  .sgn-wl-btn[disabled]{opacity:.55}
+  .sgn-wl-x{background:none;border:0;cursor:pointer;color:var(--dim);padding:6px 2px;
+    font:600 9.5px/1 ui-monospace,monospace;letter-spacing:.16em;text-transform:uppercase;
+    transition:color .16s}
+  .sgn-wl-x:hover{color:var(--mute)}
+
+  /* wallet party: requesting <-> dealing. A position in a trade, not an account type. */
+  .prt-desk{display:inline-flex;margin-left:10px;border:1px solid var(--line);border-radius:4px;
+    overflow:hidden;background:var(--bg3)}
+  .prt-desk-b{cursor:pointer;background:transparent;border:0;color:var(--dim);padding:6px 11px;
+    font:600 9.5px/1 ui-monospace,monospace;letter-spacing:.14em;text-transform:uppercase;
+    transition:color .16s,background .16s}
+  .prt-desk-b:hover{color:var(--mute)}
+  .prt-desk-b.on{background:var(--accentbg);color:var(--accent)}
+
   .sgn-dealers{flex:1;display:grid;grid-template-columns:1fr 74px 1fr;min-height:0}
   @media(max-width:1000px){.sgn-dealers{grid-template-columns:1fr;gap:16px}}
   .sgn-card{display:flex;flex-direction:column;justify-content:space-between;gap:13px;
@@ -1246,6 +1277,11 @@ var d=null!=c&&c.hydratedSources||null,e=!1,f="",g=aj;null!==c&&void 0!==c&&(!0=
 function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmountComponentAtNode=function(a){if(!Vd(a))throw Error(m(40));return a._reactRootContainer?(yb(function(){Wd(null,null,a,!1,function(){a._reactRootContainer=null;a[Ja]=null})}),!0):!1};Q.unstable_batchedUpdates=Tf;Q.unstable_renderSubtreeIntoContainer=function(a,b,c,d){if(!Vd(c))throw Error(m(200));if(null==a||void 0===a._reactInternals)throw Error(m(38));return Wd(a,b,c,!1,d)};Q.version="18.3.1-next-f1338f8080-20240426"});
 })();
 </script>
+<!-- CIP-0103 dApp SDK, prebundled into a browser IIFE by sdk-build/build.sh.
+     This page has no bundler and no `import` statements, so the SDK can only
+     arrive as a global. If it is missing (404, blocked, stale cache) it is just
+     undefined: the wallet controls hide themselves and nothing else notices. -->
+<script src="/canton-dapp-sdk.js"></script>
 <script>
 /* @jsxRuntime classic */
 const {
@@ -1304,6 +1340,134 @@ const post = (p, b) => api(p, {
   },
   body: JSON.stringify(b || {})
 });
+
+// ---- WALLET LINK (CIP-0103) ----
+//
+// Everything below talks to whatever Canton wallet the user brought, through the
+// vendor-neutral dApp API in CIP-0103. It is deliberately the ONLY place in this
+// file that touches window.CantonDapp, so the rest of the app can ask "who is
+// signed in and how do I submit for them" without caring which wallet answered.
+//
+// The venue never sees a private key on this path. Umbra's server-signed demo
+// roles still exist and still work; a connected wallet is a second, self-custody
+// identity alongside them.
+const WalletLink = (() => {
+  const sdk = () => (typeof window !== "undefined" ? window.CantonDapp : null);
+  let initing = null;
+
+  // init() restores a persisted session without opening the picker, so a page
+  // reload keeps the wallet connected. Concurrent callers share one promise --
+  // the mount effect and a click can easily race.
+  const ensure = () => {
+    const s = sdk();
+    if (!s) return Promise.reject(new Error("wallet SDK not loaded"));
+    if (!initing) initing = s.init().catch(e => { initing = null; throw e; });
+    return initing.then(() => s);
+  };
+
+  // A Wallet from listAccounts() carries far more than we need. Keep the party
+  // id and the fields that let a human recognise which account answered.
+  const acct = w => !w ? null : {
+    partyId: w.partyId,
+    hint: w.hint || (w.partyId || "").split("::")[0],
+    publicKey: w.publicKey || null,
+    namespace: w.namespace || null,
+    networkId: w.networkId || null,
+    primary: !!w.primary,
+    disabled: !!w.disabled
+  };
+
+  return {
+    available: () => !!sdk(),
+
+    // Cold start on mount. Resolves to the restored account, or null when there
+    // is nothing to restore -- never rejects, because a failed restore must not
+    // stop the page from rendering.
+    async restore() {
+      try {
+        const s = await ensure();
+        const c = await s.isConnected();
+        if (!c || !c.isConnected) return null;
+        const list = await s.listAccounts();
+        return acct((list || []).find(w => w.primary) || (list || [])[0]);
+      } catch { return null; }
+    },
+
+    // Opens the wallet picker. Must be called from a user gesture.
+    async connect() {
+      const s = await ensure();
+      const r = await s.connect();
+      if (!r || !r.isConnected) throw new Error(r && r.reason || "wallet declined the connection");
+      const list = await s.listAccounts();
+      const a = acct((list || []).find(w => w.primary) || (list || [])[0]);
+      if (!a) throw new Error("wallet connected but exposed no account");
+      if (a.disabled) throw new Error("that account is disabled in the wallet: " + (a.hint || a.partyId));
+      return a;
+    },
+
+    async disconnect() {
+      try { const s = await ensure(); await s.disconnect(); } catch {}
+    },
+
+    async accounts() {
+      try {
+        const s = await ensure();
+        return ((await s.listAccounts()) || []).map(acct);
+      } catch { return []; }
+    },
+
+    // Submit Daml commands for the connected party to sign.
+    //
+    // prepareExecuteAndWait, not prepareExecute: this codebase learned the hard
+    // way that on Canton a submission being ACCEPTED is not the same as it being
+    // COMMITTED, and that guessing from a poll window is a coin flip. Wait for
+    // the wallet's verdict and let a rejection surface as a real error.
+    async submit({ commands, disclosedContracts, commandId }) {
+      const s = await ensure();
+      const params = { commands };
+      if (disclosedContracts && disclosedContracts.length) params.disclosedContracts = disclosedContracts;
+      if (commandId) params.commandId = commandId;
+      if (typeof s.prepareExecuteAndWait === "function") {
+        const r = await s.prepareExecuteAndWait(params);
+        const tx = r && r.tx;
+        if (tx && tx.status === "failed") throw new Error("wallet reported the transaction failed");
+        return { committed: true, updateId: (tx && tx.updateId) || null, commandId: (tx && tx.commandId) || commandId || null };
+      }
+      await s.prepareExecute(params);
+      return { committed: false, updateId: null, commandId: commandId || null };
+    }
+  };
+})();
+
+// Wallet state as a hook, so any screen can read it. Restores on mount and keeps
+// itself in step with the wallet's own account switching.
+function useWallet() {
+  const [wallet, setWallet] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    WalletLink.restore().then(a => { if (live) { setWallet(a); setReady(true); } });
+    return () => { live = false; };
+  }, []);
+
+  const connect = useCallback(async () => {
+    setBusy(true); setErr(null);
+    try { setWallet(await WalletLink.connect()); }
+    catch (e) { setErr(e.message || String(e)); }
+    finally { setBusy(false); }
+  }, []);
+
+  const disconnect = useCallback(async () => {
+    setBusy(true);
+    await WalletLink.disconnect();
+    setWallet(null); setErr(null); setBusy(false);
+  }, []);
+
+  return { wallet, busy, err, ready, connect, disconnect, available: WalletLink.available() };
+}
 function Umbrella() {
   return /*#__PURE__*/React.createElement("svg", {
     className: "mark",
@@ -2375,8 +2539,56 @@ const ROLES = {
   operator:  { nm: "Venue operations", ds: "Every party at once. For running the venue, not trading on it.", dot: "var(--dim)" }
 };
 
+// A connected wallet has no entry in ROLES -- it is not one of the venue's demo
+// desks, it is a party that turned up with its own key. Everything downstream
+// only reads .nm and .dot, so a derived meta is all it needs.
+const walletMeta = (w) => ({
+  nm: (w && w.hint) || cleanRole((w && w.partyId) || "") || "Your wallet",
+  ds: "Self-custody. This venue holds no key for you.",
+  dot: "var(--accent)"
+});
+const metaFor = (role, wallet) => ROLES[role] || walletMeta(wallet || { partyId: role });
+
+// ---- CONNECT WALLET ----
+//
+// The self-custody door into the venue. Renders nothing at all when the SDK
+// global is absent, so a missing or blocked bundle degrades to the demo roles
+// rather than to a broken sign-in screen.
+function WalletConnect({ onEnter }) {
+  const { wallet, busy, err, ready, connect, disconnect, available } = useWallet();
+  if (!available) return null;
+
+  const body = wallet
+    ? React.createElement("div", { className: "sgn-wl-t" },
+        React.createElement("div", { className: "sgn-eyebrow" }, "Wallet connected"),
+        React.createElement("div", { className: "sgn-wl-h" }, wallet.hint || "Your wallet"),
+        React.createElement("div", { className: "sgn-wl-pid" }, wallet.partyId),
+        React.createElement("div", { className: "sgn-wl-d" },
+          "Umbra holds no key for this party. Every trade you sign is signed ",
+          React.createElement("b", null, "in your wallet"), "."))
+    : React.createElement("div", { className: "sgn-wl-t" },
+        React.createElement("div", { className: "sgn-eyebrow" }, "Bring your own wallet"),
+        React.createElement("div", { className: "sgn-wl-h" }, "Connect a Canton wallet"),
+        React.createElement("div", { className: "sgn-wl-d" },
+          "No signup. Your wallet ", React.createElement("b", null, "is"), " the account — ",
+          "the venue coordinates the trade and never sees your key."),
+        err ? React.createElement("div", { className: "sgn-wl-err" }, err) : null);
+
+  const actions = wallet
+    ? React.createElement("div", { className: "sgn-wl-a" },
+        React.createElement("button", { className: "sgn-btn", onClick: () => onEnter(wallet) }, "Enter venue"),
+        React.createElement("button", { className: "sgn-wl-x", onClick: disconnect, disabled: busy }, "Disconnect"))
+    : React.createElement("button", {
+        className: "sgn-wl-btn", onClick: connect, disabled: busy || !ready
+      },
+        busy ? React.createElement("span", { className: "spinr" }) : null,
+        busy ? "Connecting" : "Connect wallet");
+
+  return React.createElement("div", { className: "sgn-wl" }, body, actions);
+}
+
 // ---- LOGIN ----
-function Login({ onPick }) {
+function Login({ onPick, onWallet }) {
   const [offset, setOffset] = useState(null);
   const [assets, setAssets] = useState([]);
   useEffect(() => {
@@ -2467,7 +2679,9 @@ function Login({ onPick }) {
     // ---------- RIGHT: the choice ----------
     React.createElement("div", { className: "sgn-r" },
 
-      React.createElement("div", { className: "sgn-eyebrow" }, "Sign in as"),
+      React.createElement(WalletConnect, { onEnter: onWallet }),
+
+      React.createElement("div", { className: "sgn-eyebrow" }, "Or use a demo desk"),
 
       React.createElement("div", { className: "sgn-req" },
         React.createElement("div", { className: "sgn-req-t" },
@@ -2616,7 +2830,7 @@ const ASSET_LONG = sym => {
 function RequesterDesk(P) {
   const { meta, signed, onExit, note, rfqs, quotes, holdings, rate, series, usd, rateNote,
           onCreate, onAward, awarding, awardStep, onPair, history, composedPair, composing, setComposing, ratePair,
-          selRfqCid, setSelRfqCid } = P;
+          selRfqCid, setSelRfqCid, deskSwitch } = P;
   const settled = (history && history.settlements) || [];
   // the reference is for the pair the requester is composing -- matches the fetch
   // in load() (requester prices composedPair), so label and value agree and
@@ -2711,7 +2925,8 @@ function RequesterDesk(P) {
         React.createElement("a", { className: "dsk-brand", href: "/", title: "Back to umbra" },
           React.createElement(Umbrella, null),
           React.createElement("b", null, "UMBRA"),
-          React.createElement("span", { className: "cx" }, "Blind block auction \u00b7 Requester"))),
+          React.createElement("span", { className: "cx" }, "Blind block auction \u00b7 Requester")),
+        deskSwitch || null),
       React.createElement("div", { className: "prt-right" },
         React.createElement("div", { className: "rq-total tip-below tip-left",
           "data-tip": "Total value of your holdings at live market rates." },
@@ -3081,7 +3296,7 @@ function TradeBook({ settled }) {
 }
 
 function DealerDesk(P) {
-  const { meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, usd, price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid, role } = P;
+  const { meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, usd, price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid, role, deskSwitch } = P;
   const [proof, setProof] = useState(null); // dealer ledger-proof modal cid
   // Failed-swap alert. The backend records one (GET /api/swap/alerts) when a swap this
   // dealer quoted on fails to settle. Dismissal is now recorded SERVER-side: the old
@@ -3199,7 +3414,8 @@ function DealerDesk(P) {
           React.createElement("b", null, "UMBRA"),
           React.createElement("span", { className: "cx" }, "OTC block \u00b7 Canton \u00b7 Dealer desk")),
         React.createElement("span", { className: "prt-dot", style: { background: meta.dot, marginLeft: 6 } }),
-        React.createElement("span", { className: "prt-nm" }, meta.nm)),
+        React.createElement("span", { className: "prt-nm" }, meta.nm),
+        deskSwitch || null),
       React.createElement("div", { className: "prt-right" },
         React.createElement("div", { className: "rq-total tip-below tip-left",
           "data-tip": "Total value of your holdings at live market rates." },
@@ -3342,9 +3558,13 @@ function DealerDesk(P) {
         proof ? React.createElement(LedgerProof, { cid: proof, role, onClose: () => setProof(null) }) : null)));
 }
 
-function PartyPortal({ role, onExit }) {
-  const meta = ROLES[role];
-  const isDealer = role === "dealer1" || role === "dealer2";
+function PartyPortal({ role, wallet, onExit }) {
+  const meta = metaFor(role, wallet);
+  // Requester and dealer are POSITIONS IN A TRADE, not account types -- the same
+  // party is routinely both. The demo desks are fixed because each one exists to
+  // show one side of the screen; a wallet party picks its side per session.
+  const [desk, setDesk] = useState("requester");
+  const isDealer = wallet ? desk === "dealer" : (role === "dealer1" || role === "dealer2");
   const [inv, setInv] = useState([]);
   const [myQuotes, setMyQuotes] = useState([]);
   const [holdings, setHoldings] = useState([]);
@@ -3511,17 +3731,27 @@ function PartyPortal({ role, onExit }) {
     } catch (e) { say(e.message, true); }
   }
 
-  const pid = parties[role] || "";
+  // A wallet party IS its own party id, so it never appears in the venue's
+  // role->party map.
+  const pid = parties[role] || (String(role).includes("::") ? role : "");
   const sorted = myQuotes.slice().sort((a, b) => Number(b.payload.price) - Number(a.payload.price));
+
+  // Only a wallet party gets the switch; the demo desks are what they are.
+  const deskSwitch = wallet ? React.createElement("span", { className: "prt-desk" },
+    ["requester", "dealer"].map(d => React.createElement("button", {
+      key: d, className: "prt-desk-b" + (desk === d ? " on" : ""),
+      onClick: () => setDesk(d),
+      title: d === "requester" ? "Ask dealers for a price" : "Price what you are shown"
+    }, d === "requester" ? "Requesting" : "Dealing"))) : null;
 
   if (isDealer) return DealerDesk({
     meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, usd,
-    price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid, role
+    price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid, role, deskSwitch
   });
 
   return React.createElement(React.Fragment, null,
     RequesterDesk({
-      meta, signed, onExit, note,
+      meta, signed, onExit, note, deskSwitch,
       rfqs, quotes: myQuotes, holdings, rate, series, usd, rateNote, onPair, history, composedPair,
       onCreate: createRfq, onAward: awardQuote, awarding, awardStep,
       composing, setComposing, ratePair, selRfqCid, setSelRfqCid
@@ -3685,6 +3915,10 @@ function PartyPortal({ role, onExit }) {
 // APP — owns session identity, routes to Login / Portal / Operator Console.
 // ---------------------------------------------------------------------------
 function App() {
+  // `role` is whatever the API should be asked as: a demo role name, or -- for a
+  // connected wallet -- that party's own id, which every ?role= endpoint accepts
+  // verbatim. `wallet` is display identity only; its absence is what makes a
+  // session a demo desk.
   const [role, setRole] = useState(() => {
     try {
       const u = new URLSearchParams(window.location.search).get("role");
@@ -3692,19 +3926,34 @@ function App() {
       return sessionStorage.getItem("umbra-role") || null;
     } catch { return null; }
   });
+  const [wallet, setWallet] = useState(() => {
+    try { return JSON.parse(sessionStorage.getItem("umbra-wallet") || "null"); } catch { return null; }
+  });
 
   const pick = (r) => {
-    try { sessionStorage.setItem("umbra-role", r); } catch {}
+    try { sessionStorage.setItem("umbra-role", r); sessionStorage.removeItem("umbra-wallet"); } catch {}
+    setWallet(null);
     setRole(r);
   };
+  // No signup: connecting IS the account. The party id the wallet reports is the
+  // identity, and nothing about it is stored server-side by this step.
+  const enterWithWallet = (w) => {
+    try {
+      sessionStorage.setItem("umbra-role", w.partyId);
+      sessionStorage.setItem("umbra-wallet", JSON.stringify(w));
+    } catch {}
+    setWallet(w);
+    setRole(w.partyId);
+  };
   const exit = () => {
-    try { sessionStorage.removeItem("umbra-role"); } catch {}
+    try { sessionStorage.removeItem("umbra-role"); sessionStorage.removeItem("umbra-wallet"); } catch {}
+    setWallet(null);
     setRole(null);
   };
 
-  if (!role) return /*#__PURE__*/React.createElement(Login, { onPick: pick });
+  if (!role) return /*#__PURE__*/React.createElement(Login, { onPick: pick, onWallet: enterWithWallet });
   if (role === "operator") return /*#__PURE__*/React.createElement(OperatorConsole, { onExit: exit });
-  return /*#__PURE__*/React.createElement(PartyPortal, { role: role, onExit: exit });
+  return /*#__PURE__*/React.createElement(PartyPortal, { role: role, wallet: wallet, onExit: exit });
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(/*#__PURE__*/React.createElement(App, null));
