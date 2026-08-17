@@ -38,7 +38,8 @@ async function regFetch(registryUrl, url, opts) {
   }
   return fetch(url, opts);
 }
-const { onboardExternalParty, prepareSignExecute, prepareSignExecuteMulti } = require("./external");
+const { onboardExternalParty, prepareSignExecute, prepareSignExecuteMulti,
+        prepareInteractive, executeSigned } = require("./external");
 require("dotenv").config();
 
 const app = express();
@@ -2026,6 +2027,69 @@ app.post("/api/swap/alerts/ack", async (req, res) => {
       if (!a.dismissed) { a.dismissed = true; n++; }
     }
     res.json({ ok: true, dismissed: n, remaining: liveSwapAlerts(role).length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---------------------------------------------------------------------------
+// EXTERNAL WALLET SIGNING -- the venue coordinates, the wallet signs.
+//
+// Everywhere else in this file the backend signs on a party's behalf, which it can
+// only do because ext-parties.local.txt holds that party's private key. A user
+// arriving with their own Canton wallet must never hand that key over, so these two
+// endpoints expose the outer steps of interactive submission and leave the middle
+// one -- the signature -- entirely to the wallet.
+//
+//   POST /api/ext/prepare  -> { commandId, preparedTransaction, preparedTransactionHash, hashingSchemeVersion }
+//   wallet signs preparedTransactionHash with its ed25519 key
+//   POST /api/ext/execute  -> submits it, and reports the LEDGER'S verdict
+//
+// Authority note: /prepare grants nothing. A prepared transaction is inert without a
+// signature, and the ledger checks that signature against the party's registered key,
+// so a caller holding no key can do nothing with either endpoint.
+// ---------------------------------------------------------------------------
+app.post("/api/ext/prepare", async (req, res) => {
+  try {
+    const b = req.body || {};
+    const party = (b.party && String(b.party).includes("::"))
+      ? b.party : await partyIdFor(b.role || "requester");
+    if (!Array.isArray(b.commands) || !b.commands.length) {
+      return res.status(400).json({ error: "need commands[] (JSON Ledger API command objects)" });
+    }
+    const out = await prepareInteractive(party, b.commands, b.tag || "wallet",
+      b.disclosedContracts || []);
+    res.json(Object.assign({ ok: true }, out, {
+      note: "sign preparedTransactionHash (base64, ed25519) with the party's own key, " +
+            "then POST the signature to /api/ext/execute",
+    }));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post("/api/ext/execute", async (req, res) => {
+  try {
+    const b = req.body || {};
+    const party = (b.party && String(b.party).includes("::"))
+      ? b.party : await partyIdFor(b.role || "requester");
+    for (const k of ["preparedTransaction", "hashingSchemeVersion", "signature", "signedBy"]) {
+      if (!b[k]) return res.status(400).json({ error: "need " + k });
+    }
+    const offBefore = await ledgerEnd();
+    await executeSigned({
+      partyId: party, commandId: b.commandId,
+      preparedTransaction: b.preparedTransaction,
+      hashingSchemeVersion: b.hashingSchemeVersion,
+      signature: b.signature, signedBy: b.signedBy, submissionId: b.submissionId,
+    });
+    // execute is async-accepted, so a bare 200 says only "admitted". Report what the
+    // ledger actually decided -- the same lesson the settlement path had to learn.
+    let verdict = { found: false };
+    if (b.commandId) verdict = await awaitCompletion(party, b.commandId, offBefore);
+    if (verdict.found && !verdict.ok) {
+      return res.status(400).json({ ok: false, commandId: b.commandId,
+        error: verdict.message || ("code " + verdict.code) });
+    }
+    res.json({ ok: true, commandId: b.commandId || null, committed: !!verdict.found,
+      note: verdict.found ? "committed on-ledger"
+        : "admitted; no verdict read (set UMBRA_COMPLETIONS=1 to confirm commits)" });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

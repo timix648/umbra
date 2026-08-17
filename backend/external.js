@@ -115,4 +115,48 @@ async function prepareSignExecuteMulti(recs, commands, tag = "extm", disclosed =
   return Object.assign({}, out, { commandId, actAs: parties });
 }
 
-module.exports = { onboardExternalParty, prepareSignExecute, prepareSignExecuteMulti };
+// ---------------------------------------------------------------------------
+// SPLIT prepare / execute -- for signers whose key this server does NOT have.
+//
+// Interactive submission is prepare -> sign -> execute. The functions above do all
+// three, which is only possible because we hold the demo parties' keys. A party
+// bringing its OWN Canton wallet must keep the middle step private, so these expose
+// the outer two and nothing else.
+//
+// prepareInteractive() confers no authority: a prepared transaction is inert until a
+// signature is attached, and the ledger verifies that signature against the party's
+// registered key. Holding a prepared transaction without the key is useless.
+// ---------------------------------------------------------------------------
+async function prepareInteractive(partyId, commands, tag = "wallet", disclosed = []) {
+  const commandId = `${tag}-${Date.now()}`;
+  const prep = await jpost("/v2/interactive-submission/prepare", {
+    userId: USER_ID, actAs: [partyId], commandId,
+    synchronizerId: SYNC, packageIdSelectionPreference: [], commands,
+    disclosedContracts: disclosed,
+  });
+  return {
+    commandId,
+    party: partyId,
+    preparedTransaction: prep.preparedTransaction,
+    preparedTransactionHash: prep.preparedTransactionHash,
+    hashingSchemeVersion: prep.hashingSchemeVersion,
+  };
+}
+
+// Submit a transaction signed by someone else. The signature and fingerprint come
+// from the wallet; this process never sees the private key that produced them.
+async function executeSigned(o) {
+  return jpost("/v2/interactive-submission/execute", {
+    preparedTransaction: o.preparedTransaction,
+    hashingSchemeVersion: o.hashingSchemeVersion,
+    submissionId: o.submissionId || `${o.commandId || "wallet"}-${Date.now()}`,
+    userId: USER_ID,
+    deduplicationPeriod: { Empty: {} },
+    partySignatures: { signatures: [{ party: o.partyId, signatures: [{
+      format: "SIGNATURE_FORMAT_RAW", signature: o.signature, signedBy: o.signedBy,
+      signingAlgorithmSpec: "SIGNING_ALGORITHM_SPEC_ED25519" }] }] },
+  });
+}
+
+module.exports = { onboardExternalParty, prepareSignExecute, prepareSignExecuteMulti,
+                   prepareInteractive, executeSigned };
