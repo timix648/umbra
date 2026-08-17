@@ -4,7 +4,7 @@ module UmbraSwap where
 import DA.Date (date, Month(..))
 import DA.Time (time, addRelTime, minutes)
 import DA.List (find)
-import DA.Optional (isSome)
+import DA.Optional (isSome, fromOptional)
 import Splice.Api.Token.HoldingV1
 import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.AllocationV1
@@ -309,12 +309,12 @@ template SwapQuote
           wantAsset; price
           -- 15/30 minutes mirrors the window the backend already requests when it
           -- allocates a real leg, so the on-ledger view and the registry agree.
-          requestedAt = now
-          allocateBefore = addRelTime now (minutes 15)
-          settleBefore = addRelTime now (minutes 30)
+          requestedAt = Some now
+          allocateBefore = Some (addRelTime now (minutes 15))
+          settleBefore = Some (addRelTime now (minutes 30))
           -- Unique per acceptance: the pair alone collided across every trade of
           -- that pair, which is exactly what a settlement reference must not do.
-          tradeId = offerAsset.symbol <> "/" <> wantAsset.symbol <> "@" <> show now
+          tradeId = Some (offerAsset.symbol <> "/" <> wantAsset.symbol <> "@" <> show now)
 
 
 -- ----------------------------------------------------------------------------
@@ -337,10 +337,15 @@ template SwapProposal
     -- view is a pure function of the payload, so it cannot read ledger time itself.
     -- Without these the view could only report invented constants, which a wallet
     -- would render as a settlement with no deadline.
-    requestedAt    : Time   -- when the requester accepted the quote
-    allocateBefore : Time   -- both legs must be allocated by this moment
-    settleBefore   : Time   -- the swap must settle by this moment
-    tradeId        : Text   -- unique per accepted quote; the settlement reference
+    --
+    -- Optional because Daml smart-contract upgrades only admit new fields that are
+    -- Optional; making them mandatory made 0.2.0 an illegal upgrade of the already
+    -- vetted 0.1.0 ("added new fields, but those fields are not Optional"). Every
+    -- proposal created by this version sets them; only pre-upgrade contracts are None.
+    requestedAt    : Optional Time   -- when the requester accepted the quote
+    allocateBefore : Optional Time   -- both legs must be allocated by this moment
+    settleBefore   : Optional Time   -- the swap must settle by this moment
+    tradeId        : Optional Text   -- unique per accepted quote; the settlement reference
   where
     signatory requester
     observer dealer, operator
@@ -414,11 +419,15 @@ template SwapProposal
         settlement = SettlementInfo with
           executor = operator
           settlementRef = Reference with
-            id = tradeId
+            -- `epoch` fallbacks are deliberately IN THE PAST. A pre-upgrade proposal
+            -- carries no deadlines, and a wallet must read that as already expired and
+            -- refuse, rather than as an open-ended settlement it may sign at any time.
+            -- Failing closed is the only safe reading of a missing deadline.
+            id = fromOptional "legacy-no-trade-id" tradeId
             cid = None
-          requestedAt = requestedAt
-          allocateBefore = allocateBefore
-          settleBefore = settleBefore
+          requestedAt = fromOptional epoch requestedAt
+          allocateBefore = fromOptional epoch allocateBefore
+          settleBefore = fromOptional epoch settleBefore
           meta = emptyMetadata
         transferLegs = TextMap.fromList
           [ ( "offer"
