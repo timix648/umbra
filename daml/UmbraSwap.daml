@@ -2,7 +2,7 @@
 module UmbraSwap where
 
 import DA.Date (date, Month(..))
-import DA.Time (time)
+import DA.Time (time, addRelTime, minutes)
 import DA.List (find)
 import DA.Optional (isSome)
 import Splice.Api.Token.HoldingV1
@@ -307,6 +307,14 @@ template SwapQuote
           requester; operator; dealer
           offerAsset; offerAmount
           wantAsset; price
+          -- 15/30 minutes mirrors the window the backend already requests when it
+          -- allocates a real leg, so the on-ledger view and the registry agree.
+          requestedAt = now
+          allocateBefore = addRelTime now (minutes 15)
+          settleBefore = addRelTime now (minutes 30)
+          -- Unique per acceptance: the pair alone collided across every trade of
+          -- that pair, which is exactly what a settlement reference must not do.
+          tradeId = offerAsset.symbol <> "/" <> wantAsset.symbol <> "@" <> show now
 
 
 -- ----------------------------------------------------------------------------
@@ -324,6 +332,15 @@ template SwapProposal
     offerAmount : Decimal
     wantAsset   : AssetId
     price       : Decimal
+    -- Settlement window and identity. These exist so the CIP-56 AllocationRequest
+    -- view below can report the REAL deadlines and a unique reference: an interface
+    -- view is a pure function of the payload, so it cannot read ledger time itself.
+    -- Without these the view could only report invented constants, which a wallet
+    -- would render as a settlement with no deadline.
+    requestedAt    : Time   -- when the requester accepted the quote
+    allocateBefore : Time   -- both legs must be allocated by this moment
+    settleBefore   : Time   -- the swap must settle by this moment
+    tradeId        : Text   -- unique per accepted quote; the settlement reference
   where
     signatory requester
     observer dealer, operator
@@ -397,11 +414,11 @@ template SwapProposal
         settlement = SettlementInfo with
           executor = operator
           settlementRef = Reference with
-            id = offerAsset.symbol <> "/" <> wantAsset.symbol
+            id = tradeId
             cid = None
-          requestedAt = time (date 2024 Jan 1) 0 0 0
-          allocateBefore = time (date 2099 Jan 1) 0 0 0
-          settleBefore = time (date 2099 Jan 1) 0 0 0
+          requestedAt = requestedAt
+          allocateBefore = allocateBefore
+          settleBefore = settleBefore
           meta = emptyMetadata
         transferLegs = TextMap.fromList
           [ ( "offer"

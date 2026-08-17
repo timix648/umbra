@@ -5,7 +5,11 @@ sdk-version: 3.4.11
 name: umbra-v9
 source: daml
 init-script: UmbraTest:umbraDemo
-version: 0.1.0
+# 0.2.0: SwapProposal now carries real settlement deadlines and a unique trade id,
+# so the CIP-56 AllocationRequest view reports them instead of invented constants.
+# Bumped rather than reusing 0.1.0 so this package is distinguishable on-ledger
+# from the already-vetted 0.1.0 build.
+version: 0.2.0
 dependencies:
   - daml-prim
   - daml-stdlib
