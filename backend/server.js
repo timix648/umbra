@@ -1211,7 +1211,14 @@ app.post("/api/real/allocate", async (req, res) => {
     const executor = (b.executor && String(b.executor).includes("::")) ? b.executor : await partyIdFor(b.executorRole || senderRole);
     const admin = b.admin, id = b.id, amount = b.amount;
     const holdingCids = b.holdingCids || [];
-    const registryUrl = b.registry || req.query.registry || REGISTRY_URL_DEFAULT;
+    // Resolve the registry from the instrument's admin when the caller doesn't name one.
+    // REAL_REGISTRY maps cBTC and cETH to REGISTRY_URL_DEFAULT, so those worked by
+    // coincidence -- but Amulet lives on the DSO scan-proxy, and asking the default
+    // registry about a DSO holding gets "Given holdings are invalid", which reads like
+    // a bad holding rather than a question put to the wrong registrar. allocateRealLeg
+    // always passes `registry` so the trading path was unaffected; a direct caller
+    // (a wallet, a script) hits this.
+    const registryUrl = b.registry || req.query.registry || registryForAdmin(admin) || REGISTRY_URL_DEFAULT;
     if (!admin || !id || !amount || !holdingCids.length) {
       return res.status(400).json({ error: "need admin, id, amount, holdingCids[]" });
     }
@@ -1458,12 +1465,14 @@ app.post("/api/real/withdraw/:cid", async (req, res) => {
     const cid = req.params.cid;
     const role = b.role || req.query.role || "requester";
     const party = await partyIdFor(role);
-    const registryUrl = b.registry || req.query.registry || REGISTRY_URL_DEFAULT;
 
     const allocs = await queryAllocations(party);
     const al = allocs.find(a => a.contractId === cid);
     if (!al) return res.status(404).json({ error: "allocation '" + cid + "' not visible to " + role });
 
+    // Derived after the lookup so it can key off the allocation's own admin (see the
+    // note in /api/real/allocate); the default registry is wrong for DSO/Amulet.
+    const registryUrl = b.registry || req.query.registry || registryForAdmin(al.admin) || REGISTRY_URL_DEFAULT;
     const ctx = await withdrawContext(registryUrl, al.admin, cid);
     const cdata = ctx.choiceContextData || { values: {} };
     const disclosed = (ctx.disclosedContracts || []).map(d => ({
@@ -1519,11 +1528,14 @@ app.post("/api/real/execute/:cid", async (req, res) => {
     const cid = req.params.cid;
     const role = b.role || req.query.role || "requester";
     const party = await partyIdFor(role);
-    const registryUrl = b.registry || req.query.registry || REGISTRY_URL_DEFAULT;
 
     const allocs = await queryAllocations(party);
     const al = allocs.find(a => a.contractId === cid);
     if (!al) return res.status(404).json({ error: "allocation '" + cid + "' not visible to " + role });
+
+    // Derived after the lookup so it can key off the allocation's own admin (see the
+    // note in /api/real/allocate); the default registry is wrong for DSO/Amulet.
+    const registryUrl = b.registry || req.query.registry || registryForAdmin(al.admin) || REGISTRY_URL_DEFAULT;
 
     const ctx = await executeContext(registryUrl, al.admin, cid);
     const cdata = ctx.choiceContextData || { values: {} };
