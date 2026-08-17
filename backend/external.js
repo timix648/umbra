@@ -158,5 +158,67 @@ async function executeSigned(o) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// ONBOARD A PARTY FROM A PUBLIC KEY -- the server never sees the private half.
+//
+// onboardExternalParty() above GENERATES the keypair here and persists privDer, which
+// is why this process can sign as those parties at all. That is fine for demo parties
+// and disqualifying for a real user: a venue holding your key can transact as you.
+//
+// Onboarding is generate-topology -> sign multiHash -> allocate. Only the middle step
+// needs the private key, so it is split out and left to the wallet. What gets stored
+// here is deliberately only the partyId and fingerprint -- there is no field for a
+// private key, so there is nothing to leak, and no way for this server to act as the
+// party without a signature it was given.
+// ---------------------------------------------------------------------------
+const WALLET_STORE = path.join(__dirname, "ext-wallets.local.txt"); // gitignored by *.local.txt
+function loadWallets() { try { return JSON.parse(fs.readFileSync(WALLET_STORE, "utf8")); } catch { return {}; } }
+function saveWallets(s) { fs.writeFileSync(WALLET_STORE, JSON.stringify(s, null, 2)); }
+
+async function onboardWalletPrepare(publicKeyB64, partyHint) {
+  if (!publicKeyB64) throw new Error("need the wallet's raw ed25519 public key (base64)");
+  const raw = Buffer.from(publicKeyB64, "base64");
+  if (raw.length !== 32) throw new Error(`public key must be 32 raw ed25519 bytes, got ${raw.length}`);
+  const publicKey = {
+    format: "CRYPTO_KEY_FORMAT_RAW", keyData: publicKeyB64,
+    keySpec: "SIGNING_KEY_SPEC_EC_CURVE25519",
+  };
+  const g = await jpost("/v2/parties/external/generate-topology", {
+    partyHint: partyHint || ("wallet-" + Date.now()), synchronizer: SYNC, publicKey,
+  });
+  return {
+    partyId: g.partyId,
+    fingerprint: g.publicKeyFingerprint,
+    multiHash: g.multiHash,                   // the wallet signs THIS
+    topologyTransactions: g.topologyTransactions,
+  };
+}
+
+async function onboardWalletConfirm(o) {
+  await jpost("/v2/parties/external/allocate", {
+    synchronizer: SYNC,
+    onboardingTransactions: (o.topologyTransactions || []).map((t) => ({ transaction: t })),
+    multiHashSignatures: [{
+      format: "SIGNATURE_FORMAT_RAW", signature: o.multiHashSignature,
+      signedBy: o.fingerprint, signingAlgorithmSpec: "SIGNING_ALGORITHM_SPEC_ED25519",
+    }],
+  });
+  // Let the operator READ this party so the UI can display it. Read-only: it confers
+  // no ability to transact, which still requires the wallet's signature.
+  try {
+    await jpost(`/v2/users/${USER_ID}/rights`, {
+      userId: USER_ID, rights: [{ kind: { CanReadAs: { value: { party: o.partyId } } } }],
+    });
+  } catch (e) { console.log("[wallet] readAs grant skipped:", e.message); }
+
+  const s = loadWallets();
+  s[o.partyId] = { partyId: o.partyId, fingerprint: o.fingerprint,
+                   onboardedAt: new Date().toISOString() };   // note: no private key field
+  saveWallets(s);
+  console.log("[wallet] onboarded", o.partyId, "(no private key held)");
+  return s[o.partyId];
+}
+
 module.exports = { onboardExternalParty, prepareSignExecute, prepareSignExecuteMulti,
-                   prepareInteractive, executeSigned };
+                   prepareInteractive, executeSigned,
+                   onboardWalletPrepare, onboardWalletConfirm, loadWallets };

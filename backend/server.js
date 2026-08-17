@@ -39,7 +39,8 @@ async function regFetch(registryUrl, url, opts) {
   return fetch(url, opts);
 }
 const { onboardExternalParty, prepareSignExecute, prepareSignExecuteMulti,
-        prepareInteractive, executeSigned } = require("./external");
+        prepareInteractive, executeSigned,
+        onboardWalletPrepare, onboardWalletConfirm, loadWallets } = require("./external");
 require("dotenv").config();
 
 const app = express();
@@ -2047,6 +2048,42 @@ app.post("/api/swap/alerts/ack", async (req, res) => {
 // signature, and the ledger checks that signature against the party's registered key,
 // so a caller holding no key can do nothing with either endpoint.
 // ---------------------------------------------------------------------------
+// Onboard a party from a public key the wallet supplies. Two steps, because only the
+// middle one (signing the topology multiHash) needs the private key.
+//   POST /api/ext/onboard/prepare  { publicKey, partyHint? } -> { partyId, fingerprint, multiHash, topologyTransactions }
+//   wallet signs multiHash
+//   POST /api/ext/onboard/confirm  { partyId, fingerprint, topologyTransactions, multiHashSignature }
+app.post("/api/ext/onboard/prepare", async (req, res) => {
+  try {
+    const b = req.body || {};
+    const out = await onboardWalletPrepare(b.publicKey, b.partyHint);
+    res.json(Object.assign({ ok: true }, out, {
+      note: "sign multiHash (base64, ed25519) with the wallet's key, then POST /api/ext/onboard/confirm",
+    }));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+app.post("/api/ext/onboard/confirm", async (req, res) => {
+  try {
+    const b = req.body || {};
+    for (const k of ["partyId", "fingerprint", "topologyTransactions", "multiHashSignature"]) {
+      if (!b[k]) return res.status(400).json({ error: "need " + k });
+    }
+    const rec = await onboardWalletConfirm(b);
+    res.json({ ok: true, party: rec, privateKeyHeldByServer: false });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Parties onboarded this way, and the point of the exercise: none of them has a key here.
+app.get("/api/ext/wallets", async (req, res) => {
+  try {
+    const s = loadWallets();
+    res.json({ ok: true, count: Object.keys(s).length,
+      wallets: Object.values(s).map(w => ({ partyId: w.partyId, fingerprint: w.fingerprint,
+        onboardedAt: w.onboardedAt, privateKeyHeldByServer: false })) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post("/api/ext/prepare", async (req, res) => {
   try {
     const b = req.body || {};
