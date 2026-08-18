@@ -235,6 +235,25 @@ template SwapRfq
           offerAsset; offerAmount; wantAsset; expiresAt
           rfqCid = self
 
+    -- Invite every dealer on the allowlist in ONE transaction.
+    --
+    -- InviteDealer needs this contract's own cid, which does not exist until the create
+    -- has committed -- so inviting N dealers took N separate signatures on top of the
+    -- create. At two dealers that is a wrinkle; at a hundred it is 101 wallet prompts to
+    -- open one request, which is not a flow anyone would use.
+    --
+    -- Submitted as a CreateAndExerciseCommand, this collapses the whole opening move to
+    -- a single signature. It grants nothing extra: the dealers are the ones already
+    -- named in , and InviteDealer remains for adding one later.
+    nonconsuming choice InviteAll : [ContractId SwapInvitation]
+      controller requester
+      do
+        forA invited (\d ->
+          create SwapInvitation with
+            requester; operator; dealer = d
+            offerAsset; offerAmount; wantAsset; expiresAt
+            rfqCid = self)
+
     choice CancelRfq : ()
       controller requester
       do pure ()
