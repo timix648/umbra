@@ -2302,13 +2302,38 @@ app.post("/api/ext/onboard/confirm", async (req, res) => {
 // construction. The custody property is proven elsewhere, by the wallet_*_demo
 // scripts. Keep the two claims apart.
 //
-// OFF unless UMBRA_DEV_WALLET=1 *and* UMBRA_DEV_WALLET_KEY names a key file.
+// OFF unless UMBRA_DEV_WALLET=1 and a key source is named: UMBRA_DEV_WALLET_KEY for a
+// single key file, or UMBRA_DEV_WALLET_KEYDIR for a directory of them. The directory
+// form exists because the venue needs THREE parties on screen at once (a requester and
+// two competing dealers); one key can only ever act as one of them.
 const DEV_WALLET = process.env.UMBRA_DEV_WALLET === "1";
 const DEV_WALLET_KEY = process.env.UMBRA_DEV_WALLET_KEY || "";
+const DEV_WALLET_KEYDIR = process.env.UMBRA_DEV_WALLET_KEYDIR || "";
+
+// Find the key file that owns `party`. Keyfiles record their own partyId (written by
+// wallet_onboard_demo.js), so this matches rather than guesses.
+function devKeyFor(party) {
+  const fsx = require("fs"), pathx = require("path");
+  const tryFile = (f) => {
+    try {
+      const k = JSON.parse(fsx.readFileSync(f, "utf8"));
+      return k && k.privDer && (!k.partyId || k.partyId === party) ? k : null;
+    } catch (e) { return null; }
+  };
+  if (DEV_WALLET_KEYDIR) {
+    for (const f of fsx.readdirSync(DEV_WALLET_KEYDIR)) {
+      if (!f.endsWith(".json")) continue;
+      const k = tryFile(pathx.join(DEV_WALLET_KEYDIR, f));
+      if (k && k.partyId === party) return k;
+    }
+  }
+  return DEV_WALLET_KEY ? tryFile(DEV_WALLET_KEY) : null;
+}
+const DEV_WALLET_READY = () => DEV_WALLET && !!(DEV_WALLET_KEY || DEV_WALLET_KEYDIR);
 
 app.post("/api/dev/wallet/submit", async (req, res) => {
-  if (!DEV_WALLET || !DEV_WALLET_KEY) {
-    return res.status(404).json({ error: "dev wallet is disabled (set UMBRA_DEV_WALLET=1 and UMBRA_DEV_WALLET_KEY)" });
+  if (!DEV_WALLET_READY()) {
+    return res.status(404).json({ error: "dev wallet is disabled (set UMBRA_DEV_WALLET=1 and UMBRA_DEV_WALLET_KEY or UMBRA_DEV_WALLET_KEYDIR)" });
   }
   try {
     const b = req.body || {};
@@ -2316,10 +2341,8 @@ app.post("/api/dev/wallet/submit", async (req, res) => {
     if (!party || !String(party).includes("::")) return res.status(400).json({ error: "need party" });
     const rec = loadWallets()[party];
     if (!rec) return res.status(404).json({ error: "not an onboarded wallet party: " + party });
-    let key;
-    try { key = JSON.parse(require("fs").readFileSync(DEV_WALLET_KEY, "utf8")); }
-    catch (e) { return res.status(500).json({ error: "cannot read dev key: " + e.message }); }
-    if (!key.privDer) return res.status(500).json({ error: "dev key file has no privDer" });
+    const key = devKeyFor(party);
+    if (!key) return res.status(404).json({ error: "no dev key file holds " + String(party).slice(0, 28) + "…" });
 
     const offBefore = await ledgerEnd();
     const prep = await prepareInteractive(party, b.commands || [], b.tag || "devwallet",
@@ -2343,7 +2366,7 @@ app.post("/api/dev/wallet/submit", async (req, res) => {
 // imitate. It exists so the UI's read path can be exercised, not to prove anything
 // about a foreign-hosted party. Same double gate as the signing endpoint.
 app.post("/api/dev/wallet/ledger", async (req, res) => {
-  if (!DEV_WALLET || !DEV_WALLET_KEY) {
+  if (!DEV_WALLET_READY()) {
     return res.status(404).json({ error: "dev wallet is disabled" });
   }
   try {
