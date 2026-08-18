@@ -3714,7 +3714,14 @@ function TradeBook({ settled }) {
       const amt = Number(p.offerAmount), px = Number(p.price);
       const rate = amt > 0 ? px / amt : null;
       const ref = (p.refMid == null) ? null : Number(p.refMid);
-      const bps = (ref && rate) ? Math.round(((rate - ref) / ref) * 10000) : null;
+      const bpsRaw = (ref && rate) ? Math.round(((rate - ref) / ref) * 10000) : null;
+      // Beyond a few hundred percent the number stops informing and starts looking like
+      // a broken calculation -- a CC/cETH block priced 168x off market printed
+      // "+1650816 bps", which reads as a bug rather than as a mispriced trade. Past the
+      // threshold, say what it means instead of how big it is.
+      const OFF_MARKET_BPS = 50000;   // 500%
+      const bpsWild = bpsRaw != null && Math.abs(bpsRaw) > OFF_MARKET_BPS;
+      const bps = bpsWild ? null : bpsRaw;
       const when = t.createdAt ? new Date(t.createdAt) : null;
       return React.createElement("div", { className: "bk-r", key: t.contractId },
         React.createElement("div", { className: "bk-p" },
@@ -3734,10 +3741,14 @@ function TradeBook({ settled }) {
           React.createElement("div", { className: "bk-ref m" },
             ref == null ? "no mark on record" : "ref ", ref == null ? null : fmtNum(ref))),
         React.createElement("span", {
-          className: "bk-b tip-left " + (bps == null ? "na" : bps >= 0 ? "up" : "dn"),
-          "data-tip": bps == null ? "No market reference was recorded for this trade."
+          className: "bk-b tip-left " + (bpsWild ? "na" : bps == null ? "na" : bps >= 0 ? "up" : "dn"),
+          "data-tip": bpsWild
+            ? ("Executed " + Math.round(Math.abs(bpsRaw) / 10000) + "x away from the mid " +
+               "stamped on-ledger at commit. Shown as off-market because the basis-point " +
+               "figure stops being readable at this distance.")
+            : bps == null ? "No market reference was recorded for this trade."
             : "Executed rate vs the mid stamped on-ledger at commit."
-        }, bps == null ? "\u2014" : (bps >= 0 ? "+" : "") + bps + " bps"));
+        }, bpsWild ? "off market" : bps == null ? "\u2014" : (bps >= 0 ? "+" : "") + bps + " bps"));
     }));
 }
 
@@ -4008,6 +4019,22 @@ function DealerDesk(P) {
                 className: "sgn-btn", disabled: !!P.settling, onClick: P.onSettle
               }, P.settling ? (P.settleStep || "Settling…") : "Complete settlement")));
         })() : null,
+        P.listed === null ? null : React.createElement("section", { className: "mod" },
+          React.createElement("div", { className: "mod-h" },
+            React.createElement("h2", null, "Dealer listing")),
+          React.createElement("div", { className: "mod-b" },
+            React.createElement("p", { className: "whg-sub" },
+              P.listed
+                ? React.createElement(React.Fragment, null,
+                    React.createElement("b", null, "You are listed."),
+                    " Buyers can invite you to price blocks. You can still raise your own requests.")
+                : React.createElement(React.Fragment, null,
+                    React.createElement("b", null, "Not listed."),
+                    " Bringing a wallet does not enlist you — ask to be listed and buyers can invite you.")),
+            React.createElement("button", {
+              className: "sgn-btn", onClick: P.onToggleListing
+            }, P.listed ? "Remove me from the directory" : "List me as a dealer"))),
+
         React.createElement("section", { className: "mod" },
           React.createElement("div", { className: "mod-h" },
             React.createElement("h2", null, "The ledger withholds")),
@@ -4082,6 +4109,10 @@ function PartyPortal({ role, wallet, onExit }) {
   const [readFailed, setReadFailed] = useState(false);
   // The venue fee schedule, so a dealer can price inclusive of it.
   const [fee, setFee] = useState(null);
+  // Whether THIS party has asked to be listed as a dealer. Opting in only means
+  // 'list me as available to price blocks' -- it does not stop the same party
+  // raising its own requests, which is what a real desk does anyway.
+  const [listed, setListed] = useState(null);
   const pairRef = useRef(null);
   const [composedPair, setComposedPair] = useState({ base: "cBTC", quote: "cETH" });
   const onPair = useCallback(p => { setComposedPair(p); }, []);
@@ -4148,6 +4179,11 @@ function PartyPortal({ role, wallet, onExit }) {
       if (md && md.parties) setParties(md.parties);
       if (md) setSigned(!!md.signedMode);
       if (md) setFee(md.fee || null);
+      if (wallet && isDealer) {
+        const dl = await api("/api/dealers?all=1").catch(() => null);
+        const meRow = dl && (dl.dealers || []).find(d => d.partyId === role);
+        setListed(meRow ? !!meRow.listed : false);
+      }
       if (le) setOffset(le.offset);
       if (hist && hist.ok) setHistory({ settlements: hist.settlements || [], rfqs: hist.rfqs || [] });
       if (rt && rt.ok) { setRate(rt.mid); setRatePair(rt.base && rt.quote ? { base: rt.base, quote: rt.quote } : null); setSeries(rt.series || []); setUsd(rt.usd || null); setRateNote(rt.note || null); }
@@ -4354,6 +4390,15 @@ function PartyPortal({ role, wallet, onExit }) {
   // The dealer's half of a won trade, driven from the dealer's own browser. Same loop
   // the requester runs -- settle-real is resumable and role-agnostic, so each side can
   // pick it up and sign only the steps that belong to it.
+  const toggleListing = useCallback(async () => {
+    try {
+      const r = await post("/api/dealers/register", { party: role, active: !listed });
+      setListed(!!r.listed);
+      say(r.listed ? "You are listed — buyers can now invite you to price blocks."
+                   : "Delisted. You will not appear in the dealer directory.");
+    } catch (e) { say(e.message || "could not change your listing", true); }
+  }, [role, listed]);
+
   const settleAsDealer = useCallback(async () => {
     if (!openTrade || settling) return;
     setSettling(true); setSettleStep("Checking the trade…");
@@ -4511,7 +4556,8 @@ function PartyPortal({ role, wallet, onExit }) {
   if (isDealer) return React.createElement(DealerDesk, {
     meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, usd,
     price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid, role, deskSwitch,
-    openTrade, settling, settleStep, onSettle: settleAsDealer, readFailed, fee
+    openTrade, settling, settleStep, onSettle: settleAsDealer, readFailed, fee,
+    listed, onToggleListing: toggleListing
   });
 
   return React.createElement(React.Fragment, null,

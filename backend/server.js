@@ -613,7 +613,14 @@ app.get("/api/dealers", async (req, res) => {
     for (const w of Object.values(loadWallets())) {
       const listed = !!optedIn[w.partyId];
       if (!listed && !showAll) continue;
-      out.push({ id: w.partyId, partyId: w.partyId, name: String(w.partyId).split("::")[0],
+      // A raw party hint ("wallet-1787041917018") is unreadable in a picker. Abbreviate
+      // it the way an address is abbreviated everywhere else. `profileName` is the hook
+      // for real desk names later; until a party can set one, this is what we have.
+      const hint = String(w.partyId).split("::")[0];
+      const short = hint.length > 12 ? hint.slice(0, 6) + "…" + hint.slice(-4) : hint;
+      out.push({ id: w.partyId, partyId: w.partyId,
+        name: w.profileName || short, hint,
+        profileName: w.profileName || null,
         kind: "wallet", custody: "self", listed });
     }
     res.json({ ok: true, dealers: out.filter(d => d.partyId !== me) });
