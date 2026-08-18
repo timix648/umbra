@@ -1892,6 +1892,24 @@ app.post("/api/swap/rfq", async (req, res) => {
           requester, operator,
           offerAsset, offerAmount: String(req.body.offerAmount),
           wantAsset, invited, expiresAt } } }];
+    // With a mandate the venue opens the request itself -- MandateOpenRfq is
+    // `controller operator` and creates the RFQ plus every invitation in ONE
+    // transaction, so the requester signs nothing at all here, whatever N is.
+    const mandate = await findMandate(requester);
+    if (mandate) {
+      const before = await idSetSwap(requester, "UmbraSwap:SwapRfq");
+      await act("requester", "swap-rfq-mandate", [{
+        ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:TradingMandate`,
+          contractId: mandate.contractId, choice: "MandateOpenRfq",
+          choiceArgument: {
+            mOfferAsset: offerAsset, mOfferAmount: String(req.body.offerAmount),
+            mWantAsset: wantAsset, mInvited: invited, mExpiresAt: expiresAt } } }]);
+      const rfqCid = await pollNewCid(requester, "UmbraSwap:SwapRfq", before);
+      return res.json({ ok: true, viaMandate: true, rfqCid, expiresAt,
+        invitations: invited.map(p => ({ partyId: p })),
+        note: "opened under your standing mandate — no signature required" });
+    }
+
     // A wallet requester signs the create itself, then invites via
     // /api/swap/rfqs/:cid/invite?build=1 once it knows the rfq cid.
     if (req.query.build === "1" || req.body.build || isWalletParty(requester)) {
@@ -2137,6 +2155,59 @@ app.get("/api/swap/settlements", async (req, res) => {
     const role = req.query.role || "requester";
     const settlements = await queryActive(await partyIdFor(role), "UmbraSwap:SwapSettlement");
     res.json({ ok: true, role, count: settlements.length, settlements });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ---- STANDING MANDATE ------------------------------------------------------
+// A party signs one of these and the venue may then take the bookkeeping steps of its
+// trades: opening a request, proposing a settlement whose terms are already fixed,
+// accepting one it already quoted. It can never allocate that party's funds, accept a
+// price for it, or quote for it -- those choices are not on the contract.
+//
+// The reason it exists is arithmetic. InviteDealer needs the RFQ's contract id, so
+// inviting N dealers cost 1 + N signatures; at a hundred dealers that is a hundred and
+// one wallet prompts to ask one question. Bundling is not possible on the wallet path
+// either: interactive submission rejects a transaction with more than one root node.
+// Exercising a choice on a contract that already exists is one root node.
+async function findMandate(party) {
+  try {
+    const now = Date.now();
+    return (await queryActive(party, "UmbraSwap:TradingMandate"))
+      .find(c => c.payload && c.payload.party === party &&
+                 Date.parse(c.payload.expiresAt) > now) || null;
+  } catch (e) { return null; }
+}
+
+// Build (or submit) the one signature that grants the mandate.
+app.post("/api/mandate", async (req, res) => {
+  try {
+    const party = await partyIdFor(req.body.party || req.body.role || "requester");
+    const operator = await partyIdFor("requester");
+    const hours = Number(req.body.hours || 24);
+    const expiresAt = new Date(Date.now() + hours * 3600e3).toISOString();
+    const existing = await findMandate(party);
+    if (existing && !req.body.force) {
+      return res.json({ ok: true, existing: true, contractId: existing.contractId,
+        expiresAt: existing.payload.expiresAt });
+    }
+    const cmds = [{ CreateCommand: { templateId: `#${PKGN}:UmbraSwap:TradingMandate`,
+      createArguments: { party, operator, expiresAt } } }];
+    if (req.query.build === "1" || req.body.build || isWalletParty(party)) {
+      return res.json({ ok: true, build: true, party, commands: cmds, expiresAt,
+        note: "one signature; afterwards the venue opens requests and proposes " +
+              "settlements for you, but can never move your funds" });
+    }
+    await act(req.body.role || "requester", "mandate", cmds);
+    res.json({ ok: true, expiresAt });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get("/api/mandate", async (req, res) => {
+  try {
+    const party = await partyIdFor(req.query.role || "requester");
+    const m = await findMandate(party);
+    res.json({ ok: true, mandate: m
+      ? { contractId: m.contractId, expiresAt: m.payload.expiresAt } : null });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -2620,6 +2691,17 @@ app.post("/api/swap/pending/:cid/accept-real", async (req, res) => {
     const cmds = [{ ExerciseCommand: {
       templateId: `#${PKGN}:UmbraSwap:RealSwapPending`, contractId: req.params.cid,
       choice: "AcceptRealSwap", choiceArgument: {} } }];
+    const dm = isWalletParty(dealerParty) ? await findMandate(dealerParty) : null;
+    if (dm) {
+      const before = await idSetSwap(operator, "UmbraSwap:SwapSettlement");
+      await act("requester", "swap-accept-mandate", [{
+        ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:TradingMandate`,
+          contractId: dm.contractId, choice: "MandateAcceptRealSwap",
+          choiceArgument: { mPendingCid: req.params.cid } } }]);
+      const settlementCid = await pollNewCid(operator, "UmbraSwap:SwapSettlement", before, POLL_TRIES_COMMITTED);
+      return res.json({ ok: true, viaMandate: true, settlementCid,
+        note: "accepted under the dealer's standing mandate (no signature)" });
+    }
     if (req.query.build === "1" || (req.body && req.body.build) || isWalletParty(dealerParty)) {
       return res.json({ ok: true, build: true, party: dealerParty, commands: cmds,
         note: "sign via /api/ext/prepare + /api/ext/execute, then POST /api/swap/settlements/<cid>/execute-real" });
@@ -2851,6 +2933,18 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
           pendingCid = prevPending.contractId;
           proposeCommitted = true;
           steps.push("resumed: RealSwapPending for these legs already exists");
+        } else if (requesterIsWallet && await findMandate(requester)) {
+          const rm = await findMandate(requester);
+          const offBefore = await ledgerEnd();
+          const mRes = await act("requester", "swap-propose-mandate", [{
+            ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:TradingMandate`,
+              contractId: rm.contractId, choice: "MandateProposeRealSwap",
+              choiceArgument: {
+                mProposalCid: req.params.cid,
+                mOfferAlloc: offLeg.cid, mWantAlloc: wantLeg.cid,
+                mRefMid: refMid, mFeeAlloc: feeLeg ? feeLeg.cid : null } } }]);
+          proposeCommitted = await confirmCommitted(requester, mRes, offBefore, "MandateProposeRealSwap");
+          steps.push("proposed under the requester's standing mandate (no signature)");
         } else if (requesterIsWallet) {
           return awaitSig("ProposeRealSwap", requester, proposeCmd);
         } else {

@@ -38,6 +38,10 @@ const HALT      = process.argv.includes("--halt-on-counterparty");
 // live invitation the whole panel is replaced by the empty state, which is why the
 // quick-fill controls and the fee line both looked absent.
 const INVITE_ONLY = process.argv.includes("--invite-only");
+// Grant each party a standing mandate first, then run the same trade. The point of
+// the run is the signature tally printed at the end.
+const MANDATE = process.argv.includes("--mandate");
+let SIGS = 0;   // every wallet signature this run actually asked a human for
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -93,7 +97,8 @@ async function submitAs(partyId, commands, disclosed, tag) {
   const out = await must("/api/ext/execute", { party: s.partyId, commandId: prep.commandId,
     preparedTransaction: prep.preparedTransaction, hashingSchemeVersion: prep.hashingSchemeVersion,
     signature: sign(prep.preparedTransactionHash, s.privDer), signedBy: s.fingerprint });
-  console.log(`      signed by ${s.role} wallet`);
+  SIGS++;
+  console.log(`      signed by ${s.role} wallet  [signature #${SIGS}]`);
   return out;
 }
 
@@ -136,6 +141,19 @@ const holdingsOf = async (partyId) =>
 
   if (!EXECUTE) return console.log("\ndry run - nothing written. Re-run with --execute.");
 
+  if (MANDATE) {
+    console.log("\n--- 0. one standing mandate per party (a one-off, not per trade) ---");
+    for (const [label, pid] of [["requester", R], ["dealer1", D1], ["dealer2", D2]]) {
+      const m = await must("/api/mandate", { party: pid, hours: 24 });
+      if (m.existing) { console.log(`   ${label}: mandate already active`); continue; }
+      if (!m.build) { console.log(`   ${label}: granted server-side`); continue; }
+      console.log(`   ${label} signs its mandate`);
+      await submitAs(pid, m.commands, [], "mandate");
+    }
+    SIGS = 0;   // the tally below is PER TRADE; the mandate is amortised over all of them
+    console.log("   (signature counter reset — the tally below is per-trade)");
+  }
+
   // 1. requester wallet raises the RFQ
   console.log("\n--- 1. requester wallet signs the RFQ ---");
   const rfqBuilt = await must("/api/swap/rfq", {
@@ -146,15 +164,18 @@ const holdingsOf = async (partyId) =>
     // already on it (the choice's failure message reads the opposite of what it checks).
     invited: [D1, D2],
   });
-  if (!rfqBuilt.build) throw new Error("expected build mode for a wallet requester");
+  const viaMandate = !!rfqBuilt.viaMandate;
+  if (!viaMandate && !rfqBuilt.build) throw new Error("expected build mode for a wallet requester");
   // SwapRfq is nonconsuming and lives for its full TTL, so a previous run's RFQ is
   // still active and matches on requester and invite list alike. Identify OURS as the
   // cid that did not exist a moment ago -- anything weaker silently reuses the old one
   // and stacks duplicate invitations and quotes onto it.
   const rfqsBefore = new Set(((await must(`/api/swap/rfqs?role=${encodeURIComponent(R)}`)).rfqs || []).map(x => x.contractId));
-  await submitAs(R, rfqBuilt.commands, [], "wfrfq");
+  if (viaMandate) console.log("   RFQ + ALL invitations opened under the mandate — no signature");
+  else await submitAs(R, rfqBuilt.commands, [], "wfrfq");
   const rfq = await until("rfq", async () => {
     const o = await must(`/api/swap/rfqs?role=${encodeURIComponent(R)}`);
+    if (viaMandate) return (o.rfqs || []).find(x => x.contractId === rfqBuilt.rfqCid);
     return (o.rfqs || o.items || []).find(x => !rfqsBefore.has(x.contractId) &&
       x.payload && x.payload.requester === R &&
       new Date(x.payload.expiresAt).getTime() > Date.now());
@@ -162,8 +183,8 @@ const holdingsOf = async (partyId) =>
   console.log("\nrfq:", rfq.contractId.slice(0, 26) + "…");
 
   // 2. requester invites both dealer wallets (one signature each)
-  console.log("\n--- 2. requester wallet signs InviteDealer x2 ---");
-  for (const [label, d] of [["dealer1", D1], ["dealer2", D2]]) {
+  console.log("\n--- 2. invitations ---");
+  for (const [label, d] of (viaMandate ? [] : [["dealer1", D1], ["dealer2", D2]])) {
     const b = await must(`/api/swap/rfqs/${rfq.contractId}/invite`, { dealer: d, requester: R });
     if (!b.build) throw new Error("expected build mode for invite");
     console.log(`   inviting ${label}`);
@@ -304,4 +325,5 @@ const holdingsOf = async (partyId) =>
     console.log("   SETTLED:", JSON.stringify(r.body).slice(0, 300));
     break;
   }
-})().catch(e => console.log("\nFAILED:", e.message));
+  console.log(`\n=== WALLET SIGNATURES THIS TRADE: ${SIGS} ===`);
+})().catch(e => console.log(`\n(signatures so far: ${SIGS})\nFAILED:`, e.message));
