@@ -1654,20 +1654,51 @@ const WalletLink = (() => {
       });
       return { committed: !!(out && out.ok), updateId: null, commandId: prep.commandId };
     },
+    // ---- RATE GUARD ---------------------------------------------------------
+    // A wallet's ledger API is somebody else's hosted service with somebody else's
+    // quota. Umbra polls, React re-renders, and each cycle fires several queries --
+    // which walked straight into HTTP 429 from Loop within a minute.
+    //
+    // Slowing the poll was not enough: load() runs on every effect re-run, and its
+    // identity changes often, so the interval is not the only trigger. The guard has
+    // to sit at the call itself, where it cannot be bypassed by a caller that fires
+    // more often than expected.
+    //
+    // On a 429 we stop entirely for a minute rather than retrying into the limit.
+    _gate: { last: 0, until: 0, minGapMs: 1200, backoffMs: 60000 },
+
     // PartyLayer's shape is { requestMethod, resource, body } -- not { method, path }.
     // Passing the wrong names left requestMethod undefined and it failed inside the SDK
     // on `.toUpperCase()`, which reads as a transport fault rather than a caller error.
     // There is also no `query` field, so a query string has to ride on `resource`.
-    ledgerApi: (s, r) => {
+    ledgerApi: async function (s, r) {
+      const g = this._gate, now = Date.now();
+      if (now < g.until) {
+        throw new Error("wallet is rate-limiting us; paused for " +
+          Math.ceil((g.until - now) / 1000) + "s");
+      }
+      if (now - g.last < g.minGapMs) {
+        await new Promise(res => setTimeout(res, g.minGapMs - (now - g.last)));
+      }
+      g.last = Date.now();
       let resource = r.resource;
       if (r.query && Object.keys(r.query).length) {
         resource += (resource.indexOf("?") >= 0 ? "&" : "?") +
           Object.keys(r.query).map(k =>
             encodeURIComponent(k) + "=" + encodeURIComponent(r.query[k])).join("&");
       }
-      return s.ledgerApi({
-        requestMethod: (r.method || "get").toLowerCase(), resource, body: r.body,
-      });
+      try {
+        return await s.ledgerApi({
+          requestMethod: (r.method || "get").toLowerCase(), resource, body: r.body,
+        });
+      } catch (e) {
+        if (/429|too many requests|rate/i.test((e && e.message) || "")) {
+          this._gate.until = Date.now() + this._gate.backoffMs;
+          console.warn("[walletlink] wallet rate-limited — pausing ledger reads for " +
+            (this._gate.backoffMs / 1000) + "s");
+        }
+        throw e;
+      }
     },
   };
 
