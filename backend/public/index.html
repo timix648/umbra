@@ -1504,12 +1504,25 @@ const WalletLink = (() => {
   // init() restores a persisted session without opening the picker, so a page
   // reload keeps the wallet connected. Concurrent callers share one promise --
   // the mount effect and a click can easily race.
+  //
+  // Try every provider that is PRESENT, not just the first one. Presence is not
+  // usability: console-wallet-sdk.js defines window.ConsoleWallet on every page load,
+  // extension or no extension, so Console always LOOKS present. Committing to it on
+  // that basis strands a user who has a perfectly good Canton wallet behind an
+  // "extension is not installed" error for a wallet they never asked for.
   const ensure = () => {
-    const a = pick();
-    if (!a) return Promise.reject(new Error("no Canton wallet provider found"));
-    const s = a.get();
-    if (!initing) initing = Promise.resolve(a.init(s)).catch(e => { initing = null; throw e; });
-    return initing.then(() => s);
+    if (initing) return initing;
+    initing = (async () => {
+      let lastErr = null;
+      for (const id of ORDER) {
+        const a = adapters[id];
+        if (!a || !a.get()) continue;
+        try { const s = a.get(); await a.init(s); picked = a; return s; }
+        catch (e) { lastErr = e; }   // present but unusable -- fall through to the next
+      }
+      throw lastErr || new Error("no Canton wallet provider found");
+    })().catch(e => { initing = null; throw e; });
+    return initing;
   };
 
   // A Wallet from listAccounts() carries far more than we need. Keep the party
