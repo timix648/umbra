@@ -15,7 +15,7 @@ init-script: UmbraTest:umbraDemo
 # 0.2.2: SubmitSwapQuote and AcceptSwapQuote now fetch the SwapRfq they answer, so a
 # cancelled request can no longer be quoted or lifted. CancelRfq archived only the RFQ;
 # invitations and quotes are separate contracts and outlived it. Body-only again.
-version: 0.2.2
+version: 0.3.0
 dependencies:
   - daml-prim
   - daml-stdlib

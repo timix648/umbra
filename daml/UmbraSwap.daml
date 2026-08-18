@@ -307,6 +307,11 @@ template SwapQuote
     --   * dealer gives price of wantAsset            -> requester
     -- Each side supplies its own backing holding; both legs settle atomically.
     choice AcceptSwapQuote : ContractId SwapProposal
+      with
+        -- Supplied by the venue when it builds this command. Optional so a pre-0.3.0
+        -- caller still type-checks, and so a fee-free venue stays possible.
+        venueFeeParty  : Optional Party
+        venueFeeAmount : Optional Decimal
       controller requester
       do
         now <- getTime
@@ -329,6 +334,8 @@ template SwapQuote
           -- Unique per acceptance: the pair alone collided across every trade of
           -- that pair, which is exactly what a settlement reference must not do.
           tradeId = Some (offerAsset.symbol <> "/" <> wantAsset.symbol <> "@" <> show now)
+          feeParty = venueFeeParty
+          feeAmount = venueFeeAmount
 
 
 -- ----------------------------------------------------------------------------
@@ -360,6 +367,14 @@ template SwapProposal
     allocateBefore : Optional Time   -- both legs must be allocated by this moment
     settleBefore   : Optional Time   -- the swap must settle by this moment
     tradeId        : Optional Text   -- unique per accepted quote; the settlement reference
+    -- The venue fee, fixed the moment the quote is lifted. It rides on the proposal so
+    -- the dealer can read the exact amount BEFORE it signs anything -- a fee introduced
+    -- later, after commitment, would be a fee nobody agreed to.
+    -- Borne by the winning dealer and denominated in the WANT asset, which is how
+    -- institutional RFQ venues charge: the liquidity provider pays for the flow.
+    -- Optional for the same upgrade reason as the fields above.
+    feeParty       : Optional Party    -- who collects it
+    feeAmount      : Optional Decimal  -- in the want asset, paid by the dealer
   where
     signatory requester
     observer dealer, operator
@@ -390,6 +405,7 @@ template SwapProposal
         realOfferAllocCid : ContractId Allocation
         realWantAllocCid  : ContractId Allocation
         realRefMid        : Optional Decimal
+        realFeeAllocCid   : Optional (ContractId Allocation)
       controller requester, dealer
       do
         create SwapSettlement with
@@ -398,6 +414,8 @@ template SwapProposal
           refMid = realRefMid
           offerAllocCid = realOfferAllocCid
           wantAllocCid = realWantAllocCid
+          feeParty; feeAmount
+          feeAllocCid = realFeeAllocCid
           settledVia = "real"
 
     -- SIGNED-MODE path: single-party propose/accept so no step needs two signers
@@ -409,6 +427,8 @@ template SwapProposal
         realOfferAllocCid : ContractId Allocation
         realWantAllocCid  : ContractId Allocation
         realRefMid        : Optional Decimal
+        -- The dealer allocates this one too, at the same time as its want leg.
+        realFeeAllocCid   : Optional (ContractId Allocation)
       controller requester
       do
         create RealSwapPending with
@@ -417,6 +437,8 @@ template SwapProposal
           offerAllocCid = realOfferAllocCid
           wantAllocCid = realWantAllocCid
           refMid = realRefMid
+          feeParty; feeAmount
+          feeAllocCid = realFeeAllocCid
 
 
 -- A requester-signed proposal to settle a real swap. The dealer accepts to gather
@@ -477,6 +499,9 @@ template RealSwapPending
     offerAllocCid : ContractId Allocation
     wantAllocCid  : ContractId Allocation
     refMid        : Optional Decimal
+    feeParty      : Optional Party
+    feeAmount     : Optional Decimal
+    feeAllocCid   : Optional (ContractId Allocation)
   where
     signatory requester
     observer dealer, operator
@@ -489,6 +514,7 @@ template RealSwapPending
           offerAsset; offerAmount; wantAsset; price
           refMid
           offerAllocCid; wantAllocCid
+          feeParty; feeAmount; feeAllocCid
           settledVia = "real"
 
     -- Requester can withdraw the proposal if the dealer never accepts.
@@ -532,6 +558,10 @@ template SwapDealerPending
           refMid
           offerAllocCid
           wantAllocCid = toInterfaceContractId @Allocation wantAllocRaw
+          -- The stand-in path never touches a registry and charges nothing.
+          feeParty = None
+          feeAmount = None
+          feeAllocCid = None
           settledVia = "standin"
 
 
@@ -563,6 +593,15 @@ template SwapSettlement
     -- "standin" = executable on-ledger via ExecuteSwap; "real" = executed by the
     -- backend against the registry, recorded here for audit.
     settledVia   : Text
+    -- The venue's cut, and the third allocation that pays it. Settled in the SAME
+    -- transaction as the two trade legs, so the fee cannot succeed while the trade
+    -- fails, or the reverse.
+    -- These sit LAST on purpose: a Daml upgrade may only append fields, so inserting
+    -- them above settledVia reordered the record and the participant refused the
+    -- package outright ("changed the order of its fields").
+    feeParty      : Optional Party
+    feeAmount     : Optional Decimal
+    feeAllocCid   : Optional (ContractId Allocation)
   where
     signatory requester, dealer
     observer operator
@@ -592,12 +631,26 @@ template SwapSettlement
       with
         offerArgs : ExtraArgs
         wantArgs  : ExtraArgs
+        feeArgs   : Optional ExtraArgs
       controller operator
       do
         assertMsg "ExecuteRealSwap is for real settlements"
           (settledVia == "real")
+        -- A fee that was agreed must actually be paid. Without this the operator could
+        -- execute the trade and quietly drop the fee leg -- or, more importantly, a
+        -- settlement could be assembled that looks fee-bearing but is not.
+        let feePresent = case (feeAmount, feeAllocCid) of
+              (Some a, None) -> a <= 0.0
+              _ -> True
+        assertMsg "a fee was agreed but no fee allocation was supplied" feePresent
         _ <- exercise offerAllocCid Allocation_ExecuteTransfer with extraArgs = offerArgs
         _ <- exercise wantAllocCid Allocation_ExecuteTransfer with extraArgs = wantArgs
+        -- Third leg, same transaction. All three move or none do.
+        case (feeAllocCid, feeArgs) of
+          (Some fc, Some fa) -> do
+            _ <- exercise fc Allocation_ExecuteTransfer with extraArgs = fa
+            pure ()
+          _ -> pure ()
         pure ()
 
     -- Either principal can abort before execution; both allocations are then

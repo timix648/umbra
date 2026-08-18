@@ -72,7 +72,7 @@ runSwap w offerAsset offerAmt wantAsset wantAmt reqHolding dealerHolding = do
     exerciseCmd inv SubmitSwapQuote with
       price = wantAmt
       validUntil = addRelTime now (minutes 5)
-  prop <- submit w.requester do exerciseCmd quote AcceptSwapQuote
+  prop <- submit w.requester do exerciseCmd quote AcceptSwapQuote with venueFeeParty = None; venueFeeAmount = None
 
   -- Both parties commit their own legs, then the operator fires the swap.
   pending <- submit w.requester do
@@ -164,7 +164,7 @@ swapRejectsUnderfunded = do
     exerciseCmd inv SubmitSwapQuote with
       price = 100.0
       validUntil = addRelTime now (minutes 5)
-  prop <- submit w.requester do exerciseCmd quote AcceptSwapQuote
+  prop <- submit w.requester do exerciseCmd quote AcceptSwapQuote with venueFeeParty = None; venueFeeAmount = None
   pending <- submit w.requester do
     exerciseCmd prop CommitRequesterLeg with requesterHoldingCid = reqH
   settlement <- submit w.dealer do
@@ -245,5 +245,5 @@ swapRejectsStaleQuote = do
   passTime (minutes 3)
 
   -- ...and the ledger refuses to let them lift a stale price
-  submitMustFail w.requester do exerciseCmd quote AcceptSwapQuote
+  submitMustFail w.requester do exerciseCmd quote AcceptSwapQuote with venueFeeParty = None; venueFeeAmount = None
   pure ()
