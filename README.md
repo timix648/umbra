@@ -65,9 +65,11 @@ Everything below runs against the live 5North Canton DevNet. Nothing here is moc
 - **Fragmented balances**: multi-holding coin-selection; the registry merges and returns change.
 - **Clean failure**: an underfunded or failed settlement rolls back both allocations, re-opens
   the request, and alerts the dealer to re-quote. Nothing is left stranded.
-- **Wallet-signed mode**: every step -- RFQ, quote, accept, and the atomic settlement -- is
-  signed by that party's own Ed25519 key via interactive submission. Receipt reads
-  *TRUST: each party self-signed*.
+- **Wallet-signed mode** (`SIGNED_MODE=true`): every step -- RFQ, quote, accept, and the
+  atomic settlement -- is signed by that party's own Ed25519 key via interactive submission.
+  Receipt reads *TRUST: each party self-signed*. The signatures are real and party-specific,
+  so the venue cannot forge a party's authority -- but in this mode it does hold those keys
+  server-side. The bring-your-own-wallet path below is the one where it holds nothing.
 
 **Bring-your-own-wallet (on the `wallet-integration` branch):**
 - Three parties whose private keys this server has **never held** trade end to end. Keys are
