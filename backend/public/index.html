@@ -3896,6 +3896,21 @@ function DealerDesk(P) {
                       onClick: () => sendQuote(active.contractId, w)
                     }, busy[active.contractId] ? React.createElement("span", { className: "spinr" })
                        : (_unbacked ? ("Insufficient " + w) : "Seal quote to the ledger"))),
+                  // What this quote actually costs the dealer. The venue fee is borne by
+                  // the winning dealer, so it has to be visible BEFORE the price is sealed
+                  // -- otherwise the first time a dealer meets the charge is the settle
+                  // loop asking it to allocate a third leg it never agreed to.
+                  (function () {
+                    const f = P.fee, px = Number(price[active.contractId]);
+                    if (!f || !isFinite(px) || px <= 0) return null;
+                    const fee = Math.max(px * (f.bps / 10000), (f.floors && f.floors[w]) || 0);
+                    const onFloor = fee > px * (f.bps / 10000);
+                    return React.createElement("div", { className: "ask-line dim" },
+                      "You pay ", React.createElement("b", null, fmtNum(px + fee) + " " + w),
+                      " — ", fmtNum(px) + " to the buyer plus ",
+                      React.createElement("b", null, fmtNum(fee) + " " + w),
+                      onFloor ? " venue fee (minimum)" : " venue fee (" + f.bps + " bps)");
+                  })(),
                   // quick-fill: price off the REAL mid, nudge in basis points.
                   (function () {
                     const cid = active.contractId;
@@ -4023,6 +4038,8 @@ function PartyPortal({ role, wallet, onExit }) {
   // Distinguish "read failed" from "holds nothing". Rendering both as an empty wallet
   // tells a funded user their assets are gone.
   const [readFailed, setReadFailed] = useState(false);
+  // The venue fee schedule, so a dealer can price inclusive of it.
+  const [fee, setFee] = useState(null);
   const pairRef = useRef(null);
   const [composedPair, setComposedPair] = useState({ base: "cBTC", quote: "cETH" });
   const onPair = useCallback(p => { setComposedPair(p); }, []);
@@ -4088,6 +4105,7 @@ function PartyPortal({ role, wallet, onExit }) {
       }
       if (md && md.parties) setParties(md.parties);
       if (md) setSigned(!!md.signedMode);
+      if (md) setFee(md.fee || null);
       if (le) setOffset(le.offset);
       if (hist && hist.ok) setHistory({ settlements: hist.settlements || [], rfqs: hist.rfqs || [] });
       if (rt && rt.ok) { setRate(rt.mid); setRatePair(rt.base && rt.quote ? { base: rt.base, quote: rt.quote } : null); setSeries(rt.series || []); setUsd(rt.usd || null); setRateNote(rt.note || null); }
@@ -4451,7 +4469,7 @@ function PartyPortal({ role, wallet, onExit }) {
   if (isDealer) return React.createElement(DealerDesk, {
     meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, usd,
     price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid, role, deskSwitch,
-    openTrade, settling, settleStep, onSettle: settleAsDealer, readFailed
+    openTrade, settling, settleStep, onSettle: settleAsDealer, readFailed, fee
   });
 
   return React.createElement(React.Fragment, null,
@@ -4460,7 +4478,7 @@ function PartyPortal({ role, wallet, onExit }) {
       rfqs, quotes: myQuotes, holdings, rate, series, usd, rateNote, onPair, history, composedPair,
       onCreate: createRfq, onAward: awardQuote, awarding, awardStep,
       composing, setComposing, ratePair, selRfqCid, setSelRfqCid,
-      openTrade, settling, settleStep, onSettle: settleAsDealer, readFailed
+      openTrade, settling, settleStep, onSettle: settleAsDealer, readFailed, fee
     }),
     React.createElement(SettlementVault, { trade: vault, role, onClose: () => setVault(null) }));
 

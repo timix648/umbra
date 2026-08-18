@@ -483,7 +483,15 @@ async function activePartyMap() {
 }
 
 app.get("/api/mode", async (req, res) => {
-  res.json({ signedMode: SIGNED_MODE, parties: await activePartyMap() });
+  // The fee schedule ships with mode because the UI polls this anyway, and a dealer
+  // must be able to price its quote INCLUSIVE of the fee before committing to it.
+  // Quoting blind and discovering the charge at settlement is not a fee schedule,
+  // it is a surprise.
+  res.json({
+    signedMode: SIGNED_MODE,
+    parties: await activePartyMap(),
+    fee: FEE_PARTY ? { bps: FEE_BPS, floors: FEE_FLOORS, party: FEE_PARTY } : null,
+  });
 });
 
 // ---- PACKAGE DISCOVERY ------------------------------------------------------
