@@ -1692,7 +1692,10 @@ const WalletLink = (() => {
           requestMethod: (r.method || "get").toLowerCase(), resource, body: r.body,
         });
       } catch (e) {
-        if (/429|too many requests|rate/i.test((e && e.message) || "")) {
+        // PartyLayer wraps the HTTP status away -- a 429 arrives as
+        // "Failed to get active contracts", so matching on "429" alone never fired.
+        if (/429|too many requests|rate.?limit|failed to get active contracts/i
+              .test((e && e.message) || "")) {
           this._gate.until = Date.now() + this._gate.backoffMs;
           console.warn("[walletlink] wallet rate-limited — pausing ledger reads for " +
             (this._gate.backoffMs / 1000) + "s");
@@ -4453,11 +4456,16 @@ function PartyPortal({ role, wallet, onExit }) {
   // a wallet's hosted API it is abusive -- reading through Loop at that rate earned a
   // string of HTTP 429s within a minute, and a venue that rate-limits its own users out
   // of their wallet is broken regardless of how fast it feels.
+  // NEVER poll a wallet's hosted API on a timer. Umbra's own backend is ours to
+  // hammer; a wallet's is somebody else's service with somebody else's quota, and
+  // polling it produced a sustained run of 429s. A wallet-backed party therefore reads
+  // ONCE on entry and thereafter only when something happens that should change what it
+  // sees -- which is also the honest design, not merely the polite one.
   useEffect(() => {
     const viaWallet = !!(wallet && wallet.partyId === role);
-    const everyMs = viaWallet ? 15000 : 2500;
     load();
-    const t = setInterval(load, everyMs);
+    if (viaWallet) return;              // one read, then on demand
+    const t = setInterval(load, 2500);
     return () => clearInterval(t);
   }, [load, wallet, role]);
 
