@@ -1475,6 +1475,25 @@ const WalletLink = (() => {
       });
     },
 
+    // Is Umbra's Daml package vetted on the validator this wallet is using?
+    //
+    // This is the ONE thing that decides whether a connected wallet can trade here.
+    // Canton requires every participant informed about a transaction to have vetted
+    // its package, and a wallet hosts its party on its own (or a shared) validator.
+    // If that validator lacks umbra-v9, the party cannot even SEE an invitation --
+    // and the failure would otherwise surface as a baffling empty screen.
+    //
+    // Returns true / false, or null when the wallet won't answer (some may not proxy
+    // /v2/packages). Null means "unknown", never "broken" — do not block on it.
+    async hasPackage(packageId) {
+      try {
+        const r = await this.ledgerApi({ method: "get", resource: "/v2/packages" });
+        const ids = (r && (r.packageIds || r.package_ids || r)) || [];
+        if (!Array.isArray(ids)) return null;
+        return ids.includes(packageId);
+      } catch (e) { return null; }
+    },
+
     // The party-scoped reads the UI needs, shaped EXACTLY like the backend responses
     // they replace, so load() does not care where the data came from.
     //
@@ -2698,6 +2717,23 @@ const metaFor = (role, wallet) => ROLES[role] || walletMeta(wallet || { partyId:
 // rather than to a broken sign-in screen.
 function WalletConnect({ onEnter }) {
   const { wallet, busy, err, ready, connect, disconnect, available } = useWallet();
+  // Whether the wallet's validator has Umbra's package. null = unknown (the wallet
+  // would not answer); only `false` is a real problem, and it is worth saying out
+  // loud, because the alternative is an empty venue with no explanation.
+  const [pkgOk, setPkgOk] = useState(null);
+  const [pkgInfo, setPkgInfo] = useState(null);
+  useEffect(() => {
+    let stop = false;
+    if (!wallet) { setPkgOk(null); return; }
+    (async () => {
+      const info = await api("/api/package").catch(() => null);
+      if (stop || !info || !info.packageId) return;
+      setPkgInfo(info);
+      const ok = await WalletLink.hasPackage(info.packageId);
+      if (!stop) setPkgOk(ok);
+    })();
+    return () => { stop = true; };
+  }, [wallet]);
   if (!available) return null;
 
   const body = wallet
@@ -2707,7 +2743,13 @@ function WalletConnect({ onEnter }) {
         React.createElement("div", { className: "sgn-wl-pid" }, wallet.partyId),
         React.createElement("div", { className: "sgn-wl-d" },
           "Umbra holds no key for this party. Every trade you sign is signed ",
-          React.createElement("b", null, "in your wallet"), "."))
+          React.createElement("b", null, "in your wallet"), "."),
+        pkgOk === false && pkgInfo ? React.createElement("div", { className: "sgn-wl-err" },
+          "Your wallet's validator has not vetted Umbra's package (" +
+          pkgInfo.name + " " + pkgInfo.version + "), so this party cannot see a block " +
+          "or price one. Whoever runs that validator installs it once: ",
+          React.createElement("a", { href: pkgInfo.dar, className: "vl-link" }, "download the DAR"),
+          " — or connect a wallet on a validator that already has it.") : null)
     : React.createElement("div", { className: "sgn-wl-t" },
         React.createElement("div", { className: "sgn-eyebrow" }, "Bring your own wallet"),
         React.createElement("div", { className: "sgn-wl-h" }, "Connect a Canton wallet"),
