@@ -1579,6 +1579,18 @@ app.post("/api/real/withdraw/:cid", async (req, res) => {
       } }],
       disclosedContracts: disclosed,
     };
+    // Allocation_Withdraw is the OWNER's choice. For a party that brought its own
+    // wallet the venue has no key, and withdrawLeg() already skips those legs on the
+    // rollback path -- so without this branch such a party could not unlock its own
+    // funds by any route, and a settlement that died on the counterparty left it
+    // locked with no way out. Hand the command back to be signed in the wallet.
+    const walletActor = actAs.find(isWalletParty);
+    if (req.query.build === "1" || b.build || walletActor) {
+      return res.json({ ok: true, build: true, party: walletActor || actAs[0],
+        commands: cmd.commands, disclosedContracts: disclosed,
+        instrument: al.instrument, amount: al.amount,
+        note: "sign via /api/ext/prepare + /api/ext/execute to unlock this holding" });
+    }
     // SIGNED-aware submit: in signed mode the wallet party owns the allocation, so an
     // operator submit-and-wait is rejected (PERMISSION_DENIED / "security-sensitive
     // error"). realSubmit party-signs (prepareSignExecuteMulti) in signed mode and does
