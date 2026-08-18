@@ -2944,6 +2944,10 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
                 mOfferAlloc: offLeg.cid, mWantAlloc: wantLeg.cid,
                 mRefMid: refMid, mFeeAlloc: feeLeg ? feeLeg.cid : null } } }]);
           proposeCommitted = await confirmCommitted(requester, mRes, offBefore, "MandateProposeRealSwap");
+          // Same poll the signed path does. Without it pendingCid stays null and the
+          // dealer's AcceptRealSwap is built against a null contract id.
+          pendingCid = await pollNewCid(requester, "UmbraSwap:RealSwapPending", pb,
+            proposeCommitted ? POLL_TRIES_COMMITTED : POLL_TRIES);
           steps.push("proposed under the requester's standing mandate (no signature)");
         } else if (requesterIsWallet) {
           return awaitSig("ProposeRealSwap", requester, proposeCmd);
@@ -2967,6 +2971,22 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
           const acceptCmd = [{ ExerciseCommand: {
             templateId: `#${PKGN}:UmbraSwap:RealSwapPending`, contractId: pendingCid,
             choice: "AcceptRealSwap", choiceArgument: {} } }];
+          // A dealer with a standing mandate does not need waking for this: it already
+          // quoted this price and already allocated against it, so accepting commits
+          // nothing new. Checked here as well as on the accept-real endpoint, because
+          // settle-real drives its own step 2 and never calls that endpoint.
+          const dMand = dealerIsWallet ? await findMandate(dealerPartyId) : null;
+          if (dMand) {
+            const accBefore2 = await ledgerEnd();
+            const mAcc = await act("requester", "swap-accept-mandate", [{
+              ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:TradingMandate`,
+                contractId: dMand.contractId, choice: "MandateAcceptRealSwap",
+                choiceArgument: { mPendingCid: pendingCid } } }]);
+            const mAccOk = await confirmCommitted(dealerPartyId, mAcc, accBefore2, "MandateAcceptRealSwap");
+            settlementCid = await pollNewCid(requester, "UmbraSwap:SwapSettlement", b,
+              mAccOk ? POLL_TRIES_COMMITTED : POLL_TRIES);
+            steps.push("dealer accepted under its standing mandate (no signature)");
+          } else {
           if (dealerIsWallet) return awaitSig("AcceptRealSwap", dealerPartyId, acceptCmd);
           const accBefore = await ledgerEnd();
           const accRes = await act(dealerRole, "swap-accept-real", acceptCmd);
@@ -2974,6 +2994,7 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
           settlementCid = await pollNewCid(requester, "UmbraSwap:SwapSettlement", b,
             accCommitted ? POLL_TRIES_COMMITTED : POLL_TRIES);
           steps.push("dealer accepted -> on-ledger SwapSettlement (settledVia=real, party-signed)");
+          }
         }
       } catch (paErr) {
         console.error("[settle-real][SIGNED][propose/accept] FAILED:", paErr && (paErr.stack || paErr.message || paErr));
