@@ -244,12 +244,19 @@ const holdingsOf = async (partyId) =>
     // and the trade lives as a RealSwapPending awaiting the DEALER's accept.
     if (r.status === 404 && /proposal not found/i.test(String(r.body.error || ""))) {
       console.log("   proposal consumed - finding the pending swap");
+      // Only settlements for THIS trade. Matching on requester alone picks up an older
+      // one -- including a failed attempt that can never execute -- and then reports its
+      // failure as this trade's, which has already cost two debugging cycles.
+      const mineHere = x => x.payload && x.payload.requester === R &&
+        Number(x.payload.price) === Number(best.payload.price) &&
+        Number(x.payload.offerAmount) === Number(prop.payload.offerAmount) &&
+        x.payload.dealer === best.payload.dealer;
       let s = await must(`/api/swap/settlements?role=${encodeURIComponent(R)}`);
-      let setl = (s.settlements || []).filter(x => x.payload && x.payload.requester === R).pop();
+      let setl = (s.settlements || []).filter(mineHere).pop();
 
       if (!setl) {
         const pend = await must(`/api/swap/pending-real?role=${encodeURIComponent(R)}`);
-        const pw = (pend.pending || []).filter(x => x.payload && x.payload.requester === R).pop();
+        const pw = (pend.pending || []).filter(mineHere).pop();
         if (!pw) { console.log("   nothing pending and nothing settled"); break; }
         console.log("   pending:", pw.contractId.slice(0, 26) + "…");
 
