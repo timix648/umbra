@@ -103,12 +103,15 @@ const PKGN = process.env.PACKAGE_NAME;
 // before 0.3.0 did.
 const FEE_PARTY = process.env.UMBRA_FEE_PARTY || "";
 const FEE_BPS = Number(process.env.UMBRA_FEE_BPS || 5);
-const FEE_FLOORS = {                      // ~$25 at August 2026 marks
-  cETH:   Number(process.env.UMBRA_FEE_FLOOR_CETH || 0.0132),
-  cBTC:   Number(process.env.UMBRA_FEE_FLOOR_CBTC || 0.0004),
-  CBTC:   Number(process.env.UMBRA_FEE_FLOOR_CBTC || 0.0004),
-  CC:     Number(process.env.UMBRA_FEE_FLOOR_CC || 272),
-  Amulet: Number(process.env.UMBRA_FEE_FLOOR_CC || 272),
+// ~$10 at August 2026 marks (cBTC 64195, cETH 1898.24, CC 0.091957). A floor only bites
+// when 5 bps comes to less than it, so at $10 it applies below ~$20k of notional and
+// never touches a real block. Deliberately low while testing; raise it later.
+const FEE_FLOORS = {
+  cETH:   Number(process.env.UMBRA_FEE_FLOOR_CETH || 0.0053),
+  cBTC:   Number(process.env.UMBRA_FEE_FLOOR_CBTC || 0.00016),
+  CBTC:   Number(process.env.UMBRA_FEE_FLOOR_CBTC || 0.00016),
+  CC:     Number(process.env.UMBRA_FEE_FLOOR_CC || 109),
+  Amulet: Number(process.env.UMBRA_FEE_FLOOR_CC || 109),
 };
 const dec10 = n => Number(n).toFixed(10);
 
