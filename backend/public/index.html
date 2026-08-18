@@ -2504,6 +2504,14 @@ function SwapRfqForm({
   const [busy, setBusy] = useState(false);
   const [dealers, setDealers] = useState([]);
   const [invited, setInvited] = useState([]);
+  // How long dealers have to answer. This is ledger-enforced, not a UI timer: past it
+  // SubmitSwapQuote refuses. 15 minutes was hardcoded, which suits a liquid pair and is
+  // far too short for a size that needs a dealer to go and find the other side.
+  const [ttlMins, setTtlMins] = useState(15);
+  const TTLS = [
+    [5, "5 min"], [15, "15 min"], [30, "30 min"],
+    [60, "1 hour"], [300, "5 hours"], [1440, "1 day"],
+  ];
 
   // Who is out there to ask. Inviting MORE dealers is not automatically better:
   // the winner's curse sharpens as the field grows, so the default is the two
@@ -2600,6 +2608,15 @@ function SwapRfqForm({
     onChange: e => setWantSym(e.target.value)
   }, syms.filter(x => x !== offerSym).map(opt)))),
 
+  /*#__PURE__*/React.createElement("label", {
+    className: "fld"
+  }, /*#__PURE__*/React.createElement("span", null, "responses close in"),
+     /*#__PURE__*/React.createElement("select", {
+       value: String(ttlMins),
+       onChange: e => setTtlMins(Number(e.target.value)),
+       "data-tip": "The ledger refuses a quote after this, so pick the window you can actually wait out."
+     }, TTLS.map(([m, label]) => /*#__PURE__*/React.createElement("option", { key: m, value: String(m) }, label)))),
+
   dealers.length ? /*#__PURE__*/React.createElement("div", { className: "fld dlrpick" },
     /*#__PURE__*/React.createElement("span", null, "invite dealers"),
     /*#__PURE__*/React.createElement("div", { className: "dlrpick-l" },
@@ -2628,7 +2645,8 @@ function SwapRfqForm({
           offerAsset: findAsset(offerSym),
           offerAmount: amount,
           wantAsset: findAsset(wantSym),
-          invited: invited.slice()
+          invited: invited.slice(),
+          ttlMins
         });
       } finally { setBusy(false); }
     },
@@ -4386,7 +4404,8 @@ function PartyPortal({ role, wallet, onExit }) {
         requester: role,
         offerAsset: f.offerAsset, offerAmount: f.offerAmount,
         wantAsset: f.wantAsset,
-        invited: (f.invited && f.invited.length) ? f.invited : ["dealer1", "dealer2"]
+        invited: (f.invited && f.invited.length) ? f.invited : ["dealer1", "dealer2"],
+        ttlMins: f.ttlMins
       });
       // A wallet requester signs the SwapRfq itself, and each InviteDealer after
       // it -- the invites need the rfq cid, which only exists once the create has
