@@ -1990,7 +1990,10 @@ app.get("/api/swap/invitations", async (req, res) => {
 // a dealer submits a private quote (price denominated in the want asset)
 app.post("/api/swap/invitations/:cid/quote", async (req, res) => {
   try {
-    const dealerRole = String(req.body.dealer || "").toLowerCase();
+    // A wallet dealer is addressed by its full party id, which is case-sensitive:
+    // lowercasing it corrupts the namespace. Only short role names fold.
+    const dealerRaw = String(req.body.dealer || "");
+    const dealerRole = dealerRaw.includes("::") ? dealerRaw : dealerRaw.toLowerCase();
     const dealerParty = await partyIdFor(dealerRole); // validate
     // validUntil is MANDATORY on SubmitSwapQuote: how long this dealer's price
     // stays firm. AcceptSwapQuote asserts `now < validUntil`, so a stale price
@@ -2009,10 +2012,17 @@ app.post("/api/swap/invitations/:cid/quote", async (req, res) => {
       (req.body.validMins
         ? new Date(Date.now() + Number(req.body.validMins) * 60000).toISOString()
         : (invExpiry || new Date(Date.now() + 5 * 60000).toISOString()));
-    const result = await act(dealerRole, "swap-quote", [{
+    const cmds = [{
       ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapInvitation`,
         contractId: req.params.cid, choice: "SubmitSwapQuote",
-        choiceArgument: { price: String(req.body.price), validUntil } } }]);
+        choiceArgument: { price: String(req.body.price), validUntil } } }];
+    // SubmitSwapQuote is controller `dealer`. A dealer trading from its own wallet
+    // signs for itself, so hand the command back instead of failing inside act().
+    if (req.query.build === "1" || req.body.build || isWalletParty(dealerParty)) {
+      return res.json({ ok: true, build: true, party: dealerParty, commands: cmds, validUntil,
+        note: "sign via /api/ext/prepare + /api/ext/execute" });
+    }
+    const result = await act(dealerRole, "swap-quote", cmds);
     res.json({ ok: true, signed: SIGNED_MODE, validUntil, result });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

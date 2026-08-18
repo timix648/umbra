@@ -107,6 +107,12 @@ function auditServerStore(k, partyId) {
   });
   console.log("ONBOARDED   :", JSON.stringify(confirmed.party));
 
+  // Record which party this key became. Without it a keyfile is anonymous, and every
+  // downstream script has to guess -- which is fine with one wallet and wrong with three.
+  k.partyId = prep.partyId;
+  k.fingerprint = prep.fingerprint;
+  fs.writeFileSync(KEYFILE, JSON.stringify(k, null, 2), { mode: 0o600 });
+
   auditServerStore(k, prep.partyId);
 
   if (!has("--rfq")) {

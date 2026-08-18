@@ -50,8 +50,11 @@ const sign = (b64hash, privDer) => crypto.sign(
 (async () => {
   const key = JSON.parse(fs.readFileSync(KEYFILE, "utf8"));
   const wallets = JSON.parse(fs.readFileSync(WALLET_STORE, "utf8"));
-  const wallet = Object.values(wallets)[0];
+  // Fund the party THIS keyfile owns. Falling back to the first entry is only safe
+  // when there is exactly one wallet; with several it silently funds a stranger.
+  const wallet = (key.partyId && wallets[key.partyId]) || Object.values(wallets)[0];
   if (!wallet) return console.log("no onboarded wallet party - run wallet_onboard_demo.js --execute first");
+  if (!key.partyId) console.log("note: keyfile predates partyId recording - using first wallet in store");
   console.log("wallet party :", wallet.partyId);
 
   // Pick a holding of the requested asset that covers the amount on its own.
