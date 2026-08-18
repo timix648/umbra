@@ -451,6 +451,55 @@ app.get("/api/mode", async (req, res) => {
   res.json({ signedMode: SIGNED_MODE, parties: await activePartyMap() });
 });
 
+// ---- PACKAGE DISCOVERY ------------------------------------------------------
+// What a validator operator needs in order to let their users trade here.
+//
+// Umbra is bring-your-own-wallet AND bring-your-own-validator: the user's key stays
+// in their wallet and their party stays on their own participant. The one thing that
+// participant needs is Umbra's Daml package vetted, because Canton requires every
+// participant informed about a transaction to have vetted its package. That is not a
+// permission Umbra grants — it is a package the operator installs.
+const UMBRA_DAR = {
+  name: "umbra-v9",
+  version: "0.2.0",
+  // The package id to check for once uploaded, and to pin in packageIdSelectionPreference.
+  packageId: "b0b541400254f50531b6e397adbbb8a96b176866c099475f27f7b7480874c6f0",
+  sha256: "02f93e07edd0ff88e788300bbb461bc2f3d3ae21d3082fcca61dc3e485050268",
+  dar: "/dar/umbra-v9-0.2.0.dar",
+};
+
+app.get("/api/package", async (req, res) => {
+  try {
+    const base = (req.headers["x-forwarded-proto"] || req.protocol) + "://" + req.get("host");
+    let vettedHere = null;
+    try {
+      const r = await ledgerFetch("/v2/packages");
+      const j = await r.json();
+      const ids = (j && (j.packageIds || j.package_ids || j)) || [];
+      vettedHere = Array.isArray(ids) ? ids.includes(UMBRA_DAR.packageId) : null;
+    } catch (e) { /* discovery must not depend on the ledger being reachable */ }
+    res.json({
+      ok: true,
+      ...UMBRA_DAR,
+      downloadUrl: base + UMBRA_DAR.dar,
+      vettedOnUmbraParticipant: vettedHere,
+      instructions: [
+        "1. Download the DAR: curl -O " + base + UMBRA_DAR.dar,
+        "2. Verify: sha256sum umbra-v9-0.2.0.dar  ->  " + UMBRA_DAR.sha256,
+        "3. Upload+vet on YOUR validator's participant:",
+        "     curl -X POST $LEDGER_API/v2/packages -H \"Authorization: Bearer $TOKEN\" " +
+          "-H 'Content-Type: application/octet-stream' --data-binary @umbra-v9-0.2.0.dar",
+        "   (or: daml ledger upload-dar --host <participant> --port <port> umbra-v9-0.2.0.dar)",
+        "4. Confirm " + UMBRA_DAR.packageId.slice(0, 16) + "… appears in GET /v2/packages",
+        "5. Connect your wallet at Umbra. Your key never leaves it; your party stays on your participant.",
+      ],
+      why: "Canton requires every participant informed about a transaction to have vetted " +
+           "its package. Umbra cannot vet on your behalf, and does not need to: you keep " +
+           "custody of the key and hosting of the party.",
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ---- DEALER DIRECTORY -------------------------------------------------------
 // Who a requester can invite. Discovery only: this list confers NOTHING. Umbra
 // curates at the protocol level instead -- InviteDealer means a requester names
