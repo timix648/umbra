@@ -108,6 +108,27 @@
       });
     },
 
+    // Proxy to a ledger API. A real wallet sends this to the USER's validator; this
+    // stub has only Umbra's, which is the one thing it cannot faithfully imitate —
+    // the stub's party happens to be hosted there, so reads succeed for the wrong
+    // reason. Exercises the call shape, proves nothing about foreign hosting.
+    ledgerApi: function (params) {
+      var p = params || {};
+      var qs = "";
+      if (p.query && Object.keys(p.query).length) {
+        qs = "?" + Object.keys(p.query).map(function (k) {
+          return encodeURIComponent(k) + "=" + encodeURIComponent(p.query[k]);
+        }).join("&");
+      }
+      var res = String(p.resource || "");
+      if (p.path) Object.keys(p.path).forEach(function (k) {
+        res = res.replace("{" + k + "}", encodeURIComponent(p.path[k]));
+      });
+      return jfetch("/api/dev/wallet/ledger" + "?resource=" + encodeURIComponent(res + qs) +
+        "&method=" + encodeURIComponent(p.requestMethod || "get"),
+        p.body ? { body: p.body } : { body: null });
+    },
+
     signMessage: function () {
       return Promise.reject(new Error("dev wallet: signMessage is not implemented"));
     },

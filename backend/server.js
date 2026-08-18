@@ -2275,6 +2275,29 @@ app.post("/api/dev/wallet/submit", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Dev-wallet ledger proxy. A real CIP-0103 wallet sends ledgerApi() to the USER's
+// validator; this forwards to Umbra's, which is exactly the part a stub cannot
+// imitate. It exists so the UI's read path can be exercised, not to prove anything
+// about a foreign-hosted party. Same double gate as the signing endpoint.
+app.post("/api/dev/wallet/ledger", async (req, res) => {
+  if (!DEV_WALLET || !DEV_WALLET_KEY) {
+    return res.status(404).json({ error: "dev wallet is disabled" });
+  }
+  try {
+    const resource = String(req.query.resource || "");
+    const method = String(req.query.method || "get").toUpperCase();
+    if (!resource.startsWith("/v2/")) return res.status(400).json({ error: "resource must start with /v2/" });
+    const body = (req.body && req.body.body) || null;
+    const r = await ledgerFetch(resource, method === "GET"
+      ? undefined
+      : { method, body: JSON.stringify(body || {}) });
+    const text = await r.text();
+    if (!r.ok) return res.status(r.status).json({ error: text.slice(0, 300) });
+    try { return res.json(JSON.parse(text)); }
+    catch { return res.json(text.trim().split("\n").filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean)); }
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get("/api/ext/wallets", async (req, res) => {
   try {
     const s = loadWallets();

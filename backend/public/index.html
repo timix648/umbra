@@ -1453,6 +1453,44 @@ const WalletLink = (() => {
       }
       await s.prepareExecute(params);
       return { committed: false, updateId: null, commandId: commandId || null };
+    },
+
+    // Read the ledger AS THE USER, through THEIR validator.
+    //
+    // This is what makes pure BYOW work. Umbra's backend reads through Umbra's own
+    // participant, which can only see parties it hosts — so for a wallet party hosted
+    // on the user's own validator it sees nothing. ledgerApi() proxies to the wallet's
+    // validator instead, with that party's authority.
+    //
+    // Two things Umbra's backend can NEVER read for such a user, and must not try:
+    //   - their holdings (the operator is not a stakeholder)
+    //   - their SwapQuote contracts (the operator is deliberately not an observer —
+    //     that IS the blind auction; if the venue could read quotes it would not be one)
+    async ledgerApi({ method, resource, body, query, path }) {
+      const s = await ensure();
+      if (typeof s.ledgerApi !== "function") throw new Error("wallet does not expose ledgerApi");
+      return s.ledgerApi({
+        requestMethod: (method || "get").toLowerCase(),
+        resource, body, query, path
+      });
+    },
+
+    // Active contracts of one template, read through the user's own validator.
+    async activeContracts(partyId, templateId) {
+      const end = await this.ledgerApi({ method: "get", resource: "/v2/state/ledger-end" });
+      const body = {
+        filter: { filtersByParty: { [partyId]: { cumulative: [{ identifierFilter: {
+          TemplateFilter: { value: { templateId, includeCreatedEventBlob: false } } } }] } } },
+        verbose: false,
+        activeAtOffset: (end && (end.offset ?? end.ledgerEnd ?? end)) || 0
+      };
+      const r = await this.ledgerApi({ method: "post", resource: "/v2/state/active-contracts", body });
+      const rows = Array.isArray(r) ? r : (r && r.result) || [];
+      return rows.map(x => {
+        const ce = (x && x.contractEntry && x.contractEntry.JsActiveContract && x.contractEntry.JsActiveContract.createdEvent)
+          || (x && x.activeContract && x.activeContract.createdEvent) || (x && x.createdEvent);
+        return ce ? { contractId: ce.contractId, payload: ce.createArgument || ce.createArguments } : null;
+      }).filter(Boolean);
     }
   };
 })();
