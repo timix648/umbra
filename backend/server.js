@@ -2067,10 +2067,20 @@ app.post("/api/swap/invitations/:cid/quote", async (req, res) => {
         .find(c => c.contractId === req.params.cid);
       if (inv && inv.payload && inv.payload.expiresAt) invExpiry = inv.payload.expiresAt;
     } catch (e) {}
+    // Default firmness = the RFQ's close time, CAPPED. That default was written when
+    // every RFQ ran 15 minutes; now that a buyer can open a 1-day request, inheriting it
+    // would silently commit a dealer to holding a price firm for a day. A dealer may
+    // still quote longer deliberately via validUntil/validMins -- the cap only bounds
+    // what it is signed up to by saying nothing.
+    const FIRMNESS_CAP_MINS = Number(process.env.UMBRA_QUOTE_FIRMNESS_CAP_MINS || 30);
+    const capAt = Date.now() + FIRMNESS_CAP_MINS * 60000;
+    const defaultFirm = invExpiry
+      ? new Date(Math.min(Date.parse(invExpiry), capAt)).toISOString()
+      : new Date(Math.min(Date.now() + 5 * 60000, capAt)).toISOString();
     const validUntil = req.body.validUntil ||
       (req.body.validMins
         ? new Date(Date.now() + Number(req.body.validMins) * 60000).toISOString()
-        : (invExpiry || new Date(Date.now() + 5 * 60000).toISOString()));
+        : defaultFirm);
     const cmds = [{
       ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapInvitation`,
         contractId: req.params.cid, choice: "SubmitSwapQuote",
