@@ -3727,9 +3727,12 @@ function TradeBook({ settled }) {
           React.createElement("div", { className: "bk-l2 m" },
             (when ? when.toLocaleString() : "\u2014") + "  \u00b7  #" + (t.offset || "\u2014"))),
         React.createElement("div", { className: "bk-x" },
-          React.createElement("div", { className: "bk-rate m" }, rate == null ? "\u2014" : rate.toFixed(4)),
+          // toFixed(4) rendered a CC/cETH mark of 0.0000485 as "0.0000" -- a real price
+          // shown as zero. fmtNum carries small numbers in subscript notation, which is
+          // why it exists; it returns an element, so it cannot be concatenated.
+          React.createElement("div", { className: "bk-rate m" }, rate == null ? "\u2014" : fmtNum(rate)),
           React.createElement("div", { className: "bk-ref m" },
-            ref == null ? "no mark on record" : "ref " + ref.toFixed(4))),
+            ref == null ? "no mark on record" : "ref ", ref == null ? null : fmtNum(ref))),
         React.createElement("span", {
           className: "bk-b tip-left " + (bps == null ? "na" : bps >= 0 ? "up" : "dn"),
           "data-tip": bps == null ? "No market reference was recorded for this trade."
