@@ -9,7 +9,10 @@ init-script: UmbraTest:umbraDemo
 # so the CIP-56 AllocationRequest view reports them instead of invented constants.
 # Bumped rather than reusing 0.1.0 so this package is distinguishable on-ledger
 # from the already-vetted 0.1.0 build.
-version: 0.2.0
+# 0.2.1: InviteDealer's assertion message stated the opposite of what it checks.
+# Body-only change, no schema change, so it upgrades cleanly from 0.2.0 -- and the
+# backend addresses templates as #umbra-v9:... so it picks this up without edits.
+version: 0.2.1
 dependencies:
   - daml-prim
   - daml-stdlib

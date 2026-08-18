@@ -223,7 +223,10 @@ template SwapRfq
         dealer : Party
       controller requester
       do
-        assertMsg "dealer already invited" (dealer `elem` invited)
+        -- `invited` is the allowlist fixed when the RFQ was created; this choice only
+        -- materialises the invitation for someone already on it. The message must
+        -- describe the FAILING case (dealer absent), not the passing one.
+        assertMsg "dealer is not on this RFQ's invite list" (dealer `elem` invited)
         -- `self` is this SwapRfq's own contract id. Threading it down the chain
         -- means a quote can be attributed to the request it answers -- exactly,
         -- not by guessing from matching amounts.

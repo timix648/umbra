@@ -459,18 +459,22 @@ app.get("/api/mode", async (req, res) => {
 // participant needs is Umbra's Daml package vetted, because Canton requires every
 // participant informed about a transaction to have vetted its package. That is not a
 // permission Umbra grants — it is a package the operator installs.
+// 0.2.0 is still served alongside this and remains valid; 0.2.1 is what an operator
+// should vet, and both being vetted is fine -- same package name, so `#umbra-v9:...`
+// resolves either and contracts created under 0.2.0 stay usable.
 const UMBRA_DAR = {
   name: "umbra-v9",
-  version: "0.2.0",
+  version: "0.2.1",
   // The package id to check for once uploaded, and to pin in packageIdSelectionPreference.
-  packageId: "b0b541400254f50531b6e397adbbb8a96b176866c099475f27f7b7480874c6f0",
-  sha256: "02f93e07edd0ff88e788300bbb461bc2f3d3ae21d3082fcca61dc3e485050268",
-  dar: "/dar/umbra-v9-0.2.0.dar",
+  packageId: "3a9ee8610d18a32b1a81dfd9de16f8031da04d47f1c44b51687f514ccdd42913",
+  sha256: "970b3c7638f694b4e3e51a955aa612d9c719e2a5430257243c424b65b677e1c5",
+  dar: "/dar/umbra-v9-0.2.1.dar",
 };
 
 app.get("/api/package", async (req, res) => {
   try {
     const base = (req.headers["x-forwarded-proto"] || req.protocol) + "://" + req.get("host");
+    const darFile = UMBRA_DAR.dar.split("/").pop();   // derived, so a version bump can't leave stale filenames here
     let vettedHere = null;
     try {
       const r = await ledgerFetch("/v2/packages");
@@ -485,11 +489,11 @@ app.get("/api/package", async (req, res) => {
       vettedOnUmbraParticipant: vettedHere,
       instructions: [
         "1. Download the DAR: curl -O " + base + UMBRA_DAR.dar,
-        "2. Verify: sha256sum umbra-v9-0.2.0.dar  ->  " + UMBRA_DAR.sha256,
+        "2. Verify: sha256sum " + darFile + "  ->  " + UMBRA_DAR.sha256,
         "3. Upload+vet on YOUR validator's participant:",
         "     curl -X POST $LEDGER_API/v2/packages -H \"Authorization: Bearer $TOKEN\" " +
-          "-H 'Content-Type: application/octet-stream' --data-binary @umbra-v9-0.2.0.dar",
-        "   (or: daml ledger upload-dar --host <participant> --port <port> umbra-v9-0.2.0.dar)",
+          "-H 'Content-Type: application/octet-stream' --data-binary @" + darFile,
+        "   (or: daml ledger upload-dar --host <participant> --port <port> " + darFile + ")",
         "4. Confirm " + UMBRA_DAR.packageId.slice(0, 16) + "… appears in GET /v2/packages",
         "5. Connect your wallet at Umbra. Your key never leaves it; your party stays on your participant.",
       ],
