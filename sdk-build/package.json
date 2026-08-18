@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@canton-network/dapp-sdk": "1.5.1",
+    "@console-wallet/dapp-sdk": "2.2.9",
     "@walletconnect/sign-client": "2.23.10"
   },
   "devDependencies": {

@@ -15,6 +15,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 OUT=../backend/public/canton-dapp-sdk.js
+OUT_CONSOLE=../backend/public/console-wallet-sdk.js
 
 [ -d node_modules ] || npm install
 
@@ -27,3 +28,20 @@ OUT=../backend/public/canton-dapp-sdk.js
   --outfile="$OUT"
 
 printf 'wrote %s (%s)\n' "$OUT" "$(du -h "$OUT" | cut -f1)"
+
+# Console Wallet's SDK, bundled for the same reason plus one of its own: its ESM
+# entry imports styles.css, which a browser refuses to load as a module script.
+./node_modules/.bin/esbuild entry-console.js \
+  --bundle \
+  --format=iife \
+  --global-name=ConsoleWalletSDK \
+  --platform=browser \
+  --minify \
+  --loader:.css=text \
+  --loader:.png=dataurl \
+  --loader:.svg=dataurl \
+  --loader:.jpg=dataurl \
+  --loader:.gif=dataurl \
+  --outfile="$OUT_CONSOLE"
+
+printf 'wrote %s (%s)\n' "$OUT_CONSOLE" "$(du -h "$OUT_CONSOLE" | cut -f1)"

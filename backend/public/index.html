@@ -1296,6 +1296,22 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
      arrive as a global. If it is missing (404, blocked, stale cache) it is just
      undefined: the wallet controls hide themselves and nothing else notices. -->
 <script src="/canton-dapp-sdk.js"></script>
+<!-- Console Wallet's own SDK. Console is a browser EXTENSION speaking postMessage,
+     so it is only detectable from inside the page — there is no endpoint to probe.
+     Its README states CIP-0103 compatibility, and its prepareExecuteAndWait takes
+     { commands, disclosedContracts, packageIdSelectionPreference }: exactly what
+     WalletLink already builds. Loaded from unpkg, the no-build path Console
+     documents. A CDN failure is non-fatal — Console simply won't be offered. -->
+<script src="/console-wallet-sdk.js"></script>
+<script>
+  // The bundle exposes ConsoleWalletSDK.consoleWallet; WalletLink looks for
+  // window.ConsoleWallet. The extension may still be absent — that is fine, the
+  // adapter's availability probe handles it and Console simply isn't offered.
+  (function () {
+    var w = window.ConsoleWalletSDK && window.ConsoleWalletSDK.consoleWallet;
+    if (w && typeof w.status === "function") window.ConsoleWallet = w;
+  })();
+</script>
 <!-- Test double for a CIP-0103 wallet. Inert unless the page is opened with
      ?devwallet=1 AND the server was started with UMBRA_DEV_WALLET=1. It replaces
      window.CantonDapp wholesale, so it must load AFTER the real SDK. -->
@@ -1370,16 +1386,114 @@ const post = (p, b) => api(p, {
 // roles still exist and still work; a connected wallet is a second, self-custody
 // identity alongside them.
 const WalletLink = (() => {
-  const sdk = () => (typeof window !== "undefined" ? window.CantonDapp : null);
+  // ---- PROVIDERS -----------------------------------------------------------
+  // Two shapes of CIP-0103 provider, normalised behind one interface:
+  //
+  //  "canton"  — the reference @canton-network/dapp-sdk global from our prebundle.
+  //  "console" — Console Wallet's own SDK. Its README states it is CIP-0103
+  //              compatible, and it exposes prepareExecute/prepareExecuteAndWait
+  //              taking { commands, disclosedContracts, packageIdSelectionPreference },
+  //              which is precisely the payload we already build. Its connect/account
+  //              methods are named differently, hence the adapter.
+  //
+  // Console is a browser EXTENSION speaking window.postMessage — there is no URL to
+  // probe. It is only detectable from inside a page with the extension installed.
+  const CONSOLE_NET = "CANTON_NETWORK_DEV";   // devnet; align with the ledger we use
+
+  const adapters = {
+    canton: {
+      id: "canton", label: "Canton wallet",
+      get: () => (typeof window !== "undefined" ? window.CantonDapp : null),
+      init: (s) => s.init(),
+      isConnected: async (s) => { const c = await s.isConnected(); return !!(c && c.isConnected); },
+      connect: async (s) => { const r = await s.connect(); if (r && r.isConnected === false) throw new Error(r.reason || "declined"); return true; },
+      disconnect: (s) => s.disconnect(),
+      accounts: (s) => s.listAccounts(),
+      submit: async (s, params) => {
+        if (typeof s.prepareExecuteAndWait === "function") {
+          const r = await s.prepareExecuteAndWait(params);
+          const tx = r && r.tx;
+          if (tx && tx.status === "failed") throw new Error("wallet reported the transaction failed");
+          return { committed: true, updateId: (tx && tx.updateId) || null, commandId: (tx && tx.commandId) || null };
+        }
+        await s.prepareExecute(params);
+        return { committed: false, updateId: null, commandId: null };
+      },
+      ledgerApi: (s, r) => s.ledgerApi({
+        requestMethod: (r.method || "get").toLowerCase(),
+        resource: r.resource, body: r.body, query: r.query, path: r.path
+      }),
+    },
+    console: {
+      id: "console", label: "Console Wallet",
+      get: () => (typeof window !== "undefined" ? window.ConsoleWallet : null),
+      // No init(); availability is a capability probe against the extension.
+      init: async (s) => {
+        if (typeof s.checkExtensionAvailability === "function") {
+          const a = await s.checkExtensionAvailability();
+          if (a && a.status && a.status !== "installed") throw new Error("Console Wallet extension is not installed");
+        }
+        return true;
+      },
+      isConnected: async (s) => {
+        const st = await s.status();
+        return !!(st && (st.isConnected === true || st.isConnected === "connected"));
+      },
+      connect: async (s) => {
+        const r = await s.connect({ name: "Umbra", target: "combined" });
+        const ok = r === "connected" || (r && (r.isConnected === true || r.isConnected === "connected"));
+        if (!ok) throw new Error("wallet declined the connection");
+        return true;
+      },
+      disconnect: (s) => s.disconnect(),
+      accounts: async (s) => {
+        const list = (typeof s.getAccounts === "function" && await s.getAccounts()) || null;
+        if (list && list.length) return list;
+        const one = typeof s.getPrimaryAccount === "function" ? await s.getPrimaryAccount() : null;
+        return one ? [one] : [];
+      },
+      submit: async (s, params) => {
+        // Same payload shape; Console's own type is PrepareTransactionBodyDTO minus partyId.
+        const r = await s.prepareExecuteAndWait(params);
+        const tx = r && r.tx;
+        if (tx && tx.status === "failed") throw new Error("wallet reported the transaction failed");
+        return { committed: true, updateId: (tx && tx.updateId) || null, commandId: (tx && tx.commandId) || null };
+      },
+      // Console proxies the ledger, but needs a token minted via ledgerAuth first.
+      ledgerApi: async (s, r, acct) => {
+        if (!consoleToken && typeof s.ledgerAuth === "function" && acct) {
+          const a = await s.ledgerAuth({ publicKey: acct.publicKey, partyId: acct.partyId, network: CONSOLE_NET });
+          consoleToken = (a && (a.accessToken || a.access_token)) || null;
+        }
+        return s.ledgerApi({
+          network: CONSOLE_NET, accessToken: consoleToken,
+          method: (r.method || "get").toUpperCase(), path: r.resource, body: r.body, query: r.query
+        });
+      },
+    }
+  };
+
+  let consoleToken = null;
+  let picked = null;   // the adapter that answered
+
+  // Prefer whichever provider is actually present. Console first: if the user has
+  // the extension, that is the wallet they mean.
+  const pick = () => {
+    if (picked && picked.get()) return picked;
+    for (const a of [adapters.console, adapters.canton]) if (a.get()) { picked = a; return a; }
+    return null;
+  };
+  const sdk = () => { const a = pick(); return a ? a.get() : null; };
   let initing = null;
 
   // init() restores a persisted session without opening the picker, so a page
   // reload keeps the wallet connected. Concurrent callers share one promise --
   // the mount effect and a click can easily race.
   const ensure = () => {
-    const s = sdk();
-    if (!s) return Promise.reject(new Error("wallet SDK not loaded"));
-    if (!initing) initing = s.init().catch(e => { initing = null; throw e; });
+    const a = pick();
+    if (!a) return Promise.reject(new Error("no Canton wallet provider found"));
+    const s = a.get();
+    if (!initing) initing = Promise.resolve(a.init(s)).catch(e => { initing = null; throw e; });
     return initing.then(() => s);
   };
 
@@ -1401,12 +1515,15 @@ const WalletLink = (() => {
     // Cold start on mount. Resolves to the restored account, or null when there
     // is nothing to restore -- never rejects, because a failed restore must not
     // stop the page from rendering.
+    // Which provider answered, for the UI to name it honestly.
+    provider: () => { const a = pick(); return a ? { id: a.id, label: a.label } : null; },
+
     async restore() {
       try {
         const s = await ensure();
-        const c = await s.isConnected();
-        if (!c || !c.isConnected) return null;
-        const list = await s.listAccounts();
+        const a = pick();
+        if (!(await a.isConnected(s))) return null;
+        const list = await a.accounts(s);
         return acct((list || []).find(w => w.primary) || (list || [])[0]);
       } catch { return null; }
     },
@@ -1414,9 +1531,9 @@ const WalletLink = (() => {
     // Opens the wallet picker. Must be called from a user gesture.
     async connect() {
       const s = await ensure();
-      const r = await s.connect();
-      if (!r || !r.isConnected) throw new Error(r && r.reason || "wallet declined the connection");
-      const list = await s.listAccounts();
+      const ad = pick();
+      await ad.connect(s);
+      const list = await ad.accounts(s);
       const a = acct((list || []).find(w => w.primary) || (list || [])[0]);
       if (!a) throw new Error("wallet connected but exposed no account");
       if (a.disabled) throw new Error("that account is disabled in the wallet: " + (a.hint || a.partyId));
@@ -1424,13 +1541,13 @@ const WalletLink = (() => {
     },
 
     async disconnect() {
-      try { const s = await ensure(); await s.disconnect(); } catch {}
+      try { const s = await ensure(); await pick().disconnect(s); consoleToken = null; } catch {}
     },
 
     async accounts() {
       try {
         const s = await ensure();
-        return ((await s.listAccounts()) || []).map(acct);
+        return ((await pick().accounts(s)) || []).map(acct);
       } catch { return []; }
     },
 
@@ -1440,19 +1557,16 @@ const WalletLink = (() => {
     // way that on Canton a submission being ACCEPTED is not the same as it being
     // COMMITTED, and that guessing from a poll window is a coin flip. Wait for
     // the wallet's verdict and let a rejection surface as a real error.
-    async submit({ commands, disclosedContracts, commandId }) {
+    async submit({ commands, disclosedContracts, commandId, packageId }) {
       const s = await ensure();
       const params = { commands };
       if (disclosedContracts && disclosedContracts.length) params.disclosedContracts = disclosedContracts;
       if (commandId) params.commandId = commandId;
-      if (typeof s.prepareExecuteAndWait === "function") {
-        const r = await s.prepareExecuteAndWait(params);
-        const tx = r && r.tx;
-        if (tx && tx.status === "failed") throw new Error("wallet reported the transaction failed");
-        return { committed: true, updateId: (tx && tx.updateId) || null, commandId: (tx && tx.commandId) || commandId || null };
-      }
-      await s.prepareExecute(params);
-      return { committed: false, updateId: null, commandId: commandId || null };
+      // Pin our package when the provider supports it, so a wallet holding several
+      // versions resolves `#umbra-v9:` to the one this venue is actually running.
+      if (packageId) params.packageIdSelectionPreference = [packageId];
+      const r = await pick().submit(s, params);
+      return { committed: !!r.committed, updateId: r.updateId || null, commandId: r.commandId || commandId || null };
     },
 
     // Read the ledger AS THE USER, through THEIR validator.
@@ -1468,11 +1582,15 @@ const WalletLink = (() => {
     //     that IS the blind auction; if the venue could read quotes it would not be one)
     async ledgerApi({ method, resource, body, query, path }) {
       const s = await ensure();
+      const a = pick();
       if (typeof s.ledgerApi !== "function") throw new Error("wallet does not expose ledgerApi");
-      return s.ledgerApi({
-        requestMethod: (method || "get").toLowerCase(),
-        resource, body, query, path
-      });
+      // Console mints a token per party before proxying, so it needs the account.
+      let acctForAuth = null;
+      if (a.id === "console") {
+        const list = await a.accounts(s);
+        acctForAuth = acct((list || []).find(w => w.primary) || (list || [])[0]);
+      }
+      return a.ledgerApi(s, { method, resource, body, query, path }, acctForAuth);
     },
 
     // Is Umbra's Daml package vetted on the validator this wallet is using?
