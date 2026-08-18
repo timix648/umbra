@@ -79,8 +79,13 @@ app.use((req, res, next) => {
   next();
 });
 // serve landing at "/" and the terminal at "/app"
-app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "landing.html")));
-app.get("/app", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
+// The app is one HTML file with the whole frontend inlined, so a cached copy means a
+// stale application -- and the failure looks like a bug that was already fixed. That
+// cost a round of "reload harder" here. Tell the browser not to keep it; the bundles
+// beside it are content-addressed by name and may still be cached normally.
+const noStore = (res) => res.set("Cache-Control", "no-store, must-revalidate");
+app.get("/", (req, res) => { noStore(res); res.sendFile(path.join(__dirname, "public", "landing.html")); });
+app.get("/app", (req, res) => { noStore(res); res.sendFile(path.join(__dirname, "public", "index.html")); });
 app.use(express.static(path.join(__dirname, "public"), { index: false }));
 
 const PKG = process.env.PACKAGE_ID;

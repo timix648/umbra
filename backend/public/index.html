@@ -1566,7 +1566,7 @@ const WalletLink = (() => {
     id: "partylayer", label: "Canton wallet",
     get: () => partylayer(),
     init: async () => true,
-    isConnected: async (s) => { try { return !!s.getActiveSession(); } catch (e) { return false; } },
+    isConnected: async (s) => { try { return !!(await s.getActiveSession()); } catch (e) { return false; } },
     connect: async (s) => {
       // ?wallet=loop pins a specific one; otherwise prefer whatever is installed.
       // Pinning matters for testing: without it PartyLayer picks the first adapter and
@@ -1585,21 +1585,63 @@ const WalletLink = (() => {
     },
     disconnect: (s) => s.disconnect(),
     accounts: async (s) => {
-      const sess = s.getActiveSession();
+      const sess = await s.getActiveSession();
       if (!sess) return [];
-      return [{ partyId: sess.partyId, hint: String(sess.partyId).split("::")[0],
-                namespace: String(sess.partyId).split("::")[1] || null,
+      // PartyLayer's own types say Session.partyId, but Loop returned a session whose
+      // party sits elsewhere -- so look in the places it can plausibly be rather than
+      // trusting one field. A wrong guess here renders the venue as "undefined".
+      window.__plSession = sess;   // for inspection when a wallet surprises us
+      const pick = sess.partyId
+        || (sess.account && sess.account.partyId)
+        || (Array.isArray(sess.accounts) && sess.accounts[0] &&
+            (sess.accounts[0].partyId || sess.accounts[0].party))
+        || sess.party
+        || (sess.metadata && (sess.metadata.partyId || sess.metadata.party))
+        || null;
+      if (!pick) {
+        console.warn("[walletlink] PartyLayer session has no party id in any known field:",
+          Object.keys(sess).join(", "), sess);
+        return [];
+      }
+      const pid = String(pick);
+      return [{ partyId: pid, hint: pid.split("::")[0],
+                namespace: pid.split("::")[1] || null,
                 networkId: sess.network || null, primary: true, disabled: false }];
     },
     // Prepare here, sign there, execute here.
     submit: async (s, params) => {
-      const sess = s.getActiveSession();
+      const sess = await s.getActiveSession();
       if (!sess) throw new Error("no PartyLayer session");
       const prep = await post("/api/ext/prepare", {
         party: sess.partyId, commands: params.commands,
         disclosedContracts: params.disclosedContracts || [], tag: "partylayer",
       });
-      const signed = await s.signTransaction({ tx: prep.preparedTransaction });
+      // TWO SHAPES OF WALLET, and the difference decides who submits.
+      //
+      //  a) pure signer -- returns a signature, WE execute on our node. The wallet's
+      //     participant never submits anything, which is the shape that lets a party
+      //     trade on a validator that has not vetted us.
+      //  b) sign-and-submit -- Loop is this: it refuses `signTransaction`
+      //     ("Loop SDK combines signing and submission") and submits through its OWN
+      //     participant. That works for standard CIP-56 commands, which every node
+      //     has the packages for, but it means Umbra's own templates would need
+      //     vetting on that node.
+      //
+      // Note the registry lies about this: listWallets() advertises `signTransaction`
+      // in Loop's capabilities and the call then throws CapabilityNotSupportedError.
+      // Trust the runtime, not the metadata.
+      let signed = null;
+      try {
+        signed = await s.signTransaction({ tx: prep.preparedTransaction });
+      } catch (e) {
+        const capMiss = /CapabilityNotSupported|does not support capability/i.test(
+          (e && (e.name + " " + e.message)) || "");
+        if (!capMiss) throw e;
+        const receipt = await s.submitTransaction({ signedTx: prep.preparedTransaction });
+        return { committed: !!receipt, updateId: (receipt && receipt.updateId) || null,
+                 commandId: (receipt && receipt.commandId) || prep.commandId,
+                 submittedByWallet: true };
+      }
       // `signedTx` is typed `unknown` -- wallets differ on whether they hand back a bare
       // signature or a wrapper around one. Accept either rather than assume.
       const sig = (signed && (signed.signature || signed.signedTx)) || signed;
@@ -1612,9 +1654,21 @@ const WalletLink = (() => {
       });
       return { committed: !!(out && out.ok), updateId: null, commandId: prep.commandId };
     },
-    ledgerApi: (s, r) => s.ledgerApi({
-      method: (r.method || "get").toUpperCase(), path: r.resource, body: r.body, query: r.query,
-    }),
+    // PartyLayer's shape is { requestMethod, resource, body } -- not { method, path }.
+    // Passing the wrong names left requestMethod undefined and it failed inside the SDK
+    // on `.toUpperCase()`, which reads as a transport fault rather than a caller error.
+    // There is also no `query` field, so a query string has to ride on `resource`.
+    ledgerApi: (s, r) => {
+      let resource = r.resource;
+      if (r.query && Object.keys(r.query).length) {
+        resource += (resource.indexOf("?") >= 0 ? "&" : "?") +
+          Object.keys(r.query).map(k =>
+            encodeURIComponent(k) + "=" + encodeURIComponent(r.query[k])).join("&");
+      }
+      return s.ledgerApi({
+        requestMethod: (r.method || "get").toLowerCase(), resource, body: r.body,
+      });
+    },
   };
 
   // Probe order, most specific first. A user with the Console extension installed means
@@ -1822,7 +1876,34 @@ const WalletLink = (() => {
 
     // Active contracts of one template, read through the user's own validator.
     async activeContracts(partyId, templateId) {
-      const end = await this.ledgerApi({ method: "get", resource: "/v2/state/ledger-end" });
+      // Not every wallet exposes the whole Ledger API. Loop serves only
+      //   POST /v2/state/acs, GET /v2/state/acs/active-contracts,
+      //   POST /v2/commands/submit, POST /v2/commands/submit-and-wait
+      // and refuses /v2/state/ledger-end outright -- which this needed for its
+      // `activeAtOffset`. Try the precise, offset-pinned query first; if the wallet will
+      // not give us an offset, fall back to the offset-free ACS endpoint rather than
+      // reporting a funded party as holding nothing.
+      let end = null;
+      try {
+        end = await this.ledgerApi({ method: "get", resource: "/v2/state/ledger-end" });
+      } catch (e) {
+        const rows = await this.ledgerApi({
+          method: "get", resource: "/v2/state/acs/active-contracts",
+          query: { parties: partyId },
+        }).catch(() => []);
+        const list = Array.isArray(rows) ? rows : (rows && (rows.result || rows.activeContracts)) || [];
+        return list.map(x => {
+          const ce = (x && x.contractEntry && x.contractEntry.JsActiveContract && x.contractEntry.JsActiveContract.createdEvent)
+            || (x && x.activeContract && x.activeContract.createdEvent) || (x && x.createdEvent) || x;
+          if (!ce || !ce.contractId) return null;
+          // This endpoint cannot filter by template, so filter client-side.
+          if (templateId && ce.templateId) {
+            const want = String(templateId).split(":").slice(-2).join(":");
+            if (String(ce.templateId).indexOf(want) < 0) return null;
+          }
+          return { contractId: ce.contractId, payload: ce.createArgument || ce.createArguments };
+        }).filter(Boolean);
+      }
       const body = {
         filter: { filtersByParty: { [partyId]: { cumulative: [{ identifierFilter: {
           TemplateFilter: { value: { templateId, includeCreatedEventBlob: false } } } }] } } },
