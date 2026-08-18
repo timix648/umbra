@@ -1898,8 +1898,18 @@ const WalletLink = (() => {
         const idFilter = templateId
           ? { TemplateFilter: { value: { templateId, includeCreatedEventBlob: false } } }
           : { WildcardFilter: { value: { includeCreatedEventBlob: false } } };
+        // Read from PartyLayer's Loop adapter rather than guessed: it parses the body
+        // looking ONLY for `filter.filtersByParty[*].inclusive.templateFilters[0]` (the
+        // old v1 filter shape) or a TOP-LEVEL `templateId`/`interfaceId`. The modern
+        // `cumulative`/`identifierFilter` shape the Ledger API expects is invisible to
+        // it, which is why every query read as unfiltered and was refused. Send both:
+        // the top-level hint Loop reads, and the standard filter for anything else.
         const acsBody = {
-          filter: { filtersByParty: { [partyId]: { cumulative: [{ identifierFilter: idFilter }] } } },
+          templateId: templateId || undefined,
+          filter: { filtersByParty: { [partyId]: {
+            cumulative: [{ identifierFilter: idFilter }],
+            inclusive: templateId ? { templateFilters: [{ templateId }] } : undefined,
+          } } },
           verbose: false,
         };
         let rows = [];
