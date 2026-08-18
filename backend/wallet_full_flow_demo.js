@@ -131,14 +131,17 @@ const holdingsOf = async (partyId) =>
     invited: [D1, D2],
   });
   if (!rfqBuilt.build) throw new Error("expected build mode for a wallet requester");
+  // SwapRfq is nonconsuming and lives for its full TTL, so a previous run's RFQ is
+  // still active and matches on requester and invite list alike. Identify OURS as the
+  // cid that did not exist a moment ago -- anything weaker silently reuses the old one
+  // and stacks duplicate invitations and quotes onto it.
+  const rfqsBefore = new Set(((await must(`/api/swap/rfqs?role=${encodeURIComponent(R)}`)).rfqs || []).map(x => x.contractId));
   await submitAs(R, rfqBuilt.commands, [], "wfrfq");
   const rfq = await until("rfq", async () => {
     const o = await must(`/api/swap/rfqs?role=${encodeURIComponent(R)}`);
-    // Match on the invite list, not just the requester: an earlier abandoned RFQ from
-    // this same wallet is still active and would otherwise be picked up instead.
-    return (o.rfqs || o.items || []).find(x => x.payload && x.payload.requester === R &&
-      new Date(x.payload.expiresAt).getTime() > Date.now() &&
-      (x.payload.invited || []).includes(D1) && (x.payload.invited || []).includes(D2));
+    return (o.rfqs || o.items || []).find(x => !rfqsBefore.has(x.contractId) &&
+      x.payload && x.payload.requester === R &&
+      new Date(x.payload.expiresAt).getTime() > Date.now());
   });
   console.log("\nrfq:", rfq.contractId.slice(0, 26) + "…");
 
