@@ -86,6 +86,41 @@ app.use(express.static(path.join(__dirname, "public"), { index: false }));
 const PKG = process.env.PACKAGE_ID;
 const PKGN = process.env.PACKAGE_NAME;
 
+// ---- VENUE FEE --------------------------------------------------------------
+// A few bps of the winning quote, borne by the WINNING DEALER and paid in the WANT
+// asset. That is how institutional RFQ venues charge -- MarketAxess, Tradeweb and
+// Bloomberg bill the liquidity providers rather than the buy-side -- and for a
+// concrete reason: the buyer's alternative is a bilateral chat that costs no venue
+// fee at all, so an explicit charge on the taker sends the flow straight back to it.
+//
+// The floor is a per-asset CONSTANT, deliberately not a USD conversion. `refMid`
+// exists and is already recorded on-ledger, but the OPERATOR supplies it and the
+// operator collects the fee -- letting that number set the charge would be marking
+// our own homework, and it would drag a price oracle inside an atomic settlement.
+// Constants are auditable and need no oracle.
+//
+// With no UMBRA_FEE_PARTY set the venue runs fee-free, which is what every build
+// before 0.3.0 did.
+const FEE_PARTY = process.env.UMBRA_FEE_PARTY || "";
+const FEE_BPS = Number(process.env.UMBRA_FEE_BPS || 5);
+const FEE_FLOORS = {                      // ~$25 at August 2026 marks
+  cETH:   Number(process.env.UMBRA_FEE_FLOOR_CETH || 0.0132),
+  cBTC:   Number(process.env.UMBRA_FEE_FLOOR_CBTC || 0.0004),
+  CBTC:   Number(process.env.UMBRA_FEE_FLOOR_CBTC || 0.0004),
+  CC:     Number(process.env.UMBRA_FEE_FLOOR_CC || 272),
+  Amulet: Number(process.env.UMBRA_FEE_FLOOR_CC || 272),
+};
+const dec10 = n => Number(n).toFixed(10);
+
+// fee = max(floor, bps x price), in the want asset. Returns null when no fee applies.
+function feeFor(wantSymbol, price) {
+  if (!FEE_PARTY) return null;
+  const px = Number(price);
+  if (!isFinite(px) || px <= 0) return null;
+  const amt = Math.max(px * (FEE_BPS / 10000), FEE_FLOORS[wantSymbol] || 0);
+  return amt > 0 ? dec10(amt) : null;
+}
+
 // Operator-controlled parties (demo mode). The backend holds CanActAs on these.
 const PARTIES = {
   requester: process.env.REQUESTER,
@@ -2099,11 +2134,32 @@ app.post("/api/swap/quotes/:cid/accept", async (req, res) => {
     const requester = req.body && req.body.requester
       ? await partyIdFor(req.body.requester)
       : operator;
+    // The venue CANNOT read the quote -- SwapQuote deliberately excludes the operator,
+    // which is the blind auction working -- so for a wallet requester the terms have to
+    // come from the caller. That is not a trust hole: the operator re-derives the fee
+    // and refuses to execute a settlement that understates it (see executeRealSettlement),
+    // and ExecuteRealSwap is the one step the venue controls.
+    let quote = null;
+    try {
+      quote = (await queryActive(requester, "UmbraSwap:SwapQuote"))
+        .find(c => c.contractId === req.params.cid);
+    } catch (e) { /* a wallet requester's quotes are not ours to read */ }
+    const qp = (quote && quote.payload) || {};
+    const feePrice = qp.price != null ? qp.price : (req.body && req.body.price);
+    const feeWantSym = (qp.wantAsset && qp.wantAsset.symbol) || (req.body && req.body.wantSymbol);
+    const venueFeeAmount = (feePrice != null && feeWantSym) ? feeFor(feeWantSym, feePrice) : null;
+
     const cmds = [{
       ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapQuote`,
-        contractId: req.params.cid, choice: "AcceptSwapQuote", choiceArgument: {} } }];
+        contractId: req.params.cid, choice: "AcceptSwapQuote",
+        choiceArgument: {
+          venueFeeParty: venueFeeAmount ? FEE_PARTY : null,
+          venueFeeAmount: venueFeeAmount,
+        } } }];
     if (req.query.build === "1" || (req.body && req.body.build) || isWalletParty(requester)) {
       return res.json({ ok: true, build: true, party: requester, commands: cmds,
+        fee: venueFeeAmount ? { party: FEE_PARTY, amount: venueFeeAmount, bps: FEE_BPS,
+                                symbol: feeWantSym } : null,
         note: "sign via /api/ext/prepare + /api/ext/execute" });
     }
     const before = await idSetSwap(requester, "UmbraSwap:SwapProposal");
@@ -2463,15 +2519,21 @@ app.post("/api/ext/execute", async (req, res) => {
 // Throws on failure; rollback is the caller's decision, since a standalone execute
 // must not unilaterally withdraw a counterparty's allocation.
 async function executeRealSettlement(o) {
-  const { requester, dealerParty, settlementCid, offLeg, wantLeg, offAdmin, wantAdmin } = o;
+  const { requester, dealerParty, settlementCid, offLeg, wantLeg, feeLeg,
+          offAdmin, wantAdmin, feeAdmin } = o;
   // ExecuteRealSwap is `controller operator`. That was indistinguishable from the
   // requester while the venue WAS the requester; with a wallet requester they differ,
   // and submitting as the requester would be submitting as the wrong party.
   const operator = o.operator || requester;
   const offerCtx = await execTransferContext(offLeg.registry, offAdmin, offLeg.cid);
   const wantCtx  = await execTransferContext(wantLeg.registry, wantAdmin, wantLeg.cid);
+  // The fee leg is a third registry allocation and needs its own choice context, or the
+  // nested Allocation_ExecuteTransfer inside ExecuteRealSwap has nothing to execute with.
+  const feeCtx = feeLeg
+    ? await execTransferContext(feeLeg.registry, feeAdmin || wantAdmin, feeLeg.cid)
+    : null;
   const _dseen = {}; const disclosed = [];
-  for (const ctx of [offerCtx, wantCtx]) {
+  for (const ctx of [offerCtx, wantCtx, feeCtx].filter(Boolean)) {
     for (const d of (ctx.disclosedContracts || [])) {
       if (_dseen[d.contractId]) continue; _dseen[d.contractId] = true;
       disclosed.push({ templateId: d.templateId, contractId: d.contractId,
@@ -2484,7 +2546,10 @@ async function executeRealSettlement(o) {
   try {
     const offDiscs  = await allocDisclosure([offLeg.cid], requester);
     const wantDiscs = await allocDisclosure([wantLeg.cid], dealerParty);
-    for (const d of [...offDiscs, ...wantDiscs]) {
+    // The fee leg is the DEALER's allocation too, so it reads from the dealer's view for
+    // the same reason the want leg does.
+    const feeDiscs  = feeLeg ? await allocDisclosure([feeLeg.cid], dealerParty) : [];
+    for (const d of [...offDiscs, ...wantDiscs, ...feeDiscs]) {
       if (_dseen[d.contractId]) continue; _dseen[d.contractId] = true;
       disclosed.push(d);
     }
@@ -2511,6 +2576,9 @@ async function executeRealSettlement(o) {
       choiceArgument: {
         offerArgs: { context: offerCtx.choiceContextData || { values: {} }, meta: { values: {} } },
         wantArgs:  { context: wantCtx.choiceContextData  || { values: {} }, meta: { values: {} } },
+        feeArgs: feeCtx
+          ? { context: feeCtx.choiceContextData || { values: {} }, meta: { values: {} } }
+          : null,
       },
     } }],
     disclosedContracts: disclosed,
@@ -2576,11 +2644,30 @@ app.post("/api/swap/settlements/:cid/execute-real", async (req, res) => {
     if (!offAl) return res.status(409).json({ error: "offer allocation is gone (withdrawn or already executed): " + p.offerAllocCid });
     if (!wantAl) return res.status(409).json({ error: "want allocation is gone (withdrawn or already executed): " + p.wantAllocCid });
 
+    // Re-derive the fee from the settlement's own terms and refuse to execute if the
+    // trade shortchanges it. The requester assembles AcceptSwapQuote, so the amount on
+    // the proposal is only as honest as whoever signed it; this is the venue's check,
+    // at the one step the venue controls.
+    const wantSymbol = (p.wantAsset && p.wantAsset.symbol) || "";
+    const expectFee = feeFor(wantSymbol, p.price);
+    if (expectFee && Number(p.feeAmount || 0) < Number(expectFee) - 1e-12) {
+      return res.status(409).json({
+        error: "settlement understates the venue fee: carries " + (p.feeAmount || "none") +
+               " " + wantSymbol + ", expected " + expectFee + " (" + FEE_BPS + " bps or floor)",
+      });
+    }
+    const feeAl = p.feeAllocCid ? findAl(p.feeAllocCid) : null;
+    if (p.feeAllocCid && !feeAl) {
+      return res.status(409).json({ error: "fee allocation is gone (withdrawn or already executed): " + p.feeAllocCid });
+    }
+
     await executeRealSettlement({
       requester, dealerParty, operator, settlementCid: req.params.cid,
       offLeg: { cid: p.offerAllocCid, registry: registryForAdmin(offAl.admin) },
       wantLeg: { cid: p.wantAllocCid, registry: registryForAdmin(wantAl.admin) },
+      feeLeg: feeAl ? { cid: p.feeAllocCid, registry: registryForAdmin(feeAl.admin) } : null,
       offAdmin: offAl.admin, wantAdmin: wantAl.admin,
+      feeAdmin: feeAl ? feeAl.admin : null,
     });
     res.json({ ok: true, executed: req.params.cid,
       offer: p.offerAmount + " " + (p.offerAsset && p.offerAsset.symbol),
@@ -2685,6 +2772,28 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
       steps.push("allocated real want leg (" + wantAmount + " " + wantAsset.symbol + ")");
     }
 
+    // Third leg: the venue's fee, sent by the DEALER in the want asset. Treated exactly
+    // like the other two -- a dealer that signs for itself must allocate this one too,
+    // so the fee cannot be imposed on it without its own signature.
+    let feeLeg = null;
+    const feeAmt = p.feeAmount, feeParty = p.feeParty;
+    const feeDue = !!(feeParty && feeAmt && Number(feeAmt) > 0);
+    if (feeDue) {
+      const feePre = await findExistingAllocation(dealerPartyId, settleId, "fee", wantInstr, feeAmt);
+      if (feePre) {
+        feeLeg = { cid: feePre.contractId, registry: registryForAdmin(wantAdmin),
+                   senderRole: dealerRole, senderParty: dealerPartyId, external: true };
+        steps.push("fee leg already allocated by the dealer's own wallet (" + feeAmt + " " + wantAsset.symbol + ")");
+      } else if (isWalletParty(dealerPartyId)) {
+        return needAlloc(dealerPartyId, allocationInstruction(dealerPartyId, feeParty,
+          wantAdmin, wantInstr, feeAmt, settleId, "fee"));
+      } else {
+        feeLeg = await allocateRealLeg(dealerRole, feeParty, wantAdmin, wantInstr,
+          wantAsset.symbol, feeAmt, settleId, "fee");
+        steps.push("allocated venue fee leg (" + feeAmt + " " + wantAsset.symbol + ")");
+      }
+    }
+
     // record the real settlement on the awarded proposal (both principals authorize)
     let refMid = null;
     try { refMid = await refMidFor(offerAsset.symbol, wantAsset.symbol); } catch (e) {}
@@ -2705,7 +2814,8 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
       const proposeCmd = [{ ExerciseCommand: {
         templateId: `#${PKGN}:UmbraSwap:SwapProposal`, contractId: req.params.cid,
         choice: "ProposeRealSwap",
-        choiceArgument: { realOfferAllocCid: offLeg.cid, realWantAllocCid: wantLeg.cid, realRefMid: refMid } } }];
+        choiceArgument: { realOfferAllocCid: offLeg.cid, realWantAllocCid: wantLeg.cid,
+          realRefMid: refMid, realFeeAllocCid: feeLeg ? feeLeg.cid : null } } }];
       const awaitSig = (step, party, commands) => res.status(202).json({
         ok: false, status: "awaiting-signature",
         awaiting: { step, party, commands },
@@ -2789,7 +2899,7 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
       try {
         await executeRealSettlement({
           requester, dealerParty: dealerPartyId, operator, settlementCid,
-          offLeg, wantLeg, offAdmin, wantAdmin,
+          offLeg, wantLeg, feeLeg, offAdmin, wantAdmin, feeAdmin: wantAdmin,
         });
       } catch (execErr) {
         console.error("[settle-real][SIGNED][execute] FAILED:", execErr && (execErr.stack || execErr.message || execErr));
