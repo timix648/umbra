@@ -1387,9 +1387,15 @@ const post = (p, b) => api(p, {
 // identity alongside them.
 const WalletLink = (() => {
   // ---- PROVIDERS -----------------------------------------------------------
-  // Two shapes of CIP-0103 provider, normalised behind one interface:
+  // CIP-0103 is transport-agnostic: a provider may be a browser extension talking
+  // postMessage, an HTTP/WebSocket wallet gateway, or an injected SDK global. The
+  // shapes differ, the payload does not — every one of them ultimately takes
+  // { commands, disclosedContracts, packageIdSelectionPreference }. So each is
+  // normalised behind one adapter interface and the rest of the app sees none of it.
   //
   //  "canton"  — the reference @canton-network/dapp-sdk global from our prebundle.
+  //              Covers the HTTP/gateway kernels it discovers, so a wallet reachable
+  //              over that route needs no adapter of its own.
   //  "console" — Console Wallet's own SDK. Its README states it is CIP-0103
   //              compatible, and it exposes prepareExecute/prepareExecuteAndWait
   //              taking { commands, disclosedContracts, packageIdSelectionPreference },
@@ -1398,6 +1404,12 @@ const WalletLink = (() => {
   //
   // Console is a browser EXTENSION speaking window.postMessage — there is no URL to
   // probe. It is only detectable from inside a page with the extension installed.
+  //
+  // TO ADD A WALLET: append one entry below with { id, label, get, init, isConnected,
+  // connect, disconnect, accounts, submit, ledgerApi } and name it in ORDER. Nothing
+  // else in the app changes. Note that connecting is only half of it -- the wallet's
+  // validator must also have vetted the Umbra package, or that party cannot see a
+  // block at all. hasPackage() below checks exactly that and says so.
   const CONSOLE_NET = "CANTON_NETWORK_DEV";   // devnet; align with the ledger we use
 
   const adapters = {
@@ -1473,14 +1485,17 @@ const WalletLink = (() => {
     }
   };
 
+  // Probe order, most specific first. A user with the Console extension installed
+  // means Console, so it answers before the generic SDK. Add new ids here.
+  const ORDER = ["console", "canton"];
+
   let consoleToken = null;
   let picked = null;   // the adapter that answered
 
-  // Prefer whichever provider is actually present. Console first: if the user has
-  // the extension, that is the wallet they mean.
+  // Prefer whichever provider is actually present.
   const pick = () => {
     if (picked && picked.get()) return picked;
-    for (const a of [adapters.console, adapters.canton]) if (a.get()) { picked = a; return a; }
+    for (const id of ORDER) { const a = adapters[id]; if (a && a.get()) { picked = a; return a; } }
     return null;
   };
   const sdk = () => { const a = pick(); return a ? a.get() : null; };
