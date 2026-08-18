@@ -559,6 +559,44 @@ app.get("/api/package", async (req, res) => {
 //
 // `?role=` excludes the caller: a party inviting itself would be quoting its own
 // block, and the ledger would reject the swap at settlement anyway.
+// ---- DEALER OPT-IN ---------------------------------------------------------
+// Being a dealer is something a party CHOOSES, not something that happens to it.
+// The directory used to list every onboarded wallet, so merely bringing a wallet
+// enlisted you as a market maker -- which put an abandoned test party and the venue's
+// own fee-collection party in the invite list, the latter selectable to quote on a
+// block. Nonsense, and confusing to anyone reading the screen.
+//
+// Opting in does NOT make you only a dealer. A party can quote on one block and raise
+// its own RFQ on the next, exactly as a real desk does; the directory already hides you
+// from your own auction. This flag says "list me as available to price", nothing more.
+//
+// Stored beside the other local registries. On-ledger registration would be stronger --
+// auditable, and revocable by the party without the venue's cooperation -- and is the
+// right shape later; this keeps the semantics correct now without another DAR.
+const DEALER_OPTIN_FILE = require("path").join(__dirname, "dealer-optin.local.txt");
+function loadDealerOptIns() {
+  try { return JSON.parse(require("fs").readFileSync(DEALER_OPTIN_FILE, "utf8")); }
+  catch (e) { return {}; }
+}
+function saveDealerOptIn(partyId, active) {
+  const all = loadDealerOptIns();
+  if (active) all[partyId] = { partyId, since: new Date().toISOString() };
+  else delete all[partyId];
+  require("fs").writeFileSync(DEALER_OPTIN_FILE, JSON.stringify(all, null, 2));
+  return all;
+}
+
+// A party lists (or delists) itself. Self-service by design: nobody is enlisted.
+app.post("/api/dealers/register", async (req, res) => {
+  try {
+    const party = await partyIdFor(req.body.party || req.body.role || "");
+    if (!party) return res.status(400).json({ error: "need a party" });
+    const active = req.body.active === undefined ? true : !!req.body.active;
+    saveDealerOptIn(party, active);
+    res.json({ ok: true, party, listed: active });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get("/api/dealers", async (req, res) => {
   try {
     const me = req.query.role ? await partyIdFor(req.query.role).catch(() => null) : null;
@@ -568,9 +606,15 @@ app.get("/api/dealers", async (req, res) => {
       if (pid) out.push({ id: r, partyId: pid, name: r === "dealer1" ? "Dealer 1" : "Dealer 2",
         kind: "venue", custody: "operator" });
     }
+    // Only wallets that asked to be listed. `?all=1` shows the rest so a party can find
+    // itself in order to opt in.
+    const optedIn = loadDealerOptIns();
+    const showAll = req.query.all === "1";
     for (const w of Object.values(loadWallets())) {
+      const listed = !!optedIn[w.partyId];
+      if (!listed && !showAll) continue;
       out.push({ id: w.partyId, partyId: w.partyId, name: String(w.partyId).split("::")[0],
-        kind: "wallet", custody: "self" });
+        kind: "wallet", custody: "self", listed });
     }
     res.json({ ok: true, dealers: out.filter(d => d.partyId !== me) });
   } catch (e) { res.status(500).json({ error: e.message }); }
