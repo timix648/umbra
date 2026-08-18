@@ -69,18 +69,35 @@ Everything below runs against the live 5North Canton DevNet. Nothing here is moc
   signed by that party's own Ed25519 key via interactive submission. Receipt reads
   *TRUST: each party self-signed*.
 
-**Honest limits:**
-- Signed mode holds each party's external key **server-side** and signs on their behalf. The
-  signatures are real and party-specific -- the venue cannot forge a party's authority -- but
-  a user does not yet approve in their own wallet app. Letting a user approve in their own
-  wallet is the next step, not a shipped feature; see Roadmap.
+**Bring-your-own-wallet (on the `wallet-integration` branch):**
+- Three parties whose private keys this server has **never held** trade end to end. Keys are
+  generated outside the backend; the server only ever receives a public key, a topology
+  signature, and signatures over prepared transaction hashes. `wallet_onboard_demo.js` greps
+  the server's own party store and reports what it finds, so the claim is checkable.
+- Verified in the browser with all three parties self-signing: RFQ, both dealers' quotes,
+  award, both allocations, `ProposeRealSwap` and `AcceptRealSwap`. The operator signs exactly
+  one choice, `ExecuteRealSwap`, which is `controller operator` in the Daml -- the venue's own
+  authority, never a party's.
+- Party-scoped reads go through the wallet's own `ledgerApi`, not Umbra's participant, because
+  Umbra cannot see a party it does not host -- and must not see a dealer's quotes anyway.
 
-  *Foundation proven:* Umbra's `SwapProposal` also implements the standard CIP-56
-  `AllocationRequestV1` interface, verified rendering on live 5North DevNet
-  (`viewStatus` code 0, both swap legs projected). Because a wallet reads the **standard**
-  interface rather than Umbra's custom template, any compliant Canton wallet can read and
-  sign the swap legs without vetting Umbra's DAR. This is the groundwork for the wallet
-  front-door -- see the `wallet-integration` branch.
+**Honest limits:**
+- **A wallet's validator must have vetted Umbra's package.** There is no interface or
+  disclosure exception: Canton requires every participant *informed* about a transaction to
+  have vetted the package, and all six canonical Splice token packages are interfaces only,
+  with no templates of their own. An earlier version of this README claimed the CIP-56
+  `AllocationRequestV1` interface let any wallet sign without vetting. That was wrong.
+  `GET /api/package` publishes the DAR and its sha256 so an operator can vet it themselves.
+- **No third-party CIP-0103 wallet trades here yet.** Console Wallet declined to vet
+  ("only companies that sign contracts with us"); 5North's wallet exposes no CIP-0103
+  endpoint. Adapters for Console and the reference Canton SDK are wired and the venue tells a
+  connecting user plainly when their validator lacks the package -- but the wallets exercised
+  so far are key-file signers, not a third-party wallet application.
+- **Foreign-validator hosting is unproven.** Every party above is hosted on the 5North
+  validator that Umbra itself has admin rights on, so this demonstrates *custody* BYOW (your
+  own key), not *hosting* BYOW (your own validator). Anyone running their own validator can
+  vet Umbra themselves with nobody's permission -- vetting is a participant-local admin
+  action, not a network gate -- but that path has not been exercised.
 - Runs on DevNet, which resets periodically; balances are re-funded from the issuers' faucets.
 - The market reference is a real spot mid. Umbra shows no bid/ask spread, because a public
   feed does not provide one and inventing it would be dishonest.
