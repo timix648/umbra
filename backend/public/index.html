@@ -3466,9 +3466,9 @@ function RequesterDesk(P) {
                       " Settlement alternates between you and the dealer — pick it up whenever it is your turn.")),
               React.createElement("div", { className: "ask-empty" },
                 React.createElement("div", { className: "ask-mark" },
-                  (pl.offerAmount != null ? fmtNum(pl.offerAmount) : "—") + " " + off),
+                  pl.offerAmount != null ? fmtNum(pl.offerAmount) : "—", " " + off),
                 React.createElement("p", null,
-                  "for " + (pl.price != null ? fmtNum(pl.price) : "—") + " " + wnt)),
+                  "for ", pl.price != null ? fmtNum(pl.price) : "—", " " + wnt)),
               theirs ? null : React.createElement("button", {
                 className: "sgn-btn", disabled: !!P.settling, onClick: P.onSettle
               }, P.settling ? (P.settleStep || "Settling…") : "Continue settlement")));
@@ -3906,9 +3906,10 @@ function DealerDesk(P) {
                     const fee = Math.max(px * (f.bps / 10000), (f.floors && f.floors[w]) || 0);
                     const onFloor = fee > px * (f.bps / 10000);
                     return React.createElement("div", { className: "ask-line dim" },
-                      "You pay ", React.createElement("b", null, fmtNum(px + fee) + " " + w),
-                      " — ", fmtNum(px) + " to the buyer plus ",
-                      React.createElement("b", null, fmtNum(fee) + " " + w),
+                      "You pay ",
+                      React.createElement("b", null, fmtNum(px + fee), " " + w),
+                      " — ", fmtNum(px), " to the buyer plus ",
+                      React.createElement("b", null, fmtNum(fee), " " + w),
                       onFloor ? " venue fee (minimum)" : " venue fee (" + f.bps + " bps)");
                   })(),
                   // quick-fill: price off the REAL mid, nudge in basis points.
@@ -3959,9 +3960,9 @@ function DealerDesk(P) {
                 "your leg is allocated and accepted with ", React.createElement("b", null, "your key"), "."),
               React.createElement("div", { className: "ask-empty" },
                 React.createElement("div", { className: "ask-mark" },
-                  (pl.offerAmount != null ? fmtNum(pl.offerAmount) : "—") + " " + off),
+                  pl.offerAmount != null ? fmtNum(pl.offerAmount) : "—", " " + off),
                 React.createElement("p", null,
-                  "you pay " + (pl.price != null ? fmtNum(pl.price) : "—") + " " + wnt)),
+                  "you pay ", pl.price != null ? fmtNum(pl.price) : "—", " " + wnt)),
               React.createElement("button", {
                 className: "sgn-btn", disabled: !!P.settling, onClick: P.onSettle
               }, P.settling ? (P.settleStep || "Settling…") : "Complete settlement")));

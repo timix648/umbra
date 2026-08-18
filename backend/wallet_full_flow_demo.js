@@ -33,6 +33,11 @@ const PRICE_D2  = argOf("--price2", "0.03");          // better bid -> should wi
 // a real browser session is limited to -- it holds one key -- so this reproduces the
 // half-settled state the dealer's own desk has to be able to finish.
 const HALT      = process.argv.includes("--halt-on-counterparty");
+// Stop once the dealers have been invited but before anyone quotes. That is the one
+// state the dealer desk needs in order to render its quote form at all -- without a
+// live invitation the whole panel is replaced by the empty state, which is why the
+// quick-fill controls and the fee line both looked absent.
+const INVITE_ONLY = process.argv.includes("--invite-only");
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -163,6 +168,13 @@ const holdingsOf = async (partyId) =>
     if (!b.build) throw new Error("expected build mode for invite");
     console.log(`   inviting ${label}`);
     await submitAs(R, b.commands, [], "wfinv");
+  }
+
+  if (INVITE_ONLY) {
+    console.log("\nINVITE-ONLY: dealers are invited and nobody has quoted.");
+    console.log("Open the dealer desk now -- the quote form renders only in this state:");
+    console.log("  /app?devwallet=1&devparty=" + D1);
+    return;
   }
 
   // 3. each dealer wallet quotes with its OWN key
