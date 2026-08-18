@@ -1302,7 +1302,10 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
      { commands, disclosedContracts, packageIdSelectionPreference }: exactly what
      WalletLink already builds. Loaded from unpkg, the no-build path Console
      documents. A CDN failure is non-fatal — Console simply won't be offered. -->
-<script src="/console-wallet-sdk.js"></script>
+<!-- console-wallet-sdk.js is no longer loaded: PartyLayer ConsoleAdapter talks to the
+     extension directly via its own injected global, so this bundle was redundant AND
+     it prompted the extension to sign on page load, which looked like Umbra asking for
+     a signature nobody requested. -->
 <script>
   // The bundle exposes ConsoleWalletSDK.consoleWallet; WalletLink looks for
   // window.ConsoleWallet. The extension may still be absent — that is fine, the
