@@ -36,6 +36,13 @@ const HALT      = process.argv.includes("--halt-on-counterparty");
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// Holdings come back under the ledger instrument id ("Amulet", "CBTC"); the venue UI
+// creates RFQs under the ticker ("CC", "cBTC"). resolveAsset passes {admin,symbol}
+// through verbatim, so a script submitting the raw id writes trades that read
+// differently from every UI-created one. Look holdings up by id, submit by ticker.
+const disp = s => s === "Amulet" ? "CC" : (s === "CBTC" ? "cBTC" : s);
+
+
 async function j(p, b) {
   const r = await fetch(API + p, { method: b ? "POST" : "GET",
     headers: { "Content-Type": "application/json" }, body: b ? JSON.stringify(b) : undefined });
@@ -128,8 +135,8 @@ const holdingsOf = async (partyId) =>
   console.log("\n--- 1. requester wallet signs the RFQ ---");
   const rfqBuilt = await must("/api/swap/rfq", {
     requester: R,
-    offerAsset: { admin: offerH.admin, symbol: OFFER_SYM }, offerAmount: OFFER_AMT,
-    wantAsset: { admin: d2H.admin, symbol: WANT_SYM },
+    offerAsset: { admin: offerH.admin, symbol: disp(OFFER_SYM) }, offerAmount: OFFER_AMT,
+    wantAsset: { admin: d2H.admin, symbol: disp(WANT_SYM) },
     // `invited` is an ALLOWLIST fixed at creation: InviteDealer asserts the dealer is
     // already on it (the choice's failure message reads the opposite of what it checks).
     invited: [D1, D2],

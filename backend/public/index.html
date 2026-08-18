@@ -1943,7 +1943,7 @@ function OperatorConsole({ onExit }) {
         .map(h => ({
           contractId: h.contractId,
           payload: {
-            asset: { symbol: h.id === "Amulet" ? "CC" : (h.id === "CBTC" ? "cBTC" : h.id), admin: h.admin },
+            asset: { symbol: dispSym(h.id), admin: h.admin },
             amount: h.amount,
             owner: h.owner || ownerHint
           }
@@ -3079,7 +3079,7 @@ const mapRealHoldings = (rh, ownerHint) => ((rh && rh.raw) || [])
   .map(h => ({
     contractId: h.contractId,
     payload: {
-      asset: { symbol: h.id === "Amulet" ? "CC" : (h.id === "CBTC" ? "cBTC" : h.id), admin: h.admin },
+      asset: { symbol: dispSym(h.id), admin: h.admin },
       amount: h.amount,
       owner: h.owner || ownerHint
     }
@@ -3116,6 +3116,12 @@ const totalUsd = (usd, hs) => {
   }
   return any ? t : null;
 };
+
+// The ledger's instrument ids are protocol names, not tickers: Canton Coin is created
+// by the template "Amulet", and cBTC is registered as "CBTC". Holdings mapped these to
+// tickers inline while the trade book printed them raw, so one asset showed as CC in
+// the balance panel and AMU in the book directly beneath it. One helper, used by both.
+const dispSym = s => s === "Amulet" ? "CC" : (s === "CBTC" ? "cBTC" : s);
 
 const usdOf = (usd, sym, amt) => {
   const p = usd && usd[sym];
@@ -3666,7 +3672,7 @@ function TradeBook({ settled }) {
     settled.map(t => {
       const p = t.payload || {};
       if (!p.offerAsset || !p.wantAsset) return null;
-      const o = p.offerAsset.symbol, w = p.wantAsset.symbol;
+      const o = dispSym(p.offerAsset.symbol), w = dispSym(p.wantAsset.symbol);
       const amt = Number(p.offerAmount), px = Number(p.price);
       const rate = amt > 0 ? px / amt : null;
       const ref = (p.refMid == null) ? null : Number(p.refMid);
@@ -4256,7 +4262,7 @@ function PartyPortal({ role, wallet, onExit }) {
           e.waiting = true;
           throw e;
         }
-        const sym = al.instrument === "Amulet" ? "CC" : (al.instrument === "CBTC" ? "cBTC" : al.instrument);
+        const sym = dispSym(al.instrument);
         // Allocating LOCKS a holding, so take the smallest set that covers the
         // leg rather than offering up the whole balance.
         const mine = holdings
