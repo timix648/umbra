@@ -136,5 +136,28 @@
     on: function () {}, removeListener: function () {}, emit: function () {}
   };
 
-  console.log("[dev-wallet] active — window.CantonDapp replaced with a test double");
+  // Announce ourselves the CIP-0103 way as well as replacing the global. A wallet
+  // signals its existence with `canton:announceProvider` and re-announces whenever a
+  // dApp dispatches `canton:requestProvider` -- EIP-6963 in shape.
+  //
+  // This is here so the app's DISCOVERY path gets exercised rather than only its
+  // hardcoded-global path. No real announcing wallet has ever been present in a page
+  // we run, so without this the discovery code would ship having never once fired.
+  // It does not make this a real wallet; it makes the handshake testable.
+  var announcement = {
+    info: {
+      uuid: "umbra-dev-wallet-0000-0000-0000",
+      name: "Umbra Dev Wallet",
+      rdns: "app.um-bra.devwallet",
+      icon: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciLz4="
+    },
+    provider: window.CantonDapp
+  };
+  function announce() {
+    window.dispatchEvent(new CustomEvent("canton:announceProvider", { detail: announcement }));
+  }
+  window.addEventListener("canton:requestProvider", announce);
+  announce();
+
+  console.log("[dev-wallet] active — window.CantonDapp replaced, and announced via canton:announceProvider");
 })();

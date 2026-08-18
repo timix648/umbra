@@ -1412,6 +1412,33 @@ const WalletLink = (() => {
   // block at all. hasPackage() below checks exactly that and says so.
   const CONSOLE_NET = "CANTON_NETWORK_DEV";   // devnet; align with the ledger we use
 
+  // ---- CIP-0103 DISCOVERY ---------------------------------------------------
+  // A compliant wallet announces itself with a `canton:announceProvider` event
+  // carrying { info, provider }; the dApp asks by dispatching `canton:requestProvider`.
+  // EIP-6963 in shape, and it is the whole reason a wallet nobody has written an
+  // adapter for can still work here: it arrives, it announces, it is used.
+  //
+  // The two named adapters below stay because they cover what discovery does not.
+  // Console exposes a global instead of announcing, and the bundled reference SDK is
+  // the fallback when nothing announces at all.
+  const announced = [];   // [{ info, provider }]
+  if (typeof window !== "undefined") {
+    window.addEventListener("canton:announceProvider", ev => {
+      const d = ev && ev.detail;
+      if (!d || !d.provider) return;
+      const id = (d.info && (d.info.uuid || d.info.rdns || d.info.name)) || null;
+      const seen = announced.some(a =>
+        id && a.info && (a.info.uuid || a.info.rdns || a.info.name) === id);
+      if (!seen) {
+        announced.push(d);
+        console.log("[walletlink] discovered CIP-0103 wallet:",
+          (d.info && d.info.name) || "(unnamed)");
+      }
+    });
+    // Wallets that announced before this listener existed re-announce on request.
+    try { window.dispatchEvent(new Event("canton:requestProvider")); } catch (e) {}
+  }
+
   const adapters = {
     canton: {
       id: "canton", label: "Canton wallet",
@@ -1485,9 +1512,20 @@ const WalletLink = (() => {
     }
   };
 
-  // Probe order, most specific first. A user with the Console extension installed
-  // means Console, so it answers before the generic SDK. Add new ids here.
-  const ORDER = ["console", "canton"];
+  // An announced provider speaks the same dApp API as the reference SDK, so it borrows
+  // that adapter's method bodies and differs only in where the object came from.
+  adapters.discovered = Object.assign({}, adapters.canton, {
+    id: "discovered",
+    label: "Canton wallet",
+    get: () => (announced[0] && announced[0].provider) || null,
+    // A discovered provider is live already; the reference SDK's init() does not apply.
+    init: async () => true,
+  });
+
+  // Probe order, most specific first. A user with the Console extension installed means
+  // Console; otherwise a wallet that announced itself beats the bundled SDK, which is
+  // only a fallback. Add new ids here.
+  const ORDER = ["console", "discovered", "canton"];
 
   let consoleToken = null;
   let picked = null;   // the adapter that answered
