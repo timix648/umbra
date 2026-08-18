@@ -29,6 +29,10 @@ const OFFER_AMT = argOf("--offer", "100");
 const WANT_SYM  = argOf("--want-asset", "cETH");      // what the dealers pay in
 const PRICE_D1  = argOf("--price1", "0.02");
 const PRICE_D2  = argOf("--price2", "0.03");          // better bid -> should win
+// Stop the moment a step belongs to someone else, instead of signing it. That is what
+// a real browser session is limited to -- it holds one key -- so this reproduces the
+// half-settled state the dealer's own desk has to be able to finish.
+const HALT      = process.argv.includes("--halt-on-counterparty");
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -201,6 +205,11 @@ const holdingsOf = async (partyId) =>
       const a = r.body.awaiting;
       const who = signers[a.party] ? signers[a.party].role : String(a.party).slice(0, 20) + "…";
       console.log(`   AWAITING: ${a.step} from ${who}`);
+      if (HALT && a.party !== R) {
+        console.log(`\nHALTED: the next step belongs to ${who}, who must sign it from its own`);
+        console.log(`session. Proposal ${prop.contractId.slice(0, 26)}… is left open for it.`);
+        return;
+      }
       if (a.step === "AllocateLeg") {
         const pick = await holdingFor(a.party, a.allocate.instrument, a.allocate.amount);
         if (!pick) throw new Error(`${who} has no unlocked ${a.allocate.instrument} >= ${a.allocate.amount}`);

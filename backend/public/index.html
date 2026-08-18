@@ -3417,6 +3417,39 @@ function RequesterDesk(P) {
 
       React.createElement("div", { className: "dsk-col" },
 
+        // Settlement alternates between the two wallets, so the buyer needs a way back
+        // in after the dealer has moved. Without it an awarded trade sat half-allocated
+        // with no route to finish it from this side.
+        P.openTrade ? (() => {
+          const pl = P.openTrade.c.payload || {};
+          const off = (pl.offerAsset && pl.offerAsset.symbol) || "offer";
+          const wnt = (pl.wantAsset && pl.wantAsset.symbol) || "want";
+          // A RealSwapPending is always the DEALER's move (AcceptRealSwap). Offering the
+          // buyer a button there would invite them to press something that can only
+          // report back that it is not their turn.
+          const theirs = P.openTrade.kind === "pending" && pl.dealer !== P.role;
+          return React.createElement("section", { className: "mod mod-focal" },
+            React.createElement("div", { className: "mod-h" },
+              React.createElement("h2", null, theirs ? "Awaiting the dealer" : "Trade awaiting you")),
+            React.createElement("div", { className: "mod-b" },
+              React.createElement("p", { className: "whg-sub" },
+                theirs
+                  ? React.createElement(React.Fragment, null,
+                      React.createElement("b", null, "Your side is done."),
+                      " Your leg is allocated and the dealer has to accept. Nothing has moved yet, and nothing is lost.")
+                  : React.createElement(React.Fragment, null,
+                      React.createElement("b", null, "Signed in your wallet."),
+                      " Settlement alternates between you and the dealer — pick it up whenever it is your turn.")),
+              React.createElement("div", { className: "ask-empty" },
+                React.createElement("div", { className: "ask-mark" },
+                  (pl.offerAmount != null ? fmtNum(pl.offerAmount) : "—") + " " + off),
+                React.createElement("p", null,
+                  "for " + (pl.price != null ? fmtNum(pl.price) : "—") + " " + wnt)),
+              theirs ? null : React.createElement("button", {
+                className: "sgn-btn", disabled: !!P.settling, onClick: P.onSettle
+              }, P.settling ? (P.settleStep || "Settling…") : "Continue settlement")));
+        })() : null,
+
         React.createElement("section", { className: "mod" },
           React.createElement("div", { className: "mod-h" },
             React.createElement("h2", null, "Market reference"),
@@ -3438,8 +3471,14 @@ function RequesterDesk(P) {
           React.createElement("div", { className: "mod-b" },
             holdings.length === 0
               ? React.createElement("div", { className: "void" },
-                  React.createElement("div", { className: "void-t" }, "No assets yet"),
-                  React.createElement("div", { className: "void-s" }, "Your balances appear here once funded."))
+                  // A failed read and an empty account look identical unless we say so.
+                  // Telling a funded dealer "no assets yet" reads as "your money is gone".
+                  React.createElement("div", { className: "void-t" },
+                    P.readFailed ? "Balances unavailable" : "No assets yet"),
+                  React.createElement("div", { className: "void-s" },
+                    P.readFailed
+                      ? "Could not reach your wallet's validator. Your assets are unaffected — this is a read problem, not a balance."
+                      : "Your balances appear here once funded."))
               : React.createElement("div", { className: "hl" },
                   aggHoldings(holdings, usd).map(h => React.createElement("div", { className: "hl-r", key: h.symbol },
                     React.createElement(AssetIcon, { symbol: h.symbol }),
@@ -3863,8 +3902,31 @@ function DealerDesk(P) {
                   React.createElement("p", null, "No one has asked you for a price."),
                   React.createElement("span", null, "A request appears here only if the buyer invites you. You never see one sent to another dealer."))))),
 
-      // RIGHT: withholds + holdings
+      // RIGHT: won-trade settlement + withholds + holdings
       React.createElement("div", { className: "dsk-col" },
+        // Only the dealer can finish its own side: allocating its leg and accepting
+        // the swap are both signed by its key. Without this panel a won block simply
+        // stalled, with the buyer's leg allocated and no way to complete from here.
+        P.openTrade ? (() => {
+          const pl = P.openTrade.c.payload || {};
+          const off = (pl.offerAsset && pl.offerAsset.symbol) || "offer";
+          const wnt = (pl.wantAsset && pl.wantAsset.symbol) || "want";
+          return React.createElement("section", { className: "mod mod-focal" },
+            React.createElement("div", { className: "mod-h" },
+              React.createElement("h2", null, "You won this block")),
+            React.createElement("div", { className: "mod-b" },
+              React.createElement("p", { className: "whg-sub" },
+                React.createElement("b", null, "Your move."), " The buyer cannot settle for you — ",
+                "your leg is allocated and accepted with ", React.createElement("b", null, "your key"), "."),
+              React.createElement("div", { className: "ask-empty" },
+                React.createElement("div", { className: "ask-mark" },
+                  (pl.offerAmount != null ? fmtNum(pl.offerAmount) : "—") + " " + off),
+                React.createElement("p", null,
+                  "you pay " + (pl.price != null ? fmtNum(pl.price) : "—") + " " + wnt)),
+              React.createElement("button", {
+                className: "sgn-btn", disabled: !!P.settling, onClick: P.onSettle
+              }, P.settling ? (P.settleStep || "Settling…") : "Complete settlement")));
+        })() : null,
         React.createElement("section", { className: "mod" },
           React.createElement("div", { className: "mod-h" },
             React.createElement("h2", null, "The ledger withholds")),
@@ -3927,6 +3989,16 @@ function PartyPortal({ role, wallet, onExit }) {
   const [usd, setUsd] = useState(null);
   const [vault, setVault] = useState(null);
   const [rateNote, setRateNote] = useState(null);
+  // A dealer that WINS has work of its own: allocate its leg, then accept the swap,
+  // both signed in its own wallet. Nothing else can do it -- the buyer's browser has
+  // no key for the dealer -- so if this is not surfaced the trade stalls silently
+  // with the buyer's funds allocated and neither side told why.
+  const [openTrade, setOpenTrade] = useState(null);
+  const [settling, setSettling] = useState(false);
+  const [settleStep, setSettleStep] = useState(null);
+  // Distinguish "read failed" from "holds nothing". Rendering both as an empty wallet
+  // tells a funded user their assets are gone.
+  const [readFailed, setReadFailed] = useState(false);
   const pairRef = useRef(null);
   const [composedPair, setComposedPair] = useState({ base: "cBTC", quote: "cETH" });
   const onPair = useCallback(p => { setComposedPair(p); }, []);
@@ -3952,7 +4024,7 @@ function PartyPortal({ role, wallet, onExit }) {
       // the operator observes) still comes from Umbra, because Umbra can see it.
       const viaWallet = !!(wallet && wallet.partyId === role);
       const partyReads = viaWallet
-        ? WalletLink.reads(role).catch(() => ({ si: {}, sq: {}, sh: {} }))
+        ? WalletLink.reads(role).catch(() => ({ si: {}, sq: {}, sh: {}, readFailed: true }))
         : Promise.all([
             api("/api/swap/invitations?role=" + role).catch(() => ({})),
             api("/api/swap/quotes?role=" + role).catch(() => ({})),
@@ -3971,7 +4043,25 @@ function PartyPortal({ role, wallet, onExit }) {
       const nx = (si && si.invitations) || [];
       setInv(prev => { if (nx.length > prev.length) { setFresh(true); setTimeout(() => setFresh(false), 900); } return nx; });
       setMyQuotes((sq && sq.quotes) || []);
+      setReadFailed(!!pr3.readFailed);
       setHoldings(mapRealHoldings(sh, role));
+
+      // Unfinished settlement work for whoever we are. Settlement alternates between
+      // the two wallets -- buyer allocates, dealer allocates, buyer proposes, dealer
+      // accepts -- and neither browser can sign for the other. So BOTH sides need a way
+      // back in, or a trade strands whenever the baton passes.
+      // A RealSwapPending outranks a SwapProposal: it is the later stage.
+      if (wallet) {
+        const enc2 = encodeURIComponent;
+        const ours = x => x.payload && (x.payload.requester === role || x.payload.dealer === role);
+        const [pp, pn] = await Promise.all([
+          api("/api/swap/proposals?role=" + enc2(role)).catch(() => ({})),
+          api("/api/swap/pending-real?role=" + enc2(role)).catch(() => ({}))
+        ]);
+        const prop = ((pp && pp.proposals) || []).filter(ours).pop();
+        const pend = ((pn && pn.pending) || []).filter(ours).pop();
+        setOpenTrade(pend ? { kind: "pending", c: pend } : (prop ? { kind: "proposal", c: prop } : null));
+      }
       if (md && md.parties) setParties(md.parties);
       if (md) setSigned(!!md.signedMode);
       if (le) setOffset(le.offset);
@@ -3998,7 +4088,7 @@ function PartyPortal({ role, wallet, onExit }) {
         pairRef.current = (composing || !_lrfq) ? null : { base: _lrfq.payload.offerAsset.symbol, quote: _lrfq.payload.wantAsset.symbol };
       }
     } catch (e) {}
-  }, [role, composedPair, selInvCid, selRfqCid, composing, wallet]);
+  }, [role, composedPair, selInvCid, selRfqCid, composing, wallet, isDealer]);
 
   useEffect(() => { load(); const t = setInterval(load, 2500); return () => clearInterval(t); }, [load]);
 
@@ -4064,8 +4154,14 @@ function PartyPortal({ role, wallet, onExit }) {
   // moved" while their leg sat allocated on the ledger.
   const afterProposalGone = useCallback(async (onStep) => {
     const enc = encodeURIComponent;
-    const se = await api("/api/swap/settlements?role=" + enc(role)).catch(() => ({}));
-    const s = ((se && se.settlements) || []).filter(x => x.payload && x.payload.requester === role).pop();
+    // Either side may be driving this: the requester after signing ProposeRealSwap,
+    // or the dealer completing a trade it won. Match on whichever party we are.
+    const mine = x => x.payload && (x.payload.requester === role || x.payload.dealer === role);
+    const settled = async () => {
+      const se = await api("/api/swap/settlements?role=" + enc(role)).catch(() => ({}));
+      return ((se && se.settlements) || []).filter(mine).pop();
+    };
+    const s = await settled();
     if (s) {
       // Both sides have committed; the atomic execute is the operator's to submit.
       onStep("Executing the atomic swap…");
@@ -4073,8 +4169,29 @@ function PartyPortal({ role, wallet, onExit }) {
       return { ok: true, settlementCid: s.contractId };
     }
     const pe = await api("/api/swap/pending-real?role=" + enc(role)).catch(() => ({}));
-    const pnd = ((pe && pe.pending) || []).filter(x => x.payload && x.payload.requester === role).pop();
+    const pnd = ((pe && pe.pending) || []).filter(mine).pop();
     if (pnd) {
+      // A RealSwapPending waits on the DEALER's AcceptRealSwap. If that is us, this is
+      // our move, not a wait -- the old code told a winning dealer to keep waiting for
+      // itself, which is why a won trade could never be finished from the browser.
+      if (pnd.payload.dealer === role) {
+        onStep("Accept the swap in your wallet…");
+        const b = await post("/api/swap/pending/" + pnd.contractId + "/accept-real", {});
+        if (b && b.build) await WalletLink.submit({ commands: b.commands });
+        for (let i = 0; i < 24; i++) {
+          await new Promise(r => setTimeout(r, 2500));
+          const s2 = await settled();
+          if (s2) {
+            onStep("Executing the atomic swap…");
+            await post("/api/swap/settlements/" + s2.contractId + "/execute-real", {});
+            return { ok: true, settlementCid: s2.contractId };
+          }
+        }
+        const e = new Error("You accepted the swap. The venue is finalising settlement — " +
+          "your funds are allocated and nothing is lost.");
+        e.waiting = true;
+        throw e;
+      }
       const e = new Error("Your side is signed and your " +
         (pnd.payload.offerAsset && pnd.payload.offerAsset.symbol || "offer") +
         " leg is allocated. Waiting for " + DEALER_NAME(pnd.payload.dealer) +
@@ -4098,7 +4215,16 @@ function PartyPortal({ role, wallet, onExit }) {
 
       if (rr.status === "awaiting-signature") {
         const a = rr.awaiting || {};
-        if (a.party && a.party !== role) throw new Error("waiting on the counterparty to sign " + a.step);
+        // Not our step. That is the trade progressing normally, not a failure: each
+        // side signs from its own wallet, so a browser can only ever drive its half.
+        // Flag it as `waiting` so the UI holds the trade on screen instead of
+        // dropping it, which read as "nothing happened" while a leg sat allocated.
+        if (a.party && a.party !== role) {
+          const e = new Error("Waiting for the counterparty to sign " + a.step +
+            " — your side is done, and nothing is lost.");
+          e.waiting = true;
+          throw e;
+        }
         onStep("Sign " + a.step + " in your wallet…");
         await WalletLink.submit({ commands: a.commands });
         continue;
@@ -4107,7 +4233,10 @@ function PartyPortal({ role, wallet, onExit }) {
       if (rr.status === "awaiting-allocation") {
         const ins = rr.awaiting || {}, al = ins.allocate || {};
         if (ins.party && ins.party !== role) {
-          throw new Error("waiting on the counterparty to allocate its own leg");
+          const e = new Error("Waiting for the counterparty to allocate its own leg" +
+            " — your side is done, and nothing is lost.");
+          e.waiting = true;
+          throw e;
         }
         const sym = al.instrument === "Amulet" ? "CC" : (al.instrument === "CBTC" ? "cBTC" : al.instrument);
         // Allocating LOCKS a holding, so take the smallest set that covers the
@@ -4124,7 +4253,10 @@ function PartyPortal({ role, wallet, onExit }) {
         const built = await post("/api/real/allocate?build=1", {
           build: true, senderRole: ins.party, receiver: al.receiver,
           admin: al.admin, id: al.instrument, amount: al.amount,
-          holdingCids: cids, settleId: al.settlementRef, legId: ins.legId
+          holdingCids: cids, settleId: al.settlementRef, legId: ins.legId,
+          // Carry the registry the backend named. Omitting it falls back to a default
+          // registry, which is wrong for any instrument not issued by that one.
+          registry: al.registry
         });
         await WalletLink.submit({ commands: built.commands, disclosedContracts: built.disclosedContracts });
         continue;
@@ -4134,6 +4266,30 @@ function PartyPortal({ role, wallet, onExit }) {
     }
     throw new Error("settlement did not finish after eight rounds");
   }, [role, holdings, afterProposalGone]);
+
+  // The dealer's half of a won trade, driven from the dealer's own browser. Same loop
+  // the requester runs -- settle-real is resumable and role-agnostic, so each side can
+  // pick it up and sign only the steps that belong to it.
+  const settleAsDealer = useCallback(async () => {
+    if (!openTrade || settling) return;
+    setSettling(true); setSettleStep("Checking the trade…");
+    try {
+      const rr = openTrade.kind === "proposal"
+        ? await settleWithWallet(openTrade.c.contractId, null, setSettleStep)
+        : await afterProposalGone(setSettleStep);
+      if (!rr || !rr.ok) throw new Error((rr && rr.error) || "settlement did not complete");
+      setSettleStep("Settled ✓");
+      say("Settled. The swap executed atomically.");
+      setOpenTrade(null);
+    } catch (e) {
+      // `waiting` is the trade progressing on the other side, not a failure.
+      if (e && e.waiting) say(e.message);
+      else say((e && e.message) || "settlement failed", true);
+    } finally {
+      setSettling(false);
+      setTimeout(() => setSettleStep(null), 1500);
+    }
+  }, [openTrade, settling, settleWithWallet, afterProposalGone]);
 
   async function sendQuote(cid, wantSym) {
     if (busy[cid]) return;
@@ -4269,7 +4425,8 @@ function PartyPortal({ role, wallet, onExit }) {
   // #311. As elements each desk owns its hooks and a switch remounts cleanly.
   if (isDealer) return React.createElement(DealerDesk, {
     meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, usd,
-    price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid, role, deskSwitch
+    price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid, role, deskSwitch,
+    openTrade, settling, settleStep, onSettle: settleAsDealer, readFailed
   });
 
   return React.createElement(React.Fragment, null,
@@ -4277,7 +4434,8 @@ function PartyPortal({ role, wallet, onExit }) {
       meta, signed, onExit, note, deskSwitch, role,
       rfqs, quotes: myQuotes, holdings, rate, series, usd, rateNote, onPair, history, composedPair,
       onCreate: createRfq, onAward: awardQuote, awarding, awardStep,
-      composing, setComposing, ratePair, selRfqCid, setSelRfqCid
+      composing, setComposing, ratePair, selRfqCid, setSelRfqCid,
+      openTrade, settling, settleStep, onSettle: settleAsDealer, readFailed
     }),
     React.createElement(SettlementVault, { trade: vault, role, onClose: () => setVault(null) }));
 
