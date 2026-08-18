@@ -1887,10 +1887,30 @@ const WalletLink = (() => {
       try {
         end = await this.ledgerApi({ method: "get", resource: "/v2/state/ledger-end" });
       } catch (e) {
-        const rows = await this.ledgerApi({
-          method: "get", resource: "/v2/state/acs/active-contracts",
-          query: { parties: partyId },
-        }).catch(() => []);
+        // Loop allowlists EXACT path strings: `GET /v2/state/acs/active-contracts` is
+        // permitted, the same path with `?parties=...` is not. So parameters have to go
+        // in a body, via `POST /v2/state/acs` -- the other endpoint it names as
+        // supported. Appending a query string here silently failed every read, and
+        // because the failure was swallowed an unreadable party looked like an empty one.
+        // Loop rejects an unfiltered ACS query ("may not support unfiltered ACS
+        // queries -- try providing a templateId"), so always send a filter when we have
+        // one and only fall back to wildcard when we genuinely want everything.
+        const idFilter = templateId
+          ? { TemplateFilter: { value: { templateId, includeCreatedEventBlob: false } } }
+          : { WildcardFilter: { value: { includeCreatedEventBlob: false } } };
+        const acsBody = {
+          filter: { filtersByParty: { [partyId]: { cumulative: [{ identifierFilter: idFilter }] } } },
+          verbose: false,
+        };
+        let rows = [];
+        try {
+          rows = await this.ledgerApi({ method: "post", resource: "/v2/state/acs", body: acsBody });
+        } catch (e2) {
+          // Say so rather than returning [] -- an unreadable wallet and an empty wallet
+          // are different facts and must not render identically.
+          console.warn("[walletlink] restricted ACS read failed:", e2 && e2.message);
+          throw e2;
+        }
         const list = Array.isArray(rows) ? rows : (rows && (rows.result || rows.activeContracts)) || [];
         return list.map(x => {
           const ce = (x && x.contractEntry && x.contractEntry.JsActiveContract && x.contractEntry.JsActiveContract.createdEvent)
@@ -4388,7 +4408,17 @@ function PartyPortal({ role, wallet, onExit }) {
     } catch (e) {}
   }, [role, composedPair, selInvCid, selRfqCid, composing, wallet, isDealer]);
 
-  useEffect(() => { load(); const t = setInterval(load, 2500); return () => clearInterval(t); }, [load]);
+  // Polling cadence is NOT one number. Against Umbra's own backend 2.5s is free; against
+  // a wallet's hosted API it is abusive -- reading through Loop at that rate earned a
+  // string of HTTP 429s within a minute, and a venue that rate-limits its own users out
+  // of their wallet is broken regardless of how fast it feels.
+  useEffect(() => {
+    const viaWallet = !!(wallet && wallet.partyId === role);
+    const everyMs = viaWallet ? 15000 : 2500;
+    load();
+    const t = setInterval(load, everyMs);
+    return () => clearInterval(t);
+  }, [load, wallet, role]);
 
   // ---- ACTING AS A PARTY THAT SIGNS FOR ITSELF ----
   //
