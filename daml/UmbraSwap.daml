@@ -679,6 +679,114 @@ template SwapSettlement
       do pure ()
 
 
+-- ----------------------------------------------------------------------------
+-- Standing mandate (the Daml "delegation" pattern)
+-- ----------------------------------------------------------------------------
+-- A party signs this ONCE, and the venue may afterwards perform the BOOKKEEPING
+-- steps of that party's trades on its behalf. It can never perform the steps that
+-- commit value.
+--
+-- Why this exists. Opening a request cost the requester 1 + N signatures, one per
+-- dealer invited, because InviteDealer needs the RFQ's contract id and that does not
+-- exist until the create has committed. At a hundred dealers that is a hundred and
+-- one wallet prompts to ask a single question. Batching it into one submission is not
+-- available either: interactive submission -- the path every bring-your-own-wallet
+-- party signs through -- rejects a transaction with more than one root node, and a
+-- create plus an exercise is two. Exercising a choice on a contract that ALREADY
+-- exists is one root node, so a mandate is the only shape that works.
+--
+-- The precedent is Canton's own. Splice.Wallet.TransferPreapproval exists so that an
+-- external party can receive Canton Coin without signing for every transfer; this is
+-- the same trade, applied to steps that move nothing.
+--
+-- WHAT THE OPERATOR CAN DO under a mandate:
+--   * open a request and invite the dealers named on it
+--   * propose settlement of a swap whose price and legs are already fixed
+--   * accept a pending swap whose terms this party already committed to
+-- WHAT IT STILL CANNOT DO -- these choices are simply absent, not merely discouraged:
+--   * allocate or move this party's funds
+--   * accept a price on this party's behalf
+--   * quote a price on this party's behalf
+--   * anything at all once `expiresAt` has passed, or after RevokeMandate
+template TradingMandate
+  with
+    party     : Party    -- the requester or dealer granting the mandate
+    operator  : Party
+    expiresAt : Time     -- a mandate is a session, not a standing grant
+  where
+    signatory party
+    observer operator
+
+    -- Open a request AND invite every dealer on it, in one transaction.
+    nonconsuming choice MandateOpenRfq : (ContractId SwapRfq, [ContractId SwapInvitation])
+      with
+        mOfferAsset  : AssetId
+        mOfferAmount : Decimal
+        mWantAsset   : AssetId
+        mInvited     : [Party]
+        mExpiresAt   : Time
+      controller operator
+      do
+        now <- getTime
+        assertMsg "this mandate has expired" (now < expiresAt)
+        assertMsg "a request must offer and want different assets" (mOfferAsset /= mWantAsset)
+        rfq <- create SwapRfq with
+          requester = party; operator
+          offerAsset = mOfferAsset; offerAmount = mOfferAmount
+          wantAsset = mWantAsset; invited = mInvited
+          expiresAt = mExpiresAt
+        invs <- forA mInvited (\d ->
+          create SwapInvitation with
+            requester = party; operator; dealer = d
+            offerAsset = mOfferAsset; offerAmount = mOfferAmount
+            wantAsset = mWantAsset; expiresAt = mExpiresAt
+            rfqCid = rfq)
+        pure (rfq, invs)
+
+    -- Propose settlement of a swap this party already accepted and allocated for.
+    -- Moves nothing: the price was fixed by AcceptSwapQuote and both legs were
+    -- allocated by their own owners' signatures.
+    nonconsuming choice MandateProposeRealSwap : ContractId RealSwapPending
+      with
+        mProposalCid : ContractId SwapProposal
+        mOfferAlloc  : ContractId Allocation
+        mWantAlloc   : ContractId Allocation
+        mRefMid      : Optional Decimal
+        mFeeAlloc    : Optional (ContractId Allocation)
+      controller operator
+      do
+        now <- getTime
+        assertMsg "this mandate has expired" (now < expiresAt)
+        prop <- fetch mProposalCid
+        -- A mandate speaks for ONE party. Without this it would let the operator drive
+        -- any proposal it could see, using an unrelated party's grant as the authority.
+        assertMsg "this proposal does not belong to the mandating party"
+          (prop.requester == party)
+        exercise mProposalCid ProposeRealSwap with
+          realOfferAllocCid = mOfferAlloc
+          realWantAllocCid = mWantAlloc
+          realRefMid = mRefMid
+          realFeeAllocCid = mFeeAlloc
+
+    -- Accept a pending swap this party is the dealer on, on terms it already quoted.
+    nonconsuming choice MandateAcceptRealSwap : ContractId SwapSettlement
+      with
+        mPendingCid : ContractId RealSwapPending
+      controller operator
+      do
+        now <- getTime
+        assertMsg "this mandate has expired" (now < expiresAt)
+        pend <- fetch mPendingCid
+        assertMsg "this pending swap does not belong to the mandating party"
+          (pend.dealer == party)
+        exercise mPendingCid AcceptRealSwap
+
+    -- Withdrawable at any moment, by the party alone.
+    choice RevokeMandate : ()
+      controller party
+      do pure ()
+
+
 -- Convenience helper for tooling: is an asset listed in a registry snapshot?
 isListed : [AssetId] -> AssetId -> Bool
 isListed assets a = isSome (find (== a) assets)
