@@ -1475,6 +1475,51 @@ const WalletLink = (() => {
       });
     },
 
+    // The party-scoped reads the UI needs, shaped EXACTLY like the backend responses
+    // they replace, so load() does not care where the data came from.
+    //
+    // Holdings and quotes are the two Umbra's own backend can never serve for a
+    // foreign-hosted party: it is not a stakeholder on the holdings, and it is
+    // deliberately not an observer on SwapQuote — that is the blind auction.
+    async reads(partyId, pkg) {
+      const P = pkg || "umbra-v9";
+      const [inv, quo, hold] = await Promise.all([
+        this.activeContracts(partyId, "#" + P + ":UmbraSwap:SwapInvitation").catch(() => []),
+        this.activeContracts(partyId, "#" + P + ":UmbraSwap:SwapQuote").catch(() => []),
+        this.holdings(partyId).catch(() => [])
+      ]);
+      return { si: { invitations: inv }, sq: { quotes: quo }, sh: { raw: hold } };
+    },
+
+    // Real token holdings, via the canonical Holding interface. Mirrors the backend's
+    // queryRealHoldings shape so mapRealHoldings() works unchanged.
+    async holdings(partyId) {
+      const end = await this.ledgerApi({ method: "get", resource: "/v2/state/ledger-end" });
+      const body = {
+        filter: { filtersByParty: { [partyId]: { cumulative: [{ identifierFilter: {
+          InterfaceFilter: { value: {
+            interfaceId: "#splice-api-token-holding-v1:Splice.Api.Token.HoldingV1:Holding",
+            includeInterfaceView: true, includeCreatedEventBlob: false } } } }] } } },
+        verbose: false,
+        activeAtOffset: (end && (end.offset ?? end.ledgerEnd ?? end)) || 0
+      };
+      const r = await this.ledgerApi({ method: "post", resource: "/v2/state/active-contracts", body });
+      const rows = Array.isArray(r) ? r : (r && r.result) || [];
+      const out = [];
+      for (const x of rows) {
+        const ce = (x && x.contractEntry && x.contractEntry.JsActiveContract && x.contractEntry.JsActiveContract.createdEvent)
+          || (x && x.activeContract && x.activeContract.createdEvent) || (x && x.createdEvent);
+        if (!ce) continue;
+        // One view per interface-package version; use the first that actually rendered.
+        const gv = (ce.interfaceViews || []).find(v => v && v.viewValue && (!v.viewStatus || v.viewStatus.code === 0));
+        if (!gv) continue;
+        const vv = gv.viewValue, inst = vv.instrumentId || {};
+        out.push({ contractId: ce.contractId, owner: vv.owner, admin: inst.admin,
+                   id: inst.id, amount: vv.amount, lock: vv.lock || null });
+      }
+      return out;
+    },
+
     // Active contracts of one template, read through the user's own validator.
     async activeContracts(partyId, templateId) {
       const end = await this.ledgerApi({ method: "get", resource: "/v2/state/ledger-end" });
@@ -3713,16 +3758,28 @@ function PartyPortal({ role, wallet, onExit }) {
       // stale RFQ pinned the rate to the wrong pair (34 cBTC/cETH for a cBTC/CC deal).
       const pr = pairRef.current || composedPair;
       const rateQ = pr ? ("?base=" + pr.base + "&quote=" + pr.quote) : "";
-      const [si, sq, sh, md, le, hist, rt, rq] = await Promise.all([
-        api("/api/swap/invitations?role=" + role).catch(() => ({})),
-        api("/api/swap/quotes?role=" + role).catch(() => ({})),
-        api("/api/real/holdings?role=" + role).catch(() => ({})),
+      // PURE BYOW: when a wallet is connected, the party lives on the USER's validator,
+      // which Umbra's participant cannot read. Take the party-scoped reads through the
+      // wallet instead. Everything else (mode, ledger end, market rate, the RFQ board
+      // the operator observes) still comes from Umbra, because Umbra can see it.
+      const viaWallet = !!(wallet && wallet.partyId === role);
+      const partyReads = viaWallet
+        ? WalletLink.reads(role).catch(() => ({ si: {}, sq: {}, sh: {} }))
+        : Promise.all([
+            api("/api/swap/invitations?role=" + role).catch(() => ({})),
+            api("/api/swap/quotes?role=" + role).catch(() => ({})),
+            api("/api/real/holdings?role=" + role).catch(() => ({}))
+          ]).then(([a, b, c]) => ({ si: a, sq: b, sh: c }));
+
+      const [pr3, md, le, hist, rt, rq] = await Promise.all([
+        partyReads,
         api("/api/mode").catch(() => ({})),
         api("/api/ledger-end").catch(() => ({})),
         api("/api/swap/history?role=" + role).catch(() => ({})),
         api("/api/market/rate" + rateQ).catch(() => ({})),
         api("/api/swap/rfqs").catch(() => ({}))
       ]);
+      const si = pr3.si || {}, sq = pr3.sq || {}, sh = pr3.sh || {};
       const nx = (si && si.invitations) || [];
       setInv(prev => { if (nx.length > prev.length) { setFresh(true); setTimeout(() => setFresh(false), 900); } return nx; });
       setMyQuotes((sq && sq.quotes) || []);
@@ -3753,7 +3810,7 @@ function PartyPortal({ role, wallet, onExit }) {
         pairRef.current = (composing || !_lrfq) ? null : { base: _lrfq.payload.offerAsset.symbol, quote: _lrfq.payload.wantAsset.symbol };
       }
     } catch (e) {}
-  }, [role, composedPair, selInvCid, selRfqCid, composing]);
+  }, [role, composedPair, selInvCid, selRfqCid, composing, wallet]);
 
   useEffect(() => { load(); const t = setInterval(load, 2500); return () => clearInterval(t); }, [load]);
 
