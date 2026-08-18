@@ -45,3 +45,21 @@ printf 'wrote %s (%s)\n' "$OUT" "$(du -h "$OUT" | cut -f1)"
   --outfile="$OUT_CONSOLE"
 
 printf 'wrote %s (%s)\n' "$OUT_CONSOLE" "$(du -h "$OUT_CONSOLE" | cut -f1)"
+
+# PartyLayer: per-wallet adapters (Loop, Console, Cantor8, Nightly, Send, Bron) plus
+# generic announce/discovery ones. It enumerates wallets precisely because generic
+# CIP-0103 announcement does not catch them all -- Console alone needed a bespoke
+# adapter, a prebundle and a corrected export name here, and there are more behind it.
+OUT_PL=../backend/public/partylayer.js
+./node_modules/.bin/esbuild entry-partylayer.js \
+  --bundle \
+  --format=iife \
+  --global-name=PartyLayerSDK \
+  --platform=browser \
+  --minify \
+  --loader:.css=text \
+  --loader:.png=dataurl \
+  --loader:.svg=dataurl \
+  --outfile="$OUT_PL"
+
+printf 'wrote %s (%s)\n' "$OUT_PL" "$(du -h "$OUT_PL" | cut -f1)"

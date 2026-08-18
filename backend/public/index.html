@@ -1312,6 +1312,14 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
     if (w && typeof w.status === "function") window.ConsoleWallet = w;
   })();
 </script>
+<!-- PartyLayer: one CIP-0103 integration, several wallets. It ships per-wallet
+     adapters (Loop, Console, Cantor8, Nightly, Send, Bron) AND generic announce
+     discovery. The per-wallet part is why it is here: it enumerates wallets
+     precisely because generic `canton:announceProvider` does not reach them all,
+     and Console alone already cost a bespoke adapter here.
+     5N Loop matters most — 5North's validator has already vetted Umbra, so a Loop
+     party has both halves and should trade without asking any vendor for anything. -->
+<script src="/partylayer.js"></script>
 <!-- Test double for a CIP-0103 wallet. Inert unless the page is opened with
      ?devwallet=1 AND the server was started with UMBRA_DEV_WALLET=1. It replaces
      window.CantonDapp wholesale, so it must load AFTER the real SDK. -->
@@ -1522,10 +1530,99 @@ const WalletLink = (() => {
     init: async () => true,
   });
 
+  // ---- PARTYLAYER -----------------------------------------------------------
+  // One integration, several wallets: Loop, Console, Cantor8, Nightly, Send (Bron
+  // needs extra config we do not have). It enumerates wallets precisely because
+  // generic `canton:announceProvider` does not reach them all.
+  //
+  // It signs DIFFERENTLY from the other adapters, and the difference is the whole
+  // point. The others call the wallet's own prepareExecute, so the WALLET assembles
+  // the transaction -- which means the wallet's participant node must have vetted
+  // Umbra's DAR. Here the transaction is prepared on OUR node (where it is vetted),
+  // the wallet only signs the hash, and we execute. The wallet is a pure key manager,
+  // so its node never has to know what Umbra is.
+  //
+  // 5N Loop matters most: 5North's validator has ALREADY vetted umbra, so a Loop
+  // party has both halves and should trade without asking any vendor for anything.
+  let plClient = null;
+  const partylayer = () => {
+    if (plClient) return plClient;
+    const S = typeof window !== "undefined" && window.PartyLayerSDK;
+    if (!S || !S.createPartyLayer) return null;
+    try {
+      plClient = S.createPartyLayer({
+        network: "devnet",
+        app: { name: "Umbra", origin: location.origin },
+        // BronAdapter is omitted: it throws on construction without config we lack.
+        adapters: [S.LoopAdapter, S.ConsoleAdapter, S.Cantor8Adapter, S.NightlyAdapter, S.SendAdapter],
+        discovery: { announce: true },
+        logLevel: "warn",
+      });
+    } catch (e) { console.warn("[walletlink] PartyLayer init failed:", e && e.message); }
+    return plClient;
+  };
+
+  adapters.partylayer = {
+    id: "partylayer", label: "Canton wallet",
+    get: () => partylayer(),
+    init: async () => true,
+    isConnected: async (s) => { try { return !!s.getActiveSession(); } catch (e) { return false; } },
+    connect: async (s) => {
+      // ?wallet=loop pins a specific one; otherwise prefer whatever is installed.
+      // Pinning matters for testing: without it PartyLayer picks the first adapter and
+      // fails on an extension nobody has, which says nothing about the wallet you meant.
+      const want = new URLSearchParams(location.search).get("wallet");
+      const sess = await s.connect(want
+        ? { walletId: want, timeoutMs: 120000 }
+        : { preferInstalled: true, timeoutMs: 120000 });
+      if (!sess) throw new Error("no wallet connected");
+      return true;
+    },
+    // What this build can talk to, for the UI to name honestly.
+    wallets: async (s) => {
+      try { return (await s.listWallets()).map(w => ({ id: w.walletId, name: w.name,
+        capabilities: w.capabilities || [] })); } catch (e) { return []; }
+    },
+    disconnect: (s) => s.disconnect(),
+    accounts: async (s) => {
+      const sess = s.getActiveSession();
+      if (!sess) return [];
+      return [{ partyId: sess.partyId, hint: String(sess.partyId).split("::")[0],
+                namespace: String(sess.partyId).split("::")[1] || null,
+                networkId: sess.network || null, primary: true, disabled: false }];
+    },
+    // Prepare here, sign there, execute here.
+    submit: async (s, params) => {
+      const sess = s.getActiveSession();
+      if (!sess) throw new Error("no PartyLayer session");
+      const prep = await post("/api/ext/prepare", {
+        party: sess.partyId, commands: params.commands,
+        disclosedContracts: params.disclosedContracts || [], tag: "partylayer",
+      });
+      const signed = await s.signTransaction({ tx: prep.preparedTransaction });
+      // `signedTx` is typed `unknown` -- wallets differ on whether they hand back a bare
+      // signature or a wrapper around one. Accept either rather than assume.
+      const sig = (signed && (signed.signature || signed.signedTx)) || signed;
+      const out = await post("/api/ext/execute", {
+        party: sess.partyId, commandId: prep.commandId,
+        preparedTransaction: prep.preparedTransaction,
+        hashingSchemeVersion: prep.hashingSchemeVersion,
+        signature: typeof sig === "string" ? sig : (sig && sig.signature),
+        signedBy: String(sess.partyId).split("::")[1],
+      });
+      return { committed: !!(out && out.ok), updateId: null, commandId: prep.commandId };
+    },
+    ledgerApi: (s, r) => s.ledgerApi({
+      method: (r.method || "get").toUpperCase(), path: r.resource, body: r.body, query: r.query,
+    }),
+  };
+
   // Probe order, most specific first. A user with the Console extension installed means
   // Console; otherwise a wallet that announced itself beats the bundled SDK, which is
   // only a fallback. Add new ids here.
-  const ORDER = ["console", "discovered", "canton"];
+  // PartyLayer first: it covers the most wallets AND signs via our node rather than
+  // theirs, which is the only shape that works when their validator has not vetted us.
+  const ORDER = ["partylayer", "console", "discovered", "canton"];
 
   let consoleToken = null;
   let picked = null;   // the adapter that answered

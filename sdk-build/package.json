@@ -9,6 +9,11 @@
   "dependencies": {
     "@canton-network/dapp-sdk": "1.5.1",
     "@console-wallet/dapp-sdk": "2.2.9",
+    "@partylayer/adapter-console": "^0.3.18",
+    "@partylayer/adapter-loop": "^0.4.2",
+    "@partylayer/core": "^0.12.1",
+    "@partylayer/react": "^2.3.3",
+    "@partylayer/sdk": "^0.18.1",
     "@walletconnect/sign-client": "2.23.10"
   },
   "devDependencies": {
