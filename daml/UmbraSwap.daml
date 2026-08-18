@@ -267,6 +267,11 @@ template SwapInvitation
       controller dealer
       do
         now <- getTime
+        -- The invitation is its own contract and outlives CancelRfq, so without this
+        -- a dealer could still price a request the buyer had already withdrawn. An
+        -- invited dealer is an observer on the SwapRfq, so it may fetch it; once the
+        -- buyer cancels, the RFQ is archived and this fetch fails.
+        _ <- fetch rfqCid
         assertMsg "price must be positive" (price > 0.0)
         assertMsg "this request has expired" (now < expiresAt)
         assertMsg "quote validity must be in the future" (validUntil > now)
@@ -305,6 +310,12 @@ template SwapQuote
       controller requester
       do
         now <- getTime
+        -- Cancelling must actually cancel. A quote outlives the request it answers, and
+        -- this choice previously checked only firmness -- so a buyer who withdrew a
+        -- request could still be shown a liftable price against it. The requester is
+        -- the SwapRfq's signatory, so this fetch succeeds while the request is live and
+        -- fails once CancelRfq has archived it.
+        _ <- fetch rfqCid
         assertMsg "this quote is no longer firm" (now < validUntil)
         create SwapProposal with
           requester; operator; dealer

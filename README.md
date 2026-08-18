@@ -64,7 +64,12 @@ Everything below runs against the live 5North Canton DevNet. Nothing here is moc
 - **Ledger-enforced expiry**: a late quote and a stale price are refused by Daml, not the UI.
 - **Fragmented balances**: multi-holding coin-selection; the registry merges and returns change.
 - **Clean failure**: an underfunded or failed settlement rolls back both allocations, re-opens
-  the request, and alerts the dealer to re-quote. Nothing is left stranded.
+  the request, and alerts the dealer to re-quote -- for parties whose keys the venue holds.
+  A party that brought its own wallet keeps its leg locked until it withdraws it, because
+  `Allocation_Withdraw` is the owner's choice and the venue has no key to exercise it. The
+  venue builds that command and the wallet signs it; `wallet_unlock_demo.js` does exactly
+  that, and `failure_paths_demo.js` proves the recovery against a deliberately underfunded
+  dealer. Funds are recoverable by their owner, not stranded -- but not rolled back for them.
 - **Wallet-signed mode** (`SIGNED_MODE=true`): every step -- RFQ, quote, accept, and the
   atomic settlement -- is signed by that party's own Ed25519 key via interactive submission.
   Receipt reads *TRUST: each party self-signed*. The signatures are real and party-specific,

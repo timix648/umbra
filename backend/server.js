@@ -464,11 +464,11 @@ app.get("/api/mode", async (req, res) => {
 // resolves either and contracts created under 0.2.0 stay usable.
 const UMBRA_DAR = {
   name: "umbra-v9",
-  version: "0.2.1",
+  version: "0.2.2",
   // The package id to check for once uploaded, and to pin in packageIdSelectionPreference.
-  packageId: "3a9ee8610d18a32b1a81dfd9de16f8031da04d47f1c44b51687f514ccdd42913",
-  sha256: "970b3c7638f694b4e3e51a955aa612d9c719e2a5430257243c424b65b677e1c5",
-  dar: "/dar/umbra-v9-0.2.1.dar",
+  packageId: "b44eb138cb1772702467fdd68bb00e0c331ebadaa416b17fd63a88ab6d971db5",
+  sha256: "3e0dcb4cd9b751ab07ddf96b3801474a2c7fb9737a1246500cafcdc15f63d1de",
+  dar: "/dar/umbra-v9-0.2.2.dar",
 };
 
 app.get("/api/package", async (req, res) => {

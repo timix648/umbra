@@ -12,7 +12,10 @@ init-script: UmbraTest:umbraDemo
 # 0.2.1: InviteDealer's assertion message stated the opposite of what it checks.
 # Body-only change, no schema change, so it upgrades cleanly from 0.2.0 -- and the
 # backend addresses templates as #umbra-v9:... so it picks this up without edits.
-version: 0.2.1
+# 0.2.2: SubmitSwapQuote and AcceptSwapQuote now fetch the SwapRfq they answer, so a
+# cancelled request can no longer be quoted or lifted. CancelRfq archived only the RFQ;
+# invitations and quotes are separate contracts and outlived it. Body-only again.
+version: 0.2.2
 dependencies:
   - daml-prim
   - daml-stdlib

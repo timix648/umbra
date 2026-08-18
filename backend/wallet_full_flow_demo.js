@@ -187,10 +187,16 @@ const holdingsOf = async (partyId) =>
 
   const accBuilt = await must(`/api/swap/quotes/${best.contractId}/accept`, { requester: R });
   if (!accBuilt.build) throw new Error("expected build mode for wallet requester accept");
+  // Same trap as the RFQ above: a proposal from an earlier run -- especially one that
+  // could never settle, like an underfunded test case -- is still open and matches on
+  // requester alone. Take the cid that did not exist a moment ago.
+  const propsBefore = new Set(((await must(`/api/swap/proposals?role=${encodeURIComponent(R)}`)).proposals || [])
+    .map(p => p.contractId));
   await submitAs(R, accBuilt.commands, [], "wfacc");
   const prop = await until("proposal", async () => {
     const o = await must(`/api/swap/proposals?role=${encodeURIComponent(R)}`);
-    return (o.proposals || []).find(p => p.payload && p.payload.requester === R);
+    return (o.proposals || []).find(p => !propsBefore.has(p.contractId) &&
+      p.payload && p.payload.requester === R);
   });
   console.log("\nproposal:", prop.contractId.slice(0, 26) + "…", "tradeId:", prop.payload.tradeId);
 
