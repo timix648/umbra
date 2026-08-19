@@ -3027,7 +3027,10 @@ function SwapRfqForm({
   onCreate,
   onPair,
   holdings,
-  role
+  role,
+  // Present only on the wallet path. Undefined on the demo desks and the operator
+  // console, which is what keeps the house dealers visible there.
+  wallet
 }) {
   const FALLBACK = [{ symbol: "cBTC" }, { symbol: "cETH" }, { symbol: "CC" }];
   const [assets, setAssets] = useState(FALLBACK);
@@ -3047,20 +3050,28 @@ function SwapRfqForm({
   ];
 
   // Who is out there to ask. Inviting MORE dealers is not automatically better:
-  // the winner's curse sharpens as the field grows, so the default is the two
-  // venue dealers and widening it is a deliberate act.
+  // the winner's curse sharpens as the field grows, so widening the field is a
+  // deliberate act rather than the default.
+  //
+  // A wallet party sees ONLY self-signing desks. Dealer 1 and Dealer 2 are the
+  // venue's own, operator-signed -- scaffolding of the same kind as the demo
+  // sign-in strip, and showing them to a real user makes the venue look like it
+  // is quoting against itself. Demo desks still see them, because for those they
+  // are the only counterparties there are.
   useEffect(() => {
     let live = true;
     api("/api/dealers?role=" + encodeURIComponent(role || "requester"))
       .then(r => {
         if (!live) return;
-        const list = (r && r.dealers) || [];
+        const all = (r && r.dealers) || [];
+        const list = wallet ? all.filter(d => d.kind === "wallet") : all;
         setDealers(list);
+        // Preselect the house desks only where they are still on offer.
         setInvited(list.filter(d => d.kind === "venue").map(d => d.id));
       })
       .catch(() => {});
     return () => { live = false; };
-  }, [role]);
+  }, [role, wallet]);
 
   useEffect(() => {
     let live = true;
@@ -3909,7 +3920,7 @@ function RequesterDesk(P) {
           ? React.createElement("section", { className: "mod mod-focal" },
               React.createElement("div", { className: "mod-h" }, React.createElement("h2", null, "New request")),
               React.createElement("div", { className: "mod-b" },
-                React.createElement(SwapRfqForm, { onPair, holdings, role, onCreate: async (f) => { await onCreate(f); setComposing(false); } })))
+                React.createElement(SwapRfqForm, { onPair, holdings, role, wallet, onCreate: async (f) => { await onCreate(f); setComposing(false); } })))
           : null,
 
         _liveRfqs.length > 1 ? React.createElement("section", { className: "mod" },
