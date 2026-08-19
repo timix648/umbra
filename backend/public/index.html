@@ -1847,6 +1847,7 @@ const WalletLink = (() => {
             onAccept: async (provider) => {
               try {
                 loopProvider = provider;
+                try { localStorage.setItem("umbra.loop.home", provider.party_id || ""); } catch (e) {}
                 const draft = await post("/api/ext/onboard/prepare",
                                          { publicKey: lB64(lBytes(provider.public_key)) });
                 const known = (await api("/api/ext/wallets")).wallets || [];
@@ -1876,6 +1877,7 @@ const WalletLink = (() => {
         Promise.resolve(s.connect()).catch(reject);
       });
       loopProvider = provider;
+      try { localStorage.setItem("umbra.loop.home", provider.party_id || ""); } catch (e) {}
 
       // Find, or found, the party this key owns HERE. The party hint is a timestamp,
       // so preparing twice would draft two different party ids for one key -- and any
@@ -1901,12 +1903,20 @@ const WalletLink = (() => {
     disconnect: async (s) => {
       try { s.logout(); } catch (e) {}
       loopProvider = null; loopParty = null;
-      try { localStorage.removeItem("umbra.wallet"); } catch (e) {}
+      try { localStorage.removeItem("umbra.wallet"); localStorage.removeItem("umbra.loop.home"); } catch (e) {}
     },
     // Where the user's OTHER balance lives -- the party their wallet hosts and shows.
     // Umbra can neither read nor spend it; it is here so the funding screen can offer
     // "send it back to your wallet" without making anyone copy a party id by hand.
-    homeParty: () => (loopProvider && loopProvider.party_id) || null,
+    // Remembered, not just held in memory. The app restores the signed-in party from
+    // sessionStorage on reload, so holdings and the venue came back -- but this read
+    // `loopProvider`, which only exists after a live connect, so the user's own wallet
+    // address disappeared and the withdraw destination silently fell back to
+    // "Another party". Persist it and read through.
+    homeParty: () => {
+      if (loopProvider && loopProvider.party_id) return loopProvider.party_id;
+      try { return localStorage.getItem("umbra.loop.home") || null; } catch (e) { return null; }
+    },
     // The party the app trades as is OURS, not Loop's. Loop's own party lives on
     // Loop's node and is deliberately not what the venue sees.
     accounts: async () => loopParty
