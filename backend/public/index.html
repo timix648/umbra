@@ -740,6 +740,42 @@
     .dsk > .dsk-col:last-child,
     .rqk > .dsk-col:last-child{margin-right:0;padding-right:0}}
   .dsk-col > .mod, .dsk-col > .dq{flex:none}
+  /* dealer queue strip — inbound work, never hidden.
+     Sits under the header on whichever desk you are on, so an invitation with a
+     running clock is visible rather than one click away. Amber the moment anything
+     in it drops under a minute. */
+  .dqs{display:flex;align-items:center;gap:12px;padding:8px 44px;min-height:44px;
+    background:var(--bg2);border-bottom:1px solid var(--line)}
+  .dqs.urgent{border-bottom-color:var(--amberline);background:var(--amberbg)}
+  .dqs-l{display:flex;align-items:center;gap:8px;flex:0 0 auto;
+    font:600 9.5px/1 ui-monospace,monospace;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--dim)}
+  .dqs-dot{width:6px;height:6px;border-radius:50%;background:var(--accent)}
+  .dqs.urgent .dqs-dot{background:var(--amber);animation:dqspulse 1.1s ease-in-out infinite}
+  @keyframes dqspulse{50%{opacity:.35}}
+  .dqs-n{flex:0 0 auto;min-width:18px;text-align:center;padding:2px 6px;border-radius:9px;
+    font:700 10px/1.3 ui-monospace,monospace;background:var(--accent);color:var(--bg)}
+  .dqs.urgent .dqs-n{background:var(--amber)}
+  /* The list scrolls rather than wrapping: the strip must not grow and push the desk
+     down as invitations arrive. */
+  .dqs-list{flex:1 1 auto;min-width:0;display:flex;gap:8px;overflow-x:auto;
+    scrollbar-width:none;padding:1px 0}
+  .dqs-list::-webkit-scrollbar{display:none}
+  .dqs-i{flex:0 0 auto;display:flex;align-items:center;gap:7px;cursor:pointer;
+    background:var(--bg3);border:1px solid var(--line);border-radius:6px;
+    padding:6px 10px;color:var(--text);font:inherit;font-size:12px}
+  .dqs-i:hover{border-color:var(--accent);background:var(--hover)}
+  .dqs-i.on{border-color:var(--accent);background:var(--accentbg);box-shadow:var(--glow)}
+  .dqs-amt{font-size:12px;font-variant-numeric:tabular-nums}
+  .dqs-arr{color:var(--dim)}
+  .dqs-t{font-size:11px;color:var(--mute);font-variant-numeric:tabular-nums;
+    padding-left:2px;border-left:1px solid var(--line);margin-left:2px}
+  .dqs-t.warn{color:var(--amber);font-weight:600}
+  .dqs-home{flex:0 0 auto;background:none;border:1px solid var(--line);border-radius:6px;
+    color:var(--mute);font:600 10px/1 ui-monospace,monospace;letter-spacing:.1em;
+    text-transform:uppercase;padding:7px 10px;cursor:pointer}
+  .dqs-home:hover{color:var(--text);border-color:var(--line2)}
+  @media(max-width:1080px){.dqs{padding:8px 16px}}
   /* queue rail */
   .dq{border:1px solid var(--line);border-radius:5px;background:var(--bg2);overflow:hidden}
   .dq-h{display:flex;align-items:center;justify-content:space-between;padding:11px 14px;
@@ -3908,7 +3944,7 @@ function RequesterDesk(P) {
           React.createElement(Umbrella, null),
           React.createElement("b", null, "UMBRA"),
           React.createElement("span", { className: "cx" }, "Blind block auction \u00b7 Requester")),
-        deskSwitch || null),
+        ),
       React.createElement("div", { className: "prt-right" },
         React.createElement("div", { className: "rq-total tip-below tip-left",
           "data-tip": "Total value of your holdings at live market rates." },
@@ -3920,6 +3956,7 @@ function RequesterDesk(P) {
         React.createElement("span", { className: "prt-trust " + (signed ? "sg" : "op") }, signed ? "self-signing" : "operator acts"),
         React.createElement("button", { className: "prt-out", onClick: onExit }, "Sign out"))),
 
+    deskSwitch || null,
     note ? React.createElement("div", { className: "prt-note " + (note.bad ? "bad" : "ok") }, note.m) : null,
 
     React.createElement("main", { className: "rqk" },
@@ -4466,7 +4503,7 @@ function DealerDesk(P) {
           React.createElement("span", { className: "cx" }, "OTC block \u00b7 Canton \u00b7 Dealer desk")),
         React.createElement("span", { className: "prt-dot", style: { background: meta.dot, marginLeft: 6 } }),
         React.createElement("span", { className: "prt-nm" }, meta.nm),
-        deskSwitch || null),
+        ),
       React.createElement("div", { className: "prt-right" },
         React.createElement("div", { className: "rq-total tip-below tip-left",
           "data-tip": "Total value of your holdings at live market rates." },
@@ -4484,6 +4521,7 @@ function DealerDesk(P) {
         React.createElement("span", { className: "prt-trust " + (signed ? "sg" : "op") }, signed ? "self-signing" : "operator acts"),
         React.createElement("button", { className: "prt-out", onClick: onExit }, "Sign out"))),
 
+    deskSwitch || null,
     note ? React.createElement("div", { className: "prt-note " + (note.bad ? "bad" : "ok") }, note.m) : null,
 
     React.createElement("main", { className: "dsk" },
@@ -4817,6 +4855,74 @@ function Funding({ party, say, onChanged }) {
           "sent — waiting for ",
           U.abbrevParty ? U.abbrevParty(o.receiver, 9, 6) : "the recipient",
           " to accept. Locked until they do.")))) : null);
+}
+
+// ---- DEALER QUEUE ----
+//
+// Replaces the Requesting/Dealing switch. That switch was a leftover from the demo's
+// shape -- three separate personas, one screen each -- and a wallet party is one
+// person who does both, so it made the user manage a mode instead of seeing their
+// venue. Nothing on the ledger ties a party to a side: SwapRfq is signatory
+// requester, SwapQuote is signatory dealer, and the same party is routinely both.
+//
+// This is invitation-driven instead. It appears only when someone has actually asked
+// you to price something, and it is a STRIP rather than a drawer on purpose: quotes
+// expire, and `SubmitSwapQuote` asserts the deadline on-ledger, so a missed window is
+// a hard failure rather than a soft one. Work with a deadline should not sit behind a
+// click -- which is why real RFQ desks use an always-visible blotter.
+function DealerQueue({ inv, desk, selCid, onOpen, onHome }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!inv || !inv.length) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [inv && inv.length]);
+
+  const live = (inv || []).filter(iv => {
+    const t = new Date(iv.payload && iv.payload.expiresAt).getTime();
+    return !isNaN(t) && t - now > 0;
+  });
+  // Nothing pending and not already dealing: say nothing at all. A listed dealer with
+  // an empty queue does not need to be told so on every screen.
+  if (!live.length && desk !== "dealer") return null;
+
+  const cd = (iso) => {
+    const ms = new Date(iso).getTime() - now;
+    if (isNaN(ms) || ms <= 0) return { txt: "00:00", warn: true };
+    const s = Math.floor(ms / 1000);
+    return { txt: String(Math.floor(s / 60)).padStart(2, "0") + ":" +
+                  String(s % 60).padStart(2, "0"), warn: ms < 60000 };
+  };
+  const urgent = live.some(iv => cd(iv.payload.expiresAt).warn);
+
+  return React.createElement("div", { className: "dqs" + (urgent ? " urgent" : "") },
+    React.createElement("span", { className: "dqs-l" },
+      React.createElement("span", { className: "dqs-dot" }),
+      live.length ? "Blocks to price" : "No blocks to price"),
+    live.length ? React.createElement("span", { className: "dqs-n" }, live.length) : null,
+
+    React.createElement("div", { className: "dqs-list" },
+      live.map(iv => {
+        const p = iv.payload, c = cd(p.expiresAt);
+        const on = desk === "dealer" && selCid === iv.contractId;
+        return React.createElement("button", {
+          key: iv.contractId, className: "dqs-i" + (on ? " on" : ""),
+          onClick: () => onOpen(iv.contractId),
+          title: "Price " + fmtAmtStr(p.offerAmount) + " " + dispSym(p.offerAsset.symbol) +
+                 " for " + dispSym(p.wantAsset.symbol)
+        },
+          React.createElement(AssetIcon, { symbol: dispSym(p.offerAsset.symbol), size: "sm" }),
+          React.createElement("span", { className: "dqs-amt m" }, fmtAmtStr(p.offerAmount)),
+          React.createElement("span", { className: "dqs-arr" }, "→"),
+          React.createElement(AssetIcon, { symbol: dispSym(p.wantAsset.symbol), size: "sm" }),
+          React.createElement("span", { className: "dqs-t m" + (c.warn ? " warn" : "") }, c.txt));
+      })),
+
+    // Only offered from the dealer side: on your own desk you are already home.
+    desk === "dealer"
+      ? React.createElement("button", { className: "dqs-home", onClick: onHome },
+          "← Your desk")
+      : null);
 }
 
 function PartyPortal({ role, wallet, onExit }) {
@@ -5309,13 +5415,14 @@ function PartyPortal({ role, wallet, onExit }) {
   const pid = parties[role] || (String(role).includes("::") ? role : "");
   const sorted = myQuotes.slice().sort((a, b) => Number(b.payload.price) - Number(a.payload.price));
 
-  // Only a wallet party gets the switch; the demo desks are what they are.
-  const deskSwitch = wallet ? React.createElement("span", { className: "prt-desk" },
-    ["requester", "dealer"].map(d => React.createElement("button", {
-      key: d, className: "prt-desk-b" + (desk === d ? " on" : ""),
-      onClick: () => setDesk(d),
-      title: d === "requester" ? "Ask dealers for a price" : "Price what you are shown"
-    }, d === "requester" ? "Requesting" : "Dealing"))) : null;
+  // No mode switch. A wallet party moves between sides by acting on an invitation,
+  // not by declaring which one it is today. Demo desks get nothing: they are one
+  // side each by construction.
+  const deskSwitch = wallet ? React.createElement(DealerQueue, {
+    inv, desk, selCid: selInvCid,
+    onOpen: (cid) => { setSelInvCid(cid); setDesk("dealer"); },
+    onHome: () => setDesk("requester")
+  }) : null;
 
   // createElement, NOT a bare call. Called as functions these two run their hooks
   // inside PartyPortal's own hook list, so the moment a wallet party can switch
