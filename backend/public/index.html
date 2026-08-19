@@ -950,6 +950,48 @@
     text-align:center;cursor:default;animation:cardin .35s cubic-bezier(.2,.8,.2,1) forwards}
   @keyframes cardin{from{opacity:0;transform:translateY(14px) scale(.97)}to{opacity:1;transform:none}}
   .ovl .eyb{font:600 9.5px/1 ui-monospace,monospace;letter-spacing:.22em;text-transform:uppercase;color:var(--accent);margin-bottom:16px}
+  /* wallet picker. Left-aligned: these are choices to read, not a confirmation to
+     glance at. Hierarchy does the honest work -- the verified path is a filled
+     button, the unverified one a quiet row beneath it, so the difference is felt
+     before it is read. */
+  .wpk{text-align:left}
+  .wpk-h{font:600 19px/1.25 inherit;color:var(--text);margin:0 0 16px;letter-spacing:-.01em}
+
+  /* Custody as a shape. Four lines of grey text at the bottom is where an explanation
+     goes to be ignored, and this is the one thing a first-time user has to grasp. */
+  .wpk-model{display:flex;align-items:center;gap:14px;padding:14px 16px;margin-bottom:20px;
+    background:var(--bg3);border:1px solid var(--line);border-radius:7px}
+  .wpk-side{flex:1 1 0;min-width:0}
+  .wpk-side-t{font:600 9.5px/1 ui-monospace,monospace;letter-spacing:.16em;
+    text-transform:uppercase;color:var(--accent);margin-bottom:7px}
+  .wpk-side-b{font-size:12px;line-height:1.55;color:var(--mute)}
+  .wpk-neg{color:var(--dim)}
+  .wpk-arrow{flex:0 0 auto;color:var(--line2);font-size:15px}
+
+  .wpk-primary{display:flex;align-items:center;gap:13px;width:100%;text-align:left;
+    cursor:pointer;font:inherit;padding:14px 15px;margin-bottom:10px;border-radius:7px;
+    color:var(--text);background:var(--accentbg);border:1px solid var(--accent)}
+  .wpk-primary:hover:not(:disabled){background:var(--hover);box-shadow:var(--glow)}
+  .wpk-primary:disabled,.wpk-alt:disabled{opacity:.5;cursor:not-allowed}
+  .wpk-mark{flex:0 0 auto;width:34px;height:34px;border-radius:8px;display:grid;
+    place-items:center;background:var(--bg);color:var(--accent)}
+  .wpk-p-t{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:3px}
+  .wpk-p-n{font-size:14px;font-weight:600}
+  .wpk-p-s{font-size:11.5px;color:var(--mute)}
+  .wpk-tag{flex:0 0 auto;font:600 8.5px/1 ui-monospace,monospace;letter-spacing:.14em;
+    text-transform:uppercase;padding:4px 7px;border-radius:3px;
+    background:var(--accent);color:var(--bg)}
+
+  .wpk-alt{display:flex;flex-direction:column;gap:3px;width:100%;text-align:left;
+    cursor:pointer;font:inherit;padding:12px 15px;border-radius:7px;color:var(--text);
+    background:transparent;border:1px solid var(--line)}
+  .wpk-alt:hover:not(:disabled){border-color:var(--line2);background:var(--bg3)}
+  .wpk-a-n{font-size:13px;font-weight:600;color:var(--mute)}
+  .wpk-a-s{font-size:11.5px;line-height:1.5;color:var(--dim)}
+
+  .wpk-x{display:block;margin:16px auto 0;background:none;border:0;color:var(--dim);
+    font:inherit;font-size:12px;cursor:pointer;padding:4px}
+  .wpk-x:hover{color:var(--text)}
   .swaprow{display:flex;align-items:center;justify-content:center;gap:0;margin:6px 0 18px;position:relative;height:64px}
   .leg{display:flex;flex-direction:column;align-items:center;gap:5px;width:128px;z-index:2}
   .leg .tok{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;
@@ -1323,10 +1365,23 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
      5N Loop matters most — 5North's validator has already vetted Umbra, so a Loop
      party has both halves and should trade without asking any vendor for anything. -->
 <script src="/partylayer.js"></script>
+<!-- Loop's own SDK, bundled straight rather than reached through PartyLayer. Its
+     adapter there throws on signTransaction and hides signMessage, which is the one
+     call that makes Loop usable here. One layer fewer, and nothing in between to
+     mistranslate what the wallet actually supports. -->
+<script src="/loop-sdk.js"></script>
 <!-- Test double for a CIP-0103 wallet. Inert unless the page is opened with
      ?devwallet=1 AND the server was started with UMBRA_DEV_WALLET=1. It replaces
      window.CantonDapp wholesale, so it must load AFTER the real SDK. -->
 <script src="/dev-wallet.js"></script>
+<!-- Redesign components (AssetTag, Amount, USelect, DealerField, FundingPanel, SignIn).
+     An IIFE that hangs everything off window.UmbraRedesign and reaches window.React
+     lazily, so it slots into this no-build-step file and can be adopted screen by
+     screen rather than in one swap. Its own stylesheet carries the u-* classes and
+     the two tokens it adds (--u-mono, --u-shadow); every other colour comes from the
+     variables already defined above, so light and dark keep working. -->
+<link rel="stylesheet" href="/umbra-redesign.css">
+<script src="/umbra-redesign.js"></script>
 <script>
 /* @jsxRuntime classic */
 const {
@@ -1713,7 +1768,126 @@ const WalletLink = (() => {
   // only a fallback. Add new ids here.
   // PartyLayer first: it covers the most wallets AND signs via our node rather than
   // theirs, which is the only shape that works when their validator has not vetted us.
-  const ORDER = ["partylayer", "console", "discovered", "canton"];
+  // ---- LOOP (5N) -----------------------------------------------------------
+  // Loop refuses `signTransaction` and submits through its own participant, which
+  // would put umbra's templates on a node that has not vetted them. So this adapter
+  // does not use Loop's party at all. It takes Loop's KEY, founds a party on OUR
+  // validator -- where umbra is vetted -- and has Loop sign that party's transaction
+  // hashes. Loop signs, we submit, Loop's node is never a stakeholder and never needs
+  // the DAR. Verified end to end on DevNet 2026-08-19: onboarding, a token accept, a
+  // full RFQ, and an atomic settlement, all on Loop signatures.
+  //
+  // THE detail the whole route turns on: signMessage signs the RAW BYTES handed to it.
+  // Pass the base64 text of a hash and you get a valid signature over the wrong thing,
+  // which the ledger rejects with nothing useful to say. Decode first, always.
+  let loopProvider = null, loopParty = null;
+
+  // Loop's global exists the moment the bundle loads, so presence proves nothing --
+  // exactly the trap Console set. Answer only when the user actually chose Loop.
+  const loopChosen = () => {
+    try {
+      if (new URLSearchParams(location.search).get("wallet") === "loop") return true;
+      return localStorage.getItem("umbra.wallet") === "loop";
+    } catch (e) { return false; }
+  };
+
+  // Loop returns hex in some places and base64 in others, with nothing to say which.
+  const lBytes = (s) => {
+    const t = String(s || "").trim().replace(/^0x/, "");
+    if (/^[0-9a-fA-F]+$/.test(t) && t.length % 2 === 0) {
+      return Uint8Array.from(t.match(/../g).map(h => parseInt(h, 16)));
+    }
+    return Uint8Array.from(atob(t), c => c.charCodeAt(0));
+  };
+  const lB64 = (u8) => btoa(String.fromCharCode(...u8));
+  const lSigOf = (r) => (typeof r === "string" ? r
+    : r && (r.signature || r.signedMessage || r.result || r.data)) || String(r);
+  const loopSign = async (b64hash) =>
+    lB64(lBytes(lSigOf(await loopProvider.signMessage(
+      String.fromCharCode(...lBytes(b64hash))))));
+
+  adapters.loop = {
+    id: "loop", label: "Loop (5N)",
+    // Read this party's contracts from OUR ledger, not through the wallet. Other
+    // adapters must read via the wallet because their party lives on a node we cannot
+    // query. A Loop party is founded on our own validator and the operator holds
+    // CanReadAs on it, so the server is the correct -- and only working -- reader:
+    // Loop's ledgerApi would answer for Loop's party, which is a different party.
+    serverReads: true,
+    get: () => (loopChosen() && typeof window !== "undefined"
+      ? (window.LoopSDKBundle && window.LoopSDKBundle.loop) : null),
+    init: async () => true,
+    isConnected: async () => !!(loopProvider && loopParty),
+    connect: async (s) => {
+      const provider = await new Promise((resolve, reject) => {
+        s.init({
+          appName: "Umbra", network: "devnet",
+          onAccept: resolve,
+          onReject: () => reject(new Error("connection declined in Loop")),
+        });
+        Promise.resolve(s.connect()).catch(reject);
+      });
+      loopProvider = provider;
+
+      // Find, or found, the party this key owns HERE. The party hint is a timestamp,
+      // so preparing twice would draft two different party ids for one key -- and any
+      // assets already sent would sit on the first. The fingerprint is what actually
+      // identifies the key, so match on that and adopt what already exists.
+      const draft = await post("/api/ext/onboard/prepare",
+                               { publicKey: lB64(lBytes(provider.public_key)) });
+      const known = (await api("/api/ext/wallets")).wallets || [];
+      const existing = known.find(w => w.fingerprint === draft.fingerprint);
+      if (existing) {
+        loopParty = existing.partyId;
+      } else {
+        const r = await post("/api/ext/onboard/confirm", {
+          partyId: draft.partyId, fingerprint: draft.fingerprint,
+          topologyTransactions: draft.topologyTransactions,
+          multiHashSignature: await loopSign(draft.multiHash),
+        });
+        loopParty = r.party.partyId;
+      }
+      try { localStorage.setItem("umbra.wallet", "loop"); } catch (e) {}
+      return true;
+    },
+    disconnect: async (s) => {
+      try { s.logout(); } catch (e) {}
+      loopProvider = null; loopParty = null;
+      try { localStorage.removeItem("umbra.wallet"); } catch (e) {}
+    },
+    // Where the user's OTHER balance lives -- the party their wallet hosts and shows.
+    // Umbra can neither read nor spend it; it is here so the funding screen can offer
+    // "send it back to your wallet" without making anyone copy a party id by hand.
+    homeParty: () => (loopProvider && loopProvider.party_id) || null,
+    // The party the app trades as is OURS, not Loop's. Loop's own party lives on
+    // Loop's node and is deliberately not what the venue sees.
+    accounts: async () => loopParty
+      ? [{ partyId: loopParty, hint: loopParty.split("::")[0],
+           publicKey: loopProvider && loopProvider.public_key,
+           namespace: loopParty.split("::")[1] || null,
+           networkId: "devnet", primary: true, disabled: false }]
+      : [],
+    // Prepare here, sign in Loop, execute here.
+    submit: async (s, params) => {
+      if (!loopParty) throw new Error("Loop is not connected");
+      const prep = await post("/api/ext/prepare", {
+        party: loopParty, commands: params.commands,
+        disclosedContracts: params.disclosedContracts || [], tag: "loop",
+      });
+      const out = await post("/api/ext/execute", {
+        party: loopParty, commandId: prep.commandId,
+        preparedTransaction: prep.preparedTransaction,
+        hashingSchemeVersion: prep.hashingSchemeVersion,
+        signature: await loopSign(prep.preparedTransactionHash),
+        signedBy: loopParty.split("::")[1],
+      });
+      return { committed: !!(out && out.ok), updateId: null, commandId: prep.commandId };
+    },
+  };
+
+  // Loop leads only because its `get()` already refuses unless the user picked it;
+  // the others answer on mere presence, so they must not get first refusal.
+  const ORDER = ["loop", "partylayer", "console", "discovered", "canton"];
 
   let consoleToken = null;
   let picked = null;   // the adapter that answered
@@ -1770,7 +1944,29 @@ const WalletLink = (() => {
     // is nothing to restore -- never rejects, because a failed restore must not
     // stop the page from rendering.
     // Which provider answered, for the UI to name it honestly.
-    provider: () => { const a = pick(); return a ? { id: a.id, label: a.label } : null; },
+    provider: () => { const a = pick(); return a ? { id: a.id, label: a.label,
+                                                     serverReads: !!a.serverReads } : null; },
+
+    // Commit to one wallet before connecting. pick() and ensure() both memoise the
+    // adapter that answered first, so choosing after the page has already settled on
+    // one has to clear that memo or the choice is silently ignored. Passing null goes
+    // back to "whatever is present", which is what the discovery adapters want.
+    choose(id) {
+      try {
+        if (id) localStorage.setItem("umbra.wallet", id);
+        else localStorage.removeItem("umbra.wallet");
+      } catch (e) {}
+      picked = null;
+      initing = null;
+    },
+
+    // The party the WALLET hosts, as opposed to the one it signs for here. Only
+    // adapters that can tell them apart answer; the rest return null and the funding
+    // screen just asks for a destination instead of offering one.
+    homeParty() {
+      const a = pick();
+      try { return (a && a.homeParty) ? a.homeParty() : null; } catch (e) { return null; }
+    },
 
     async restore() {
       try {
@@ -2614,7 +2810,7 @@ function OperatorConsole({ onExit }) {
             /*#__PURE__*/React.createElement(AssetIcon, { symbol: p.offerAsset.symbol, size: "sm" }),
             /*#__PURE__*/React.createElement("span", { style: { color: "var(--accent)" } }, "\u2192"),
             /*#__PURE__*/React.createElement(AssetIcon, { symbol: p.wantAsset.symbol, size: "sm" }))),
-          /*#__PURE__*/React.createElement("td", null, Number(p.offerAmount).toLocaleString(), " ", p.offerAsset.symbol),
+          /*#__PURE__*/React.createElement("td", null, fmtAmtStr(p.offerAmount), " ", p.offerAsset.symbol),
           /*#__PURE__*/React.createElement("td", { className: "px" },
             Number(p.price).toFixed(2), " ", p.wantAsset.symbol, isBest ? " \u25c2" : ""),
           /*#__PURE__*/React.createElement("td", { style: { textAlign: "right" } },
@@ -2739,16 +2935,22 @@ function OperatorConsole({ onExit }) {
       ? /*#__PURE__*/React.createElement("div", { className: "swapviz" },
           /*#__PURE__*/React.createElement("div", { className: "swapleg" },
             /*#__PURE__*/React.createElement(AssetIcon, { symbol: overlay.offerSym, size: "lg" }),
-            /*#__PURE__*/React.createElement("div", { className: "amt2" }, Number(overlay.offerAmt).toLocaleString()),
+            /*#__PURE__*/React.createElement("div", { className: "amt2" }, fmtAmtStr(overlay.offerAmt)),
             /*#__PURE__*/React.createElement("div", { className: "sym2" }, overlay.offerSym)),
           /*#__PURE__*/React.createElement("div", { className: "swaparrow" }, "\u21c4"),
           /*#__PURE__*/React.createElement("div", { className: "swapleg" },
             /*#__PURE__*/React.createElement(AssetIcon, { symbol: overlay.wantSym, size: "lg" }),
-            /*#__PURE__*/React.createElement("div", { className: "amt2" }, Number(overlay.wantAmt).toLocaleString()),
+            /*#__PURE__*/React.createElement("div", { className: "amt2" }, fmtAmtStr(overlay.wantAmt)),
             /*#__PURE__*/React.createElement("div", { className: "sym2" }, overlay.wantSym)))
       : /*#__PURE__*/React.createElement("div", { className: "amt" }, "$" + Number(overlay.amount).toLocaleString() + " for " + Number(overlay.qty).toLocaleString() + " units"),
     /*#__PURE__*/React.createElement("div", { className: "sub" }, "Both legs moved in one indivisible transaction" + (overlay.signed ? ", each party signed with its own key" : "") + ". Or neither would have."))));
 }
+// The redesign's AssetTag feature-detects this global and falls back to a drawn mark
+// when it is absent. Ours renders the real issuer logos, so hand it over -- that was
+// the actual complaint about the old screens ("the tokens lack their icons").
+// Function declarations hoist, so this runs before anything renders.
+window.AssetIcon = AssetIcon;
+
 function AssetIcon({
   symbol,
   size
@@ -2860,6 +3062,15 @@ function SwapRfqForm({
   const _amt = Number(amount);
   const _short = !!holdings && isFinite(_amt) && _amt > 0 && _amt > _offerHeld;
 
+  const UR = window.UmbraRedesign;
+  // What you can actually offer, per asset, so the picker shows it beside each symbol
+  // instead of making you check Holdings and come back.
+  const _offerBalances = {};
+  (holdings || []).forEach(h => {
+    const s = h.payload.asset.symbol;
+    _offerBalances[s] = (_offerBalances[s] || 0) + Number(h.payload.amount);
+  });
+
   return /*#__PURE__*/React.createElement("div", {
     className: "pane"
   }, /*#__PURE__*/React.createElement("div", {
@@ -2872,50 +3083,61 @@ function SwapRfqForm({
     className: "r2"
   }, /*#__PURE__*/React.createElement("label", {
     className: "fld"
-  }, /*#__PURE__*/React.createElement("span", null, "offer asset"), /*#__PURE__*/React.createElement("div", {
-    className: "aicw"
-  }, /*#__PURE__*/React.createElement(AssetIcon, { symbol: offerSym }), /*#__PURE__*/React.createElement("select", {
-    value: offerSym,
-    onChange: e => setOfferSym(e.target.value)
-  }, syms.map(opt)))), /*#__PURE__*/React.createElement("label", {
+  }, /*#__PURE__*/React.createElement("span", null, "offer asset"),
+     /*#__PURE__*/React.createElement(UR.AssetSelect, {
+       value: offerSym, assets: syms, balances: _offerBalances,
+       ariaLabel: "Offer asset", onChange: setOfferSym
+     })), /*#__PURE__*/React.createElement("label", {
     className: "fld"
   }, /*#__PURE__*/React.createElement("span", null, "offer amount"), /*#__PURE__*/React.createElement("input", {
     value: amount,
     onChange: e => setAmount(e.target.value)
   }))), /*#__PURE__*/React.createElement("label", {
     className: "fld"
-  }, /*#__PURE__*/React.createElement("span", null, "want asset"), /*#__PURE__*/React.createElement("div", {
-    className: "aicw"
-  }, /*#__PURE__*/React.createElement(AssetIcon, { symbol: wantSym }), /*#__PURE__*/React.createElement("select", {
-    value: wantSym,
-    onChange: e => setWantSym(e.target.value)
-  }, syms.filter(x => x !== offerSym).map(opt)))),
+  }, /*#__PURE__*/React.createElement("span", null, "want asset"),
+     // No balances here on purpose: what you hold of the asset you are ASKING for
+     // says nothing about the trade, and showing it invites the wrong reading.
+     /*#__PURE__*/React.createElement(UR.AssetSelect, {
+       value: wantSym, assets: syms.filter(x => x !== offerSym),
+       ariaLabel: "Want asset", onChange: setWantSym
+     })),
 
   /*#__PURE__*/React.createElement("label", {
     className: "fld"
   }, /*#__PURE__*/React.createElement("span", null, "responses close in"),
-     /*#__PURE__*/React.createElement("select", {
-       value: String(ttlMins),
-       onChange: e => setTtlMins(Number(e.target.value)),
-       "data-tip": "The ledger refuses a quote after this, so pick the window you can actually wait out."
-     }, TTLS.map(([m, label]) => /*#__PURE__*/React.createElement("option", { key: m, value: String(m) }, label)))),
+     /*#__PURE__*/React.createElement(UR.USelect, {
+       value: String(ttlMins), ariaLabel: "Responses close in",
+       groupLabel: "Response window",
+       onChange: v => setTtlMins(Number(v)),
+       // The sub-lines matter: this is a LEDGER rule, not a UI timer. SubmitSwapQuote
+       // asserts against it, so a window you cannot wait out silently kills the auction.
+       options: TTLS.map(([m, label]) => ({
+         value: String(m), label: label,
+         sub: m <= 15 ? "indicative pricing" : m <= 60 ? "standard block window"
+                                             : "illiquid or large size",
+         right: m === 15 ? "Default" : null
+       }))
+     })),
 
   dealers.length ? /*#__PURE__*/React.createElement("div", { className: "fld dlrpick" },
     /*#__PURE__*/React.createElement("span", null, "invite dealers"),
-    /*#__PURE__*/React.createElement("div", { className: "dlrpick-l" },
-      dealers.map(d => /*#__PURE__*/React.createElement("button", {
-        key: d.id,
-        type: "button",
-        className: "dlrpick-b" + (invited.includes(d.id) ? " on" : ""),
-        onClick: () => setInvited(v => v.includes(d.id) ? v.filter(x => x !== d.id) : v.concat(d.id)),
-        "data-tip": d.kind === "wallet"
-          ? "Signs with its own wallet. The venue holds no key for it."
-          : "A venue desk. The operator signs on its behalf."
-      }, /*#__PURE__*/React.createElement("span", { className: "dlrpick-d" }),
-         d.name,
-         d.kind === "wallet" ? /*#__PURE__*/React.createElement("i", null, "self-signing") : null))),
+    /*#__PURE__*/React.createElement(UR.DealerField, {
+      dealers: dealers.map(d => ({
+        id: d.id,
+        name: d.name,
+        party: d.partyId,
+        // A venue desk is signed for by the operator; a wallet desk signs for itself.
+        // That distinction is the whole privacy story, so it stays visible in the list.
+        desk: d.kind === "wallet" ? "SELF" : "VENUE",
+        self: d.kind === "wallet",
+        assets: []
+      })),
+      selected: invited,
+      onChange: setInvited
+    }),
     /*#__PURE__*/React.createElement("em", { className: "dlrpick-n" },
-      "Only those you invite can see this block — or price it.")) : null,
+      "Only those you invite can see this block — or price it.",
+      dealers.length > 6 ? " " + dealers.length + " are listed today." : "")) : null,
 
   /*#__PURE__*/React.createElement("button", {
     className: "btn prime",
@@ -3013,7 +3235,7 @@ function DealerCard({
     className: "k"
   }, /*#__PURE__*/React.createElement("span", { className: "apair" },
       /*#__PURE__*/React.createElement(AssetIcon, { symbol: iv.payload.offerAsset.symbol, size: "sm" }),
-      Number(iv.payload.offerAmount).toLocaleString() + " " + iv.payload.offerAsset.symbol,
+      fmtAmtStr(iv.payload.offerAmount) + " " + iv.payload.offerAsset.symbol,
       /*#__PURE__*/React.createElement("span", { style: { color: "var(--accent)" } }, "\u2192"),
       /*#__PURE__*/React.createElement(AssetIcon, { symbol: iv.payload.wantAsset.symbol, size: "sm" }),
       iv.payload.wantAsset.symbol)), /*#__PURE__*/React.createElement("div", {
@@ -3126,12 +3348,12 @@ function Balances({
       /*#__PURE__*/React.createElement(AssetIcon, { symbol: a.payload.asset.symbol, size: "sm" }),
       a.payload.asset.symbol), /*#__PURE__*/React.createElement("span", {
     className: "v i"
-  }, Number(a.payload.amount).toLocaleString()))), cash.map(c => /*#__PURE__*/React.createElement("div", {
+  }, fmtAmtStr(a.payload.amount)))), cash.map(c => /*#__PURE__*/React.createElement("div", {
     className: "bal",
     key: c.contractId
   }, /*#__PURE__*/React.createElement("span", null, c.payload.currency, " cash"), /*#__PURE__*/React.createElement("span", {
     className: "v"
-  }, Number(c.payload.amount).toLocaleString()))), inst.map(i => /*#__PURE__*/React.createElement("div", {
+  }, fmtAmtStr(c.payload.amount)))), inst.map(i => /*#__PURE__*/React.createElement("div", {
     className: "bal",
     key: i.contractId
   }, /*#__PURE__*/React.createElement("span", null, i.payload.instrument), /*#__PURE__*/React.createElement("span", {
@@ -3157,11 +3379,84 @@ const walletMeta = (w) => ({
 });
 const metaFor = (role, wallet) => ROLES[role] || walletMeta(wallet || { partyId: role });
 
+
 // ---- CONNECT WALLET ----
 //
 // The self-custody door into the venue. Renders nothing at all when the SDK
 // global is absent, so a missing or blocked bundle degrades to the demo roles
 // rather than to a broken sign-in screen.
+// ---- WALLET PICKER ----
+//
+// Two ways in, and they are NOT equivalent, so this refuses to render them as two
+// matching cards. Loop has been driven end to end on this venue -- onboarding,
+// funding, an RFQ and an atomic settlement, all on its signatures. Anything arriving
+// over CIP-0103 discovery may connect perfectly and then be unable to see a block,
+// because vetting is per-participant and its validator may not have vetted umbra.
+// Equal-looking options would hide that and move the failure into an empty screen.
+//
+// So: Loop is the action, everything else is the alternative underneath it. The
+// asymmetry is carried by hierarchy rather than by a warning nobody reads.
+
+// Loop's own mark, lifted from the SVG their SDK draws in its own connect overlay --
+// shipped for exactly this use. currentColor throughout, so it takes the theme.
+function LoopMark({ size }) {
+  const s = size || 18;
+  return React.createElement("svg", {
+    viewBox: "0 0 124.05 305.64", width: s * 0.42, height: s,
+    "aria-hidden": "true", style: { display: "block" }
+  },
+    React.createElement("path", {
+      d: "M24.58,99.47L124.05,0v224.42L24.58,124.95c-7.04-7.04-7.04-18.45,0-25.49Z",
+      fill: "currentColor"
+    }),
+    React.createElement("rect", {
+      x: "12.89", y: "194.48", width: "98.27", height: "98.27", rx: "18.02", ry: "18.02",
+      transform: "translate(-154.1 115.21) rotate(-45)", fill: "currentColor"
+    }));
+}
+
+function WalletPicker({ busy, onPick, onClose }) {
+  return React.createElement("div", { className: "ovl", onClick: onClose },
+    React.createElement("div", { className: "ovlcard wpk", onClick: e => e.stopPropagation() },
+
+      React.createElement("div", { className: "eyb" }, "Bring your own wallet"),
+      React.createElement("h3", { className: "wpk-h" }, "Umbra never holds your key."),
+
+      // The custody model as a shape rather than a paragraph. The previous version put
+      // it in four lines of grey text at the bottom, which is where an explanation goes
+      // to be ignored -- and it is the single thing a first-time user has to grasp.
+      React.createElement("div", { className: "wpk-model" },
+        React.createElement("div", { className: "wpk-side" },
+          React.createElement("div", { className: "wpk-side-t" }, "Your wallet"),
+          React.createElement("div", { className: "wpk-side-b" }, "holds the key"),
+          React.createElement("div", { className: "wpk-side-b" }, "signs every trade")),
+        React.createElement("div", { className: "wpk-arrow" }, "→"),
+        React.createElement("div", { className: "wpk-side" },
+          React.createElement("div", { className: "wpk-side-t" }, "Umbra"),
+          React.createElement("div", { className: "wpk-side-b" }, "hosts your party"),
+          React.createElement("div", { className: "wpk-side-b wpk-neg" }, "cannot sign for it"))),
+
+      React.createElement("button", {
+        className: "wpk-primary", disabled: busy, onClick: () => onPick("loop")
+      },
+        React.createElement("span", { className: "wpk-mark" },
+          React.createElement(LoopMark, { size: 20 })),
+        React.createElement("span", { className: "wpk-p-t" },
+          React.createElement("span", { className: "wpk-p-n" }, "Continue with Loop"),
+          React.createElement("span", { className: "wpk-p-s" },
+            "Settled a live trade on this venue")),
+        React.createElement("span", { className: "wpk-tag" }, "Verified")),
+
+      React.createElement("button", {
+        className: "wpk-alt", disabled: busy, onClick: () => onPick(null)
+      },
+        React.createElement("span", { className: "wpk-a-n" }, "Use another Canton wallet"),
+        React.createElement("span", { className: "wpk-a-s" },
+          "Discovered over CIP-0103. Only trades if its validator has vetted Umbra.")),
+
+      React.createElement("button", { className: "wpk-x", onClick: onClose }, "Cancel")));
+}
+
 function WalletConnect({ onEnter }) {
   const { wallet, busy, err, ready, connect, disconnect, available } = useWallet();
   // Whether the wallet's validator has Umbra's package. null = unknown (the wallet
@@ -3169,6 +3464,7 @@ function WalletConnect({ onEnter }) {
   // loud, because the alternative is an empty venue with no explanation.
   const [pkgOk, setPkgOk] = useState(null);
   const [pkgInfo, setPkgInfo] = useState(null);
+  const [picking, setPicking] = useState(false);
   useEffect(() => {
     let stop = false;
     if (!wallet) { setPkgOk(null); return; }
@@ -3210,12 +3506,19 @@ function WalletConnect({ onEnter }) {
         React.createElement("button", { className: "sgn-btn", onClick: () => onEnter(wallet) }, "Enter venue"),
         React.createElement("button", { className: "sgn-wl-x", onClick: disconnect, disabled: busy }, "Disconnect"))
     : React.createElement("button", {
-        className: "sgn-wl-btn", onClick: connect, disabled: busy || !ready
+        className: "sgn-wl-btn", onClick: () => setPicking(true), disabled: busy || !ready
       },
         busy ? React.createElement("span", { className: "spinr" }) : null,
         busy ? "Connecting" : "Connect wallet");
 
-  return React.createElement("div", { className: "sgn-wl" }, body, actions);
+  return React.createElement("div", { className: "sgn-wl" }, body, actions,
+    picking ? React.createElement(WalletPicker, {
+      busy,
+      onClose: () => setPicking(false),
+      // Commit the choice BEFORE connecting: the loop adapter answers only when it has
+      // been chosen, and both pick() and ensure() memoise whoever answered first.
+      onPick: (id) => { WalletLink.choose(id); setPicking(false); connect(); },
+    }) : null);
 }
 
 // ---- LOGIN ----
@@ -3239,115 +3542,76 @@ function Login({ onPick, onWallet }) {
     return () => { live = false; };
   }, []);
 
-  // A dealer card. The counterparty row reuses the desk's equalizer motif:
-  // pulsing bars = a live signal the ledger is withholding from this dealer.
-  const Dealer = (r, sym) => {
-    const c = ROLES[r].dot;
-    return React.createElement("div", {
-      className: "sgn-card",
-      style: { "--dc": c, "--dcbg": r === "dealer1" ? "var(--amberbg)" : "rgba(106,166,255,.12)" }
+  // Wallet connect is the product; the demo desks are scaffolding we intend to delete.
+  // UmbraRedesign.SignIn puts them in that order and fences the demo block with a
+  // comment, so removing it later is one deletion rather than an untangling.
+  //
+  // WalletConnect still owns the CONNECTED state -- it carries the package-vetting
+  // check and "Enter venue", neither of which SignIn has a place for. So: SignIn to
+  // get in, WalletConnect once you are.
+  const w = useWallet();
+  const [picking, setPicking] = useState(false);
+  const UR = window.UmbraRedesign;
+
+  // A connected wallet IS the sign-in. Stopping to show a "you are connected" card
+  // with an Enter button made the wallet path two steps where the demo desks are one,
+  // and the card rendered on a page stripped of everything that gives it context.
+  // Go straight to the terminal; restore() firing on reload lands there too, which is
+  // where a returning user wants to be anyway.
+  useEffect(() => { if (w.wallet) onWallet(w.wallet); }, [w.wallet]);
+
+  // Only reachable if the redesign bundle failed to load. Keep one plain door into
+  // the demo desks rather than a blank page.
+  if (!UR || !UR.SignIn) {
+    return React.createElement("div", { className: "sgn" },
+      React.createElement("div", { className: "sgn-l" },
+        React.createElement("div", { className: "sgn-brand" },
+          React.createElement("span", { className: "sgn-ring" }),
+          React.createElement("span", { className: "sgn-word" }, "Umbra"))),
+      React.createElement("div", { className: "sgn-r" },
+        React.createElement(WalletConnect, { onEnter: onWallet }),
+        React.createElement("div", { className: "sgn-eyebrow" }, "Or use a demo desk"),
+        ["requester", "dealer1", "dealer2"].map(r =>
+          React.createElement("button", {
+            key: r, className: "sgn-btn", style: { marginRight: 8, marginTop: 8 },
+            onClick: () => onPick(r)
+          }, ROLES[r].nm))));
+  }
+
+  // Mid-handover to the terminal: render nothing rather than flash a half-page.
+  if (w.wallet) return null;
+
+  return React.createElement(React.Fragment, null,
+    React.createElement(UR.SignIn, {
+      connecting: w.busy,
+      error: w.err,
+      onConnect: () => setPicking(true),
+      onDemo: (dm) => onPick(dm.id),
+      demos: [
+        { id: "requester", name: "Institutional buyer", role: "requester" },
+        { id: "dealer1", name: ROLES.dealer1.nm, role: "dealer" },
+        { id: "dealer2", name: ROLES.dealer2.nm, role: "dealer" }
+      ]
+    }),
+
+    // The live ledger offset. It was on the old sign-in and is the one thing on this
+    // page that proves the venue is talking to a real ledger rather than a mockup --
+    // SignIn has no slot for it, so it rides alongside.
+    offset != null ? React.createElement("div", {
+      className: "sgn-lg",
+      style: { position: "fixed", left: 24, bottom: 20, zIndex: 5,
+               display: "flex", alignItems: "center", gap: 8 }
     },
-      React.createElement("div", null,
-        React.createElement("div", { className: "sgn-tag", style: { color: c } }, ROLES[r].nm),
-        React.createElement("div", { className: "sgn-nm", style: { marginTop: 9 } }, "Liquidity provider"),
-        React.createElement("div", { className: "sgn-ds", style: { marginTop: 5 } },
-          "Sees ", React.createElement("b", null, "only"), " its own quotes.")),
+      React.createElement("span", { className: "sgn-eq" },
+        React.createElement("i", null), React.createElement("i", null),
+        React.createElement("i", null)),
+      React.createElement("span", { className: "sgn-off" }, "#" + offset)) : null,
 
-      React.createElement("div", { className: "sgn-box" },
-        React.createElement("div", { className: "sgn-box-l" }, "Your quote"),
-        React.createElement("div", { className: "sgn-pv-r", style: { marginTop: 0 } },
-          React.createElement("span", { className: "sgn-pv-d", style: { background: c } }),
-          React.createElement("span", { className: "sgn-pv-n", style: { color: c } }, sym),
-          React.createElement("span", { className: "sgn-pv-t" },
-            React.createElement("i", { style: { width: r === "dealer1" ? "66%" : "52%", background: c } }))),
-        React.createElement("div", { className: "sgn-rule" }),
-        React.createElement("div", { className: "sgn-box-l" }, "Counterparty"),
-        React.createElement("div", { className: "whg-b" },
-          [0,1,2,3,4,5,6].map(k => React.createElement("i", { key: k }))),
-        React.createElement("div", { className: "sgn-note" }, "withheld by ledger \u00b7 not on your feed")),
-
-      React.createElement("button", { className: "sgn-obtn", onClick: () => onPick(r) },
-        "Sign in as " + ROLES[r].nm));
-  };
-
-  return React.createElement("div", { className: "sgn" },
-
-    // ---------- LEFT: the pitch ----------
-    React.createElement("div", { className: "sgn-l" },
-
-      React.createElement("div", null,
-        React.createElement("a", { className: "sgn-brand", href: "/", title: "Back to umbra" },
-          React.createElement(Umbrella, null),
-          React.createElement("span", { className: "sgn-mark" },
-            React.createElement("span", { className: "gh" }, "UMBRA"),
-            React.createElement("span", { className: "fg" }, "UMBRA"))),
-        React.createElement("div", { className: "sgn-kick" }, "Private OTC Block Venue")),
-
-      React.createElement("div", null,
-        React.createElement("h1", { className: "sgn-h1" },
-          "Dealers compete.",
-          React.createElement("br", null),
-          React.createElement("span", null, "None of them can see"),
-          React.createElement("br", null),
-          React.createElement("span", null, "each other.")),
-        React.createElement("p", { className: "sgn-p" },
-          "A buyer privately asks several dealers to price a block. Each dealer is cryptographically blind to the others \u2014 a rival's quote is never delivered to a competing dealer, because the ledger itself withholds it. The winning trade settles atomically.")),
-
-      React.createElement("div", { className: "sgn-assets" },
-        assets.map(sym => React.createElement("div", { className: "sgn-as", key: sym },
-          React.createElement(AssetIcon, { symbol: sym }),
-          React.createElement("div", null,
-            React.createElement("div", { className: "sgn-as-s" }, sym),
-            React.createElement("div", { className: "sgn-as-l" }, ASSET_LONG(sym)))))),
-
-      React.createElement("div", { className: "sgn-live" },
-        React.createElement("span", { className: "sgn-dot" }),
-        React.createElement("span", { className: "sgn-lt" }, "Canton ledger \u00b7 live"),
-        React.createElement("span", { className: "sgn-eq" },
-          React.createElement("i", null), React.createElement("i", null), React.createElement("i", null)),
-        offset != null ? React.createElement("span", { className: "sgn-off" }, "#" + offset) : null)),
-
-    // ---------- RIGHT: the choice ----------
-    React.createElement("div", { className: "sgn-r" },
-
-      React.createElement(WalletConnect, { onEnter: onWallet }),
-
-      React.createElement("div", { className: "sgn-eyebrow" }, "Or use a demo desk"),
-
-      React.createElement("div", { className: "sgn-req" },
-        React.createElement("div", { className: "sgn-req-t" },
-          React.createElement("div", { className: "sgn-tag", style: { color: "var(--accent)" } }, "Requester"),
-          React.createElement("div", { className: "sgn-nm" }, "Institutional buyer"),
-          React.createElement("div", { className: "sgn-ds" },
-            "Sees ", React.createElement("b", null, "every"), " quote \u2014 both dealers, side by side.")),
-
-        React.createElement("div", { className: "sgn-pv" },
-          React.createElement("div", { className: "sgn-pv-l" }, "Visible to you"),
-          React.createElement("div", { className: "sgn-pv-r" },
-            React.createElement("span", { className: "sgn-pv-d", style: { background: "var(--amber)" } }),
-            React.createElement("span", { className: "sgn-pv-n", style: { color: "var(--amber)" } }, "DEALER 01"),
-            React.createElement("span", { className: "sgn-pv-t" },
-              React.createElement("i", { style: { width: "66%", background: "var(--amber)" } }))),
-          React.createElement("div", { className: "sgn-pv-r" },
-            React.createElement("span", { className: "sgn-pv-d", style: { background: "#6AA6FF" } }),
-            React.createElement("span", { className: "sgn-pv-n", style: { color: "#6AA6FF" } }, "DEALER 02"),
-            React.createElement("span", { className: "sgn-pv-t" },
-              React.createElement("i", { style: { width: "48%", background: "#6AA6FF" } }))),
-          React.createElement("span", { className: "sgn-sweep" })),
-
-        React.createElement("button", { className: "sgn-btn", onClick: () => onPick("requester") }, "Sign in")),
-
-      React.createElement("div", { className: "sgn-dealers" },
-        Dealer("dealer1", "cBTC"),
-        React.createElement("div", { className: "sgn-wall" },
-          React.createElement("span", null, "No line of sight")),
-        Dealer("dealer2", "cETH")),
-
-      React.createElement("div", { className: "sgn-foot" },
-        React.createElement("p", null,
-          React.createElement("b", null, "\u25c6"), "\u00a0 Open two dealers in separate windows \u2014 neither will find the other's price. The winning trade settles atomically."),
-        React.createElement("button", { className: "sgn-ops", onClick: () => onPick("operator") },
-          "Venue operations \u2192"))));
+    picking ? React.createElement(WalletPicker, {
+      busy: w.busy,
+      onClose: () => setPicking(false),
+      onPick: (id) => { WalletLink.choose(id); setPicking(false); w.connect(); }
+    }) : null);
 }
 
 
@@ -3405,6 +3669,9 @@ const totalUsd = (usd, hs) => {
 // tickers inline while the trade book printed them raw, so one asset showed as CC in
 // the balance panel and AMU in the book directly beneath it. One helper, used by both.
 const dispSym = s => s === "Amulet" ? "CC" : (s === "CBTC" ? "cBTC" : s);
+// The inverse. The UI trades in display symbols; every ledger call wants the
+// instrument id the registry actually issued, and CC/Amulet is the pair that bites.
+const ledgerSym = s => s === "CC" ? "Amulet" : (s === "cBTC" ? "CBTC" : s);
 
 const usdOf = (usd, sym, amt) => {
   const p = usd && usd[sym];
@@ -3434,6 +3701,21 @@ const fmtNum = (v) => {
     (n < 0 ? "-" : ""), "0.0",
     React.createElement("sub", null, zeros),
     sig);
+};
+
+// fmtNum's precision policy, but ALWAYS a string. Two reasons it has to exist
+// separately: fmtNum returns a React element below 0.001 (the subscript form), which
+// concatenates into "[object Object]"; and toLocaleString's default caps at three
+// fraction digits, so 0.000125 cBTC -- an ordinary size on this venue -- renders as
+// a flat "0" next to a $8.17 valuation. Use this anywhere an amount is built into a
+// string; use fmtNum where it is a React child and the subscript form reads better.
+const fmtAmtStr = (v) => {
+  if (v == null || isNaN(Number(v))) return "—";
+  const n = Number(v), abs = Math.abs(n);
+  if (n === 0) return "0";
+  if (abs >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  if (abs >= 1)    return n.toLocaleString(undefined, { maximumFractionDigits: 4 });
+  return n.toLocaleString(undefined, { maximumFractionDigits: 10 });
 };
 
 // theme, shared by every surface (was stranded in the operator console)
@@ -3467,7 +3749,7 @@ const ASSET_LONG = sym => {
 function RequesterDesk(P) {
   const { meta, signed, onExit, note, rfqs, quotes, holdings, rate, series, usd, rateNote,
           onCreate, onAward, awarding, awardStep, onPair, history, composedPair, composing, setComposing, ratePair,
-          selRfqCid, setSelRfqCid, deskSwitch, role } = P;
+          selRfqCid, setSelRfqCid, deskSwitch, role, wallet, say } = P;
   const settled = (history && history.settlements) || [];
   // the reference is for the pair the requester is composing -- matches the fetch
   // in load() (requester prices composedPair), so label and value agree and
@@ -3609,7 +3891,7 @@ function RequesterDesk(P) {
               },
                 React.createElement("div", { className: "lrq-l" },
                   React.createElement(AssetIcon, { symbol: r.payload.offerAsset.symbol, size: "sm" }),
-                  React.createElement("span", { className: "m" }, Number(r.payload.offerAmount).toLocaleString(), " ", r.payload.offerAsset.symbol),
+                  React.createElement("span", { className: "m" }, fmtAmtStr(r.payload.offerAmount), " ", r.payload.offerAsset.symbol),
                   React.createElement("span", { className: "lrq-arr" }, "\u21c4"),
                   React.createElement(AssetIcon, { symbol: r.payload.wantAsset.symbol, size: "sm" }),
                   React.createElement("span", { className: "m" }, r.payload.wantAsset.symbol)),
@@ -3628,7 +3910,7 @@ function RequesterDesk(P) {
                 React.createElement(AssetIcon, { symbol: rfq.payload.offerAsset.symbol, size: "lg" }),
                 React.createElement("div", null,
                   React.createElement("div", { className: "rq-lab" }, "You offer"),
-                  React.createElement("div", { className: "rq-amt m" }, offerAmt.toLocaleString(),
+                  React.createElement("div", { className: "rq-amt m" }, fmtAmtStr(offerAmt),
                     React.createElement("span", null, rfq.payload.offerAsset.symbol)))),
               React.createElement("div", { className: "rq-for" },
                 React.createElement("span", null, "for"),
@@ -3793,8 +4075,12 @@ function RequesterDesk(P) {
                       React.createElement("div", { className: "hl-s" }, h.symbol),
                       React.createElement("div", { className: "hl-x" }, ASSET_LONG(h.symbol))),
                     React.createElement("div", { className: "hl-v" },
-                      React.createElement("div", { className: "hl-a m" }, h.amount.toLocaleString()),
+                      React.createElement("div", { className: "hl-a m" }, fmtNum(h.amount)),
                       React.createElement("div", { className: "hl-u m" }, fmtUsd(usdOf(usd, h.symbol, h.amount)) || "\u2014"))))))),
+
+        // Sits directly under Holdings on purpose: an empty balance is exactly when a
+        // user needs to be told that funding is a step and where to send it.
+        wallet ? React.createElement(Funding, { party: role, say }) : null,
 
         rfq ? React.createElement("section", { className: "mod" },
           React.createElement("div", { className: "mod-h" },
@@ -3975,7 +4261,7 @@ function TradeBook({ settled }) {
           React.createElement(AssetIcon, { symbol: w, size: "sm" })),
         React.createElement("div", { className: "bk-t" },
           React.createElement("div", { className: "bk-l1 m" },
-            amt.toLocaleString() + " " + o + "  \u2192  " + px.toLocaleString() + " " + w),
+            fmtAmtStr(amt) + " " + o + "  \u2192  " + fmtAmtStr(px) + " " + w),
           React.createElement("div", { className: "bk-l2 m" },
             (when ? when.toLocaleString() : "\u2014") + "  \u00b7  #" + (t.offset || "\u2014"))),
         React.createElement("div", { className: "bk-x" },
@@ -3998,7 +4284,7 @@ function TradeBook({ settled }) {
 }
 
 function DealerDesk(P) {
-  const { meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, usd, price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid, role, deskSwitch } = P;
+  const { meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, usd, price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid, role, deskSwitch, wallet, say } = P;
   const [proof, setProof] = useState(null); // dealer ledger-proof modal cid
   // Failed-swap alert. The backend records one (GET /api/swap/alerts) when a swap this
   // dealer quoted on fails to settle. Dismissal is now recorded SERVER-side: the old
@@ -4070,7 +4356,7 @@ function DealerDesk(P) {
           : React.createElement("span", { className: "dq-t" + (c.warn ? " warn" : "") }, c.txt)),
       React.createElement("div", { className: "dq-pair" },
         React.createElement(AssetIcon, { symbol: o, size: "sm" }),
-        React.createElement("span", null, Number(iv.payload.offerAmount).toLocaleString()),
+        React.createElement("span", null, fmtAmtStr(iv.payload.offerAmount)),
         React.createElement("span", { className: "dq-arr" }, "\u2192"),
         React.createElement(AssetIcon, { symbol: w, size: "sm" })));
   };
@@ -4169,7 +4455,7 @@ function DealerDesk(P) {
                   React.createElement("div", { className: "ask-pair" },
                     React.createElement("div", { className: "ask-side" },
                       React.createElement(AssetIcon, { symbol: o, size: "lg" }),
-                      React.createElement("div", { className: "ask-amt m" }, amt.toLocaleString()),
+                      React.createElement("div", { className: "ask-amt m" }, fmtNum(amt)),
                       React.createElement("div", { className: "ask-sym" }, o)),
                     React.createElement("div", { className: "ask-arr" }, "\u2192"),
                     React.createElement("div", { className: "ask-side" },
@@ -4177,7 +4463,7 @@ function DealerDesk(P) {
                       React.createElement("div", { className: "ask-amt m dim" }, "?"),
                       React.createElement("div", { className: "ask-sym" }, w))),
                   React.createElement("p", { className: "ask-line" },
-                    "The buyer gives ", React.createElement("b", null, amt.toLocaleString() + " " + o),
+                    "The buyer gives ", React.createElement("b", null, fmtAmtStr(amt) + " " + o),
                     ". What do you pay, in ", React.createElement("b", null, w), "?"),
                   React.createElement("div", { className: "ask-act" },
                     React.createElement("div", { className: "ask-input" },
@@ -4310,9 +4596,164 @@ function DealerDesk(P) {
                       React.createElement("div", { className: "hl-s" }, h.symbol),
                       React.createElement("div", { className: "hl-x" }, ASSET_LONG(h.symbol))),
                     React.createElement("div", { className: "hl-v" },
-                      React.createElement("div", { className: "hl-a m" }, h.amount.toLocaleString()),
+                      React.createElement("div", { className: "hl-a m" }, fmtNum(h.amount)),
                       React.createElement("div", { className: "hl-u m" }, fmtUsd(usdOf(usd, h.symbol, h.amount)) || "\u2014"))))))),
+        // Only for a wallet party: the demo desks are funded by the operator and have
+        // no second party to move assets to or from.
+        wallet ? React.createElement(Funding, { party: role, say }) : null,
         proof ? React.createElement(LedgerProof, { cid: proof, role, onClose: () => setProof(null) }) : null)));
+}
+
+// ---- FUNDING ----
+//
+// The step nothing in the UI used to mention, and the one that made a funded wallet
+// look like a broken venue. A user's wallet holds one party; Umbra hosts another,
+// controlled by the same key. Assets do not appear here because they exist there --
+// they have to be SENT, exactly as between any two parties on the network.
+//
+// Both directions are the wallet's own authority: the deposit is accepted by a
+// signature, and the withdrawal is built here and signed there. Umbra moves nothing.
+// ---- FUNDING ----
+//
+// The step nothing in the UI used to mention, and the one that made a funded wallet
+// look like a broken venue. A user's wallet holds one party; Umbra hosts another,
+// controlled by the same key. Assets do not appear here because they exist there --
+// they have to be SENT, exactly as between any two parties on the network.
+//
+// Both directions are the wallet's own authority: the deposit is accepted by a
+// signature, and the withdrawal is built here and signed there. Umbra moves nothing.
+//
+// The chrome is UmbraRedesign.FundingPanel; this keeps the ledger reads, the symbol
+// translation and the two signing paths, and hands it plain data.
+function Funding({ party, say, onChanged }) {
+  const [pending, setPending] = useState([]);
+  const [raw, setRaw] = useState([]);
+  const [busy, setBusy] = useState("");
+
+  const load = useCallback(async () => {
+    const [p, h] = await Promise.all([
+      api("/api/real/pending?role=" + encodeURIComponent(party)).catch(() => ({})),
+      api("/api/real/holdings?role=" + encodeURIComponent(party)).catch(() => ({}))
+    ]);
+    setPending((p && (p.offers || p.pending)) || []);
+    setRaw((h && h.raw) || []);
+  }, [party]);
+  useEffect(() => {
+    load();
+    // An incoming transfer arrives without any action on this page, so it has to be
+    // noticed rather than waited for. Slow enough not to matter, quick enough that a
+    // deposit does not look lost.
+    const t = setInterval(load, 6000);
+    return () => clearInterval(t);
+  }, [load]);
+
+  const accept = async (t) => {
+    if (busy) return;
+    setBusy(t.id);
+    try {
+      const b = await post("/api/real/pending/" + t.id + "/accept?build=1",
+                           { role: party, build: true });
+      await WalletLink.submit({ commands: b.commands, disclosedContracts: b.disclosedContracts });
+      say("Received " + fmtAmtStr(t.amount) + " " + t.asset + ".");
+      await load(); onChanged && onChanged();
+    } catch (e) { say(e.message || "could not accept that transfer", true); }
+    setBusy("");
+  };
+
+  const withdraw = async (w) => {
+    if (busy) return;
+    const asset = w.asset, amount = w.amount, dest = w.dest;
+    const id = ledgerSym(asset);
+    // A transfer spends its inputs whole, so one holding has to cover the amount on
+    // its own. Balances shown are totals, matching the Holdings panel -- so when the
+    // total is enough but no single lot is, name the number that actually binds
+    // rather than failing deep inside the registry with nothing a user can act on.
+    const free = raw.filter(x => x.id === id && !x.lock);
+    const pick = free.filter(x => Number(x.amount) >= Number(amount))
+                     .sort((a, b) => Number(a.amount) - Number(b.amount))[0];
+    if (!pick) {
+      const biggest = free.reduce((m, x) => Math.max(m, Number(x.amount)), 0);
+      return say("Your " + asset + " sits in separate lots and one transfer cannot span " +
+                 "them. The most you can send at once is " + fmtAmtStr(biggest) + ".", true);
+    }
+    setBusy("w");
+    try {
+      const b = await post("/api/real/send", {
+        sender: party, senderRole: party, receiver: dest, admin: pick.admin,
+        id: id, amount: String(amount), holdingCids: [pick.contractId], build: true });
+      await WalletLink.submit({ commands: b.commands, disclosedContracts: b.disclosedContracts });
+      say("Sent. Accept it in your wallet to finish the transfer.");
+      await load(); onChanged && onChanged();
+    } catch (e) { say(e.message || "could not send", true); }
+    setBusy("");
+  };
+
+  const U = window.UmbraRedesign;
+
+  // /api/real/pending answers with every transfer this party is a leg of, in EITHER
+  // direction. Listing them all as "incoming" put an Accept button on the user's own
+  // outgoing withdrawal, and accepting needs the RECEIVER's authority -- so it failed
+  // with DAML_AUTHORIZATION_ERROR naming a party we deliberately hold no key for.
+  // Compare with samePartyId rather than ===, since ids drift in case and whitespace.
+  const same = (a, b) => (U && U.samePartyId) ? U.samePartyId(a, b) : a === b;
+  const incoming = pending.filter(o => same(o.receiver, party));
+  // Sent, not yet accepted by the far side. Its input is locked, which is why the
+  // amount available to send is lower than the balance -- worth saying, because
+  // silently differing numbers read as a bug.
+  const outgoing = pending.filter(o => same(o.sender, party));
+
+  if (!U || !U.FundingPanel) {
+    // Both files are served from this origin, so this only fires if one failed to
+    // load. Say which, and still show the party id -- that is the one thing a user
+    // cannot proceed without.
+    return React.createElement("section", { className: "mod" },
+      React.createElement("div", { className: "mod-h" },
+        React.createElement("h2", null, "Funding")),
+      React.createElement("div", { className: "mod-b" },
+        React.createElement("div", { className: "void" },
+          React.createElement("div", { className: "void-t" }, "Funding panel unavailable"),
+          React.createElement("div", { className: "void-s" },
+            "umbra-redesign.js did not load. Your party is " + party))));
+  }
+
+  // Totals, so this agrees with the Holdings panel beside it. The single-lot
+  // constraint is enforced at send time, where it can explain itself.
+  const balances = {};
+  raw.filter(x => !x.lock).forEach(x => {
+    const s = dispSym(x.id);
+    balances[s] = (balances[s] || 0) + Number(x.amount);
+  });
+
+  return React.createElement(React.Fragment, null,
+    React.createElement(U.FundingPanel, {
+      homeParty: WalletLink.homeParty(),
+      umbraParty: party,
+      balances: balances,
+      transfers: incoming.map(o => ({
+        id: o.contractId,
+        asset: dispSym(o.instrument),
+        amount: Number(o.amount),
+        from: o.sender || ""
+      })),
+      busy: busy,
+      onAccept: accept,
+      onWithdraw: withdraw
+    }),
+    // Accounts for the gap between the balance and what can be sent: a transfer the
+    // far side has not accepted yet still holds its input locked here.
+    outgoing.length ? React.createElement("section", { className: "mod" },
+      React.createElement("div", { className: "mod-b" },
+        outgoing.map(o => React.createElement("div", {
+          key: o.contractId,
+          style: { display: "flex", alignItems: "center", gap: 8, fontSize: 12,
+                   color: "var(--mute)", padding: "2px 0" }
+        },
+          React.createElement("span", { style: { color: "var(--amber)" } }, "○"),
+          React.createElement("b", { style: { color: "var(--text)" } },
+            fmtAmtStr(o.amount) + " " + dispSym(o.instrument)),
+          "sent — waiting for ",
+          U.abbrevParty ? U.abbrevParty(o.receiver, 9, 6) : "the recipient",
+          " to accept. Locked until they do.")))) : null);
 }
 
 function PartyPortal({ role, wallet, onExit }) {
@@ -4381,7 +4822,11 @@ function PartyPortal({ role, wallet, onExit }) {
       // which Umbra's participant cannot read. Take the party-scoped reads through the
       // wallet instead. Everything else (mode, ledger end, market rate, the RFQ board
       // the operator observes) still comes from Umbra, because Umbra can see it.
-      const viaWallet = !!(wallet && wallet.partyId === role);
+      // ...unless the adapter says its party is one of OURS. A Loop party is founded on
+      // our validator, so the server can read it and the wallet cannot: asking the
+      // wallet returns nothing and the UI reports "No assets yet" about a funded party.
+      const pv = WalletLink.provider();
+      const viaWallet = !!(wallet && wallet.partyId === role) && !(pv && pv.serverReads);
       const partyReads = viaWallet
         ? WalletLink.reads(role).catch(() => ({ si: {}, sq: {}, sh: {}, readFailed: true }))
         : Promise.all([
@@ -4688,7 +5133,7 @@ function PartyPortal({ role, wallet, onExit }) {
     // holding of the want-asset >= the price, or it reverts at settlement and
     // wastes the requester\u2019s award. Block it here, not at the ledger.
     const _wMax = holdings.filter(h => h.payload.asset.symbol === wantSym).reduce((s, h) => s + Number(h.payload.amount), 0);
-    if (Number(p) > _wMax) { say("You cannot back that: your largest " + wantSym + " holding is " + _wMax.toLocaleString() + ". Quote at or below it.", true); return; }
+    if (Number(p) > _wMax) { say("You cannot back that: your largest " + wantSym + " holding is " + fmtAmtStr(_wMax) + ". Quote at or below it.", true); return; }
     setBusy(b => ({ ...b, [cid]: true }));
     try {
       const r = await post("/api/swap/invitations/" + cid + "/quote", { dealer: role, price: p });
@@ -4817,7 +5262,7 @@ function PartyPortal({ role, wallet, onExit }) {
     meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, usd,
     price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid, role, deskSwitch,
     openTrade, settling, settleStep, onSettle: settleAsDealer, readFailed, fee,
-    listed, onToggleListing: toggleListing
+    listed, onToggleListing: toggleListing, wallet, say
   });
 
   return React.createElement(React.Fragment, null,
@@ -4826,7 +5271,8 @@ function PartyPortal({ role, wallet, onExit }) {
       rfqs, quotes: myQuotes, holdings, rate, series, usd, rateNote, onPair, history, composedPair,
       onCreate: createRfq, onAward: awardQuote, awarding, awardStep,
       composing, setComposing, ratePair, selRfqCid, setSelRfqCid,
-      openTrade, settling, settleStep, onSettle: settleAsDealer, readFailed, fee
+      openTrade, settling, settleStep, onSettle: settleAsDealer, readFailed, fee,
+      wallet, say
     }),
     React.createElement(SettlementVault, { trade: vault, role, onClose: () => setVault(null) }));
 
@@ -4846,7 +5292,7 @@ function PartyPortal({ role, wallet, onExit }) {
                 React.createElement("div", { className: "hl-s" }, h.symbol),
                 React.createElement("div", { className: "hl-x" }, ASSET_LONG(h.symbol))),
               React.createElement("div", { className: "hl-v" },
-                React.createElement("div", { className: "hl-a m" }, h.amount.toLocaleString()),
+                React.createElement("div", { className: "hl-a m" }, fmtNum(h.amount)),
                 React.createElement("div", { className: "hl-u m" }, fmtUsd(usdOf(usd, h.symbol, h.amount)) || "\u2014")))))));
 
   return React.createElement("div", { className: "prt" },
@@ -4888,7 +5334,7 @@ function PartyPortal({ role, wallet, onExit }) {
                         React.createElement("div", { className: "ask-pair" },
                           React.createElement("div", { className: "ask-side" },
                             React.createElement(AssetIcon, { symbol: o, size: "lg" }),
-                            React.createElement("div", { className: "ask-amt m" }, amt.toLocaleString()),
+                            React.createElement("div", { className: "ask-amt m" }, fmtNum(amt)),
                             React.createElement("div", { className: "ask-sym" }, o)),
                           React.createElement("div", { className: "ask-arr" }, "\u2192"),
                           React.createElement("div", { className: "ask-side" },
@@ -4896,7 +5342,7 @@ function PartyPortal({ role, wallet, onExit }) {
                             React.createElement("div", { className: "ask-amt m dim" }, "?"),
                             React.createElement("div", { className: "ask-sym" }, w))),
                         React.createElement("p", { className: "ask-line" },
-                          "The buyer gives ", React.createElement("b", null, amt.toLocaleString() + " " + o),
+                          "The buyer gives ", React.createElement("b", null, fmtAmtStr(amt) + " " + o),
                           ". What do you pay, in ", React.createElement("b", null, w), "?"),
                         React.createElement("div", { className: "ask-act" },
                           React.createElement("div", { className: "ask-input" },
@@ -4946,7 +5392,7 @@ function PartyPortal({ role, wallet, onExit }) {
                         React.createElement(AssetIcon, { symbol: p.offerAsset.symbol, size: "sm" }),
                         React.createElement("span", { style: { color: "var(--dim)" } }, "\u2192"),
                         React.createElement(AssetIcon, { symbol: p.wantAsset.symbol, size: "sm" }));
-                      const give = React.createElement("span", { className: "m" }, Number(p.offerAmount).toLocaleString() + " " + p.offerAsset.symbol);
+                      const give = React.createElement("span", { className: "m" }, fmtAmtStr(p.offerAmount) + " " + p.offerAsset.symbol);
                       const get = React.createElement("span", { className: "m" }, Number(p.price).toFixed(2) + " " + p.wantAsset.symbol);
                       return isDealer
                         ? React.createElement("tr", { key: q.contractId },
