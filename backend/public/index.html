@@ -3397,22 +3397,16 @@ const metaFor = (role, wallet) => ROLES[role] || walletMeta(wallet || { partyId:
 // So: Loop is the action, everything else is the alternative underneath it. The
 // asymmetry is carried by hierarchy rather than by a warning nobody reads.
 
-// Loop's own mark, lifted from the SVG their SDK draws in its own connect overlay --
-// shipped for exactly this use. currentColor throughout, so it takes the theme.
+// Loop's mark, taken from their own favicon so it is the real thing rather than a
+// likeness. An earlier version used an SVG pulled out of their SDK bundle -- that
+// turned out to be `class="bg-logo"`, the watermark behind their QR overlay, not
+// the brand mark at all. The class name said so and I read past it.
 function LoopMark({ size }) {
   const s = size || 18;
-  return React.createElement("svg", {
-    viewBox: "0 0 124.05 305.64", width: s * 0.42, height: s,
-    "aria-hidden": "true", style: { display: "block" }
-  },
-    React.createElement("path", {
-      d: "M24.58,99.47L124.05,0v224.42L24.58,124.95c-7.04-7.04-7.04-18.45,0-25.49Z",
-      fill: "currentColor"
-    }),
-    React.createElement("rect", {
-      x: "12.89", y: "194.48", width: "98.27", height: "98.27", rx: "18.02", ry: "18.02",
-      transform: "translate(-154.1 115.21) rotate(-45)", fill: "currentColor"
-    }));
+  return React.createElement("img", {
+    src: "/assets/loop.png", width: s, height: s, alt: "",
+    style: { display: "block", borderRadius: 4 }
+  });
 }
 
 function WalletPicker({ busy, onPick, onClose }) {
