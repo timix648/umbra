@@ -5518,6 +5518,11 @@ function App() {
   };
   const exit = () => {
     try { sessionStorage.removeItem("umbra-role"); sessionStorage.removeItem("umbra-wallet"); } catch {}
+    // Drop the WALLET session too, not just the app's idea of who is signed in.
+    // Login restores the wallet on mount and enters the venue as soon as one resolves,
+    // so leaving the session live meant Sign out bounced straight back in -- the page
+    // appeared to refresh and never reached the wallet picker.
+    Promise.resolve(WalletLink.disconnect()).catch(() => {});
     setWallet(null);
     setRole(null);
   };
