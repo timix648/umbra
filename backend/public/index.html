@@ -729,6 +729,16 @@
     overflow-y:auto;overflow-x:hidden;scrollbar-width:thin}
   .dsk-col::-webkit-scrollbar{width:5px}
   .dsk-col::-webkit-scrollbar-thumb{background:var(--line2);border-radius:3px}
+  /* The right rail's scrollbar belongs on the window edge. The grid's 44px side
+     padding was pushing it inboard, where it overlapped the panel's own text.
+     Bleed the column out by that padding and put it back as inner padding: the bar
+     lands on the edge, the content does not move. Both desks use this rail: .dsk on
+     the dealer side, .rqk on the requester side. */
+  .dsk > .dsk-col:last-child,
+  .rqk > .dsk-col:last-child{margin-right:-44px;padding-right:44px;scrollbar-gutter:stable}
+  @media(max-width:1080px){
+    .dsk > .dsk-col:last-child,
+    .rqk > .dsk-col:last-child{margin-right:0;padding-right:0}}
   .dsk-col > .mod, .dsk-col > .dq{flex:none}
   /* queue rail */
   .dq{border:1px solid var(--line);border-radius:5px;background:var(--bg2);overflow:hidden}
@@ -1780,7 +1790,7 @@ const WalletLink = (() => {
   // THE detail the whole route turns on: signMessage signs the RAW BYTES handed to it.
   // Pass the base64 text of a hash and you get a valid signature over the wrong thing,
   // which the ledger rejects with nothing useful to say. Decode first, always.
-  let loopProvider = null, loopParty = null;
+  let loopProvider = null, loopParty = null, loopRestored = false;
 
   // Loop's global exists the moment the bundle loads, so presence proves nothing --
   // exactly the trap Console set. Answer only when the user actually chose Loop.
@@ -1816,7 +1826,45 @@ const WalletLink = (() => {
     serverReads: true,
     get: () => (loopChosen() && typeof window !== "undefined"
       ? (window.LoopSDKBundle && window.LoopSDKBundle.loop) : null),
-    init: async () => true,
+
+    // Reconnect on load. Loop persists its own session, so autoConnect() resolves
+    // without prompting -- but our party id lives in module state, which a reload
+    // clears, so isConnected() answered false and the user was thrown back to the
+    // sign-in screen while their wallet was still perfectly authorised.
+    //
+    // This only ADOPTS a party that already exists. Founding one needs a signature,
+    // and a wallet prompt nobody asked for on page load is its own bug.
+    init: async (s) => {
+      if (loopParty || loopRestored) return true;
+      loopRestored = true;
+      if (!loopChosen()) return true;
+      await new Promise((resolve) => {
+        let done = false;
+        const fin = () => { if (done) return; done = true; resolve(); };
+        try {
+          s.init({
+            appName: "Umbra", network: "devnet",
+            onAccept: async (provider) => {
+              try {
+                loopProvider = provider;
+                const draft = await post("/api/ext/onboard/prepare",
+                                         { publicKey: lB64(lBytes(provider.public_key)) });
+                const known = (await api("/api/ext/wallets")).wallets || [];
+                const mine = known.find(w => w.fingerprint === draft.fingerprint);
+                if (mine) loopParty = mine.partyId;
+              } catch (e) { console.warn("[loop] restore failed:", e && e.message); }
+              fin();
+            },
+            onReject: fin,
+          });
+          Promise.resolve(s.autoConnect()).catch(fin);
+        } catch (e) { fin(); }
+        // No stored session means onAccept never fires. Do not hold the page open
+        // waiting for a callback that is not coming.
+        setTimeout(fin, 5000);
+      });
+      return true;
+    },
     isConnected: async () => !!(loopProvider && loopParty),
     connect: async (s) => {
       const provider = await new Promise((resolve, reject) => {
