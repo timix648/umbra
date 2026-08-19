@@ -1,0 +1,392 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Umbra · wallet signature probe</title>
+<style>
+  body { background:#0b0d10; color:#d7dde5; font:14px/1.55 ui-monospace,Menlo,Consolas,monospace;
+         margin:0; padding:28px; }
+  h1 { font-size:18px; margin:0 0 4px; color:#fff; letter-spacing:.02em }
+  .sub { color:#7d8794; margin-bottom:22px; max-width:78ch }
+  .cap { color:#5b6470; font-size:12px; text-transform:uppercase; letter-spacing:.08em; margin:16px 0 8px }
+  button { background:#1b2027; color:#e6ecf3; border:1px solid #2c343e; border-radius:6px;
+           padding:9px 15px; font:inherit; cursor:pointer; margin:0 8px 8px 0 }
+  button:hover:not(:disabled) { background:#232a33; border-color:#3a444f }
+  button:disabled { opacity:.32; cursor:not-allowed }
+  #log { white-space:pre-wrap; background:#07090b; border:1px solid #1c222a;
+         border-radius:8px; padding:16px; margin-top:18px; min-height:260px }
+  .ok { color:#5fd39a } .bad { color:#ff6b6b } .warn { color:#e8c46a } .dim { color:#6b7480 }
+</style>
+
+<h1>wallet signature probe</h1>
+<div class="sub">
+  Loop exposes <code>signMessage()</code> but not <code>signTransaction()</code>, which looked fatal.
+  It is not — if what it signs is the <b>raw bytes</b> we hand it. Then a Loop-held key can found a
+  party on <b>our</b> validator, where umbra is already vetted, and Loop never vets or submits anything.
+</div>
+
+<div class="cap">onboarding — does the key work at all</div>
+<button id="b1">1 · connect loop</button>
+<button id="b2" disabled>2 · prepare party</button>
+<button id="b3" disabled>3a · sign base64 form</button>
+<button id="b4" disabled>3b · sign raw-bytes form</button>
+<button id="b5" disabled>4 · create party</button>
+
+<div class="cap">trading — does the same signature drive umbra</div>
+<button id="b6" disabled>5 · accept pending tokens</button>
+<button id="b7" disabled>6 · open an RFQ</button>
+<button id="b8" disabled>7 · run the full trade</button>
+<button id="b9" disabled>8 · resume settlement</button>
+<div id="log"></div>
+
+<script src="/loop-sdk.js"></script>
+<script>
+const L = document.getElementById("log");
+const say = (m, cls) => { L.innerHTML += (cls ? `<span class="${cls}">${m}</span>` : m) + "\n";
+                          L.scrollTop = L.scrollHeight; };
+const el = (id) => document.getElementById(id);
+const S = {};   // provider, pubB64, prepared, goodSig, party
+
+// Loop hands back hex or base64 with nothing to say which. Detect by shape.
+const toBytes = (s) => {
+  const t = String(s || "").trim().replace(/^0x/, "");
+  if (/^[0-9a-fA-F]+$/.test(t) && t.length % 2 === 0) {
+    return Uint8Array.from(t.match(/../g).map((h) => parseInt(h, 16)));
+  }
+  return Uint8Array.from(atob(t), (c) => c.charCodeAt(0));
+};
+const toB64 = (u8) => btoa(String.fromCharCode(...u8));
+const post = async (url, body) => {
+  const r = await fetch(url, { method:"POST", headers:{"content-type":"application/json"},
+                               body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || (r.status + " " + url));
+  return j;
+};
+const get = async (url) => {
+  const r = await fetch(url);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || (r.status + " " + url));
+  return j;
+};
+// signMessage's return shape is undocumented; unwrap whatever it is.
+const sigOf = (r) => (typeof r === "string" ? r
+  : r && (r.signature || r.signedMessage || r.result || r.data)) || JSON.stringify(r);
+
+// THE primitive, established by step 3b: hand Loop the decoded bytes as a binary
+// string, not the base64 text. Everything below is this one call in a trench coat.
+const loopSignHash = async (b64hash) =>
+  toB64(toBytes(sigOf(await S.provider.signMessage(String.fromCharCode(...toBytes(b64hash))))));
+
+// prepare -> loop signs -> execute. The server builds and submits; it never holds a key.
+async function signAndExecute(commands, disclosedContracts, tag) {
+  const prep = await post("/api/ext/prepare", { party: S.party, commands, disclosedContracts, tag });
+  say("  prepared, hash " + String(prep.preparedTransactionHash).slice(0, 28) + "…", "dim");
+  say("  approve in the loop window…", "dim");
+  const signature = await loopSignHash(prep.preparedTransactionHash);
+  return post("/api/ext/execute", {
+    party: S.party, commandId: prep.commandId,
+    preparedTransaction: prep.preparedTransaction,
+    hashingSchemeVersion: prep.hashingSchemeVersion,
+    signature, signedBy: S.prepared.fingerprint,
+  });
+}
+
+el("b1").onclick = () => {
+  const loop = window.LoopSDKBundle.loop;
+  say("connecting to loop (devnet)…", "dim");
+  loop.init({
+    appName: "Umbra", network: "devnet",
+    onAccept: (provider) => {
+      S.provider = provider;
+      say("connected", "ok");
+      say("  party_id   " + provider.party_id);
+      say("  public_key " + provider.public_key);
+      try {
+        const raw = toBytes(provider.public_key);
+        say("  key bytes  " + raw.length + (raw.length === 32 ? " ✓" : " ✗ expected 32"),
+            raw.length === 32 ? "ok" : "bad");
+        S.pubB64 = toB64(raw);
+        el("b2").disabled = false;
+      } catch (e) { say("  cannot decode public key: " + e.message, "bad"); }
+    },
+    onReject: () => say("loop rejected the connection", "bad"),
+  });
+  loop.connect().catch((e) => say("connect failed: " + e.message, "bad"));
+};
+
+el("b2").onclick = async () => {
+  try {
+    say("\nasking our validator to draft a party for this key…", "dim");
+    S.prepared = await post("/api/ext/onboard/prepare", { publicKey: S.pubB64 });
+    say("drafted (nothing on-ledger yet — a draft is inert without a signature)", "ok");
+    say("  partyId   " + S.prepared.partyId);
+    say("  multiHash " + S.prepared.multiHash);
+    el("b3").disabled = false; el("b4").disabled = false;
+
+    // The party hint is a timestamp, so re-running this mints a SECOND party for the
+    // same key -- and any tokens already sent are sitting on the FIRST one. The
+    // fingerprint is what actually identifies the key, so match on that and adopt.
+    const known = (await get("/api/ext/wallets")).wallets || [];
+    const mine = known.find((w) => w.fingerprint === S.prepared.fingerprint);
+    if (mine) {
+      S.party = mine.partyId;
+      say("\nthis key already owns a party here — adopting it rather than making another", "ok");
+      say("  " + S.party);
+      say("  onboarded " + mine.onboardedAt + ", key held by server: " + mine.privateKeyHeldByServer, "dim");
+      say("steps 3 and 4 are already done for this key. go straight to 5, 6 or 7.", "ok");
+      el("b6").disabled = false; el("b7").disabled = false;
+      el("b8").disabled = false; el("b9").disabled = false;
+      // Hard-disable rather than merely advise. Running 4 anyway allocates the fresh
+      // draft and repoints everything at an EMPTY party, while any tokens already
+      // sent sit on the adopted one -- which reads as "step 5 is broken".
+      el("b3").disabled = true; el("b4").disabled = true; el("b5").disabled = true;
+      say("(3a/3b/4 disabled — re-running them would mint a duplicate party and strand your tokens)", "dim");
+    }
+  } catch (e) { say("prepare failed: " + e.message, "bad"); }
+};
+
+async function trySign(label, message) {
+  try {
+    say("\n" + label + " — approve in the loop window…", "dim");
+    const sig = sigOf(await S.provider.signMessage(message));
+    say("  signature " + String(sig).slice(0, 40) + "…");
+    const v = await post("/api/ext/probe/verify", {
+      publicKey: S.pubB64, multiHash: S.prepared.multiHash, signature: sig });
+    for (const t of v.tried) {
+      say("   " + (t.verified ? "✓" : "·") + " " + t.name.padEnd(16) + t.why,
+          t.verified ? (t.usable ? "ok" : "warn") : "dim");
+    }
+    say(v.verdict, v.usable ? "ok" : (v.match ? "warn" : "bad"));
+    if (v.usable) { S.goodSig = sig; el("b5").disabled = false;
+                    say("\n→ the route is OPEN. click 4 to actually create the party.", "ok"); }
+  } catch (e) { say("  " + label + " failed: " + e.message, "bad"); }
+}
+
+el("b3").onclick = () => trySign("3a · signing the base64 string", S.prepared.multiHash);
+el("b4").onclick = () => trySign("3b · signing the raw hash bytes",
+                                 String.fromCharCode(...toBytes(S.prepared.multiHash)));
+
+el("b5").onclick = async () => {
+  el("b5").disabled = true;   // allocation is in flight the moment it is clicked once
+  try {
+    say("\nallocating the party on our validator…", "dim");
+    const r = await post("/api/ext/onboard/confirm", {
+      partyId: S.prepared.partyId, fingerprint: S.prepared.fingerprint,
+      topologyTransactions: S.prepared.topologyTransactions,
+      multiHashSignature: toB64(toBytes(S.goodSig)),
+    });
+    S.party = r.party.partyId;
+    say("PARTY LIVE — hosted on our validator, key held by loop", "ok");
+    say("  " + S.party);
+    say("  privateKeyHeldByServer: " + r.privateKeyHeldByServer, "ok");
+    say("\nLoop vetted nothing and submitted nothing. That is the whole point.", "ok");
+    el("b6").disabled = false; el("b7").disabled = false;
+  } catch (e) {
+    say("confirm failed: " + e.message, "bad");
+    // The party may exist anyway: a double click races itself, and the loser reports
+    // ALREADY_IN_FLIGHT while the winner succeeds. Adopt it rather than start over.
+    S.party = S.prepared.partyId;
+    el("b6").disabled = false; el("b7").disabled = false;
+    say("(continuing with " + S.party.slice(0, 30) + "… — see whether PARTY LIVE appeared above)", "dim");
+  }
+};
+
+// Onboarding signs a TOPOLOGY multiHash. Trading signs a TRANSACTION hash. Same
+// primitive, different payload -- and until this runs, that is only an assumption.
+el("b6").onclick = async () => {
+  try {
+    say("\nlooking for a pending transfer…", "dim");
+    const p = await get("/api/real/pending?role=" + encodeURIComponent(S.party));
+    const offer = (p.offers || p.pending || [])[0];
+    if (!offer) return say("no pending transfer for this party — send one first", "warn");
+    say("  offer " + offer.amount + " " + offer.instrument + " " +
+        String(offer.contractId).slice(0, 26) + "…");
+    const built = await post("/api/real/pending/" + offer.contractId + "/accept?build=1",
+                             { role: S.party, build: true });
+    say("  built accept: commands=" + built.commands.length +
+        " disclosed=" + (built.disclosedContracts || []).length, "dim");
+    await signAndExecute(built.commands, built.disclosedContracts, "loopaccept");
+    say("ACCEPTED — loop signed a TRANSACTION hash, not just a topology one", "ok");
+    await new Promise((r) => setTimeout(r, 4000));
+    const h = await get("/api/real/holdings?role=" + encodeURIComponent(S.party));
+    say("  holdings now: " + JSON.stringify(h.instruments || []), "ok");
+  } catch (e) { say("accept failed: " + e.message, "bad"); }
+};
+
+el("b7").onclick = async () => {
+  try {
+    say("\nbuilding an RFQ for the loop party…", "dim");
+    const b = await post("/api/swap/rfq", {
+      requester: S.party, offerAsset: "cETH", offerAmount: "0.005",
+      wantAsset: "cBTC", invited: ["dealer1", "dealer2"], ttlMins: 15,
+    });
+    if (!b.build) return say("server did not return a build — got: " +
+                             JSON.stringify(b).slice(0, 200), "warn");
+    say("  expires " + b.expiresAt + ", " + b.invited.length + " dealers invited", "dim");
+    await signAndExecute(b.commands, undefined, "looprfq");
+    await new Promise((r) => setTimeout(r, 3000));
+    const list = await get("/api/swap/rfqs");
+    say("RFQ OPEN — a loop user just made a request on umbra", "ok");
+    say("  rfqs now visible to the venue: " + (list.rfqs || []).length, "ok");
+    el("b8").disabled = false;
+  } catch (e) { say("rfq failed: " + e.message, "bad"); }
+};
+
+// ---------------------------------------------------------------------------
+// The rest of the trade. Only the LOOP party's legs pause for a signature; the two
+// dealers are operator-held roles, so the server signs those itself. Every Loop
+// approval below is the same raw-bytes primitive from step 3b -- nothing new is
+// being asked of the wallet, only asked more times.
+// ---------------------------------------------------------------------------
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const mine = (x) => x && x.payload && x.payload.requester === S.party;
+
+async function until(label, fn, tries = 20) {
+  for (let i = 0; i < tries; i++) {
+    const v = await fn().catch(() => null);
+    if (v) return v;
+    await sleep(2500);
+  }
+  throw new Error("timed out waiting for " + label);
+}
+
+el("b8").onclick = async () => {
+  el("b8").disabled = true;
+  try {
+    // 1. the RFQ this party opened, newest first
+    const rfqs = (await get("/api/swap/rfqs?role=" + encodeURIComponent(S.party))).rfqs || [];
+    const rfq = rfqs.filter(mine).pop();
+    if (!rfq) throw new Error("no open RFQ for this party — run step 6 first");
+    say("\nrfq " + rfq.contractId.slice(0, 26) + "…", "dim");
+
+    // 2. invite both dealers -- InviteDealer is `controller requester`, so LOOP signs
+    for (const d of ["dealer1", "dealer2"]) {
+      const b = await post("/api/swap/rfqs/" + rfq.contractId + "/invite",
+                           { dealer: d, requester: S.party });
+      if (b.build) { say("inviting " + d + " (loop signs)", "dim");
+                     await signAndExecute(b.commands, [], "loopinv"); }
+      else say("invited " + d + " server-side", "dim");
+      await sleep(2500);
+    }
+
+    // 3. dealers quote. These are operator-held parties, so no wallet is involved.
+    for (const d of ["dealer1", "dealer2"]) {
+      const invs = (await get("/api/swap/invitations?role=" + d)).invitations || [];
+      const inv = invs.filter((x) => x.payload && x.payload.rfqCid === rfq.contractId).pop()
+               || invs.pop();
+      if (!inv) { say("  " + d + " sees no invitation yet", "warn"); continue; }
+      const price = d === "dealer1" ? "0.00012" : "0.000125";
+      await post("/api/swap/invitations/" + inv.contractId + "/quote", { dealer: d, price });
+      say("  " + d + " quoted " + price + " cBTC", "dim");
+    }
+
+    // 4. accept the best quote -- `controller requester`, so LOOP signs
+    const quotes = await until("quotes", async () => {
+      const q = (await get("/api/swap/quotes?role=" + encodeURIComponent(S.party))).quotes || [];
+      const forMe = q.filter((x) => x.payload && x.payload.rfqCid === rfq.contractId);
+      return forMe.length ? forMe : null;
+    });
+    // Selling cETH for cBTC: the best quote is the one paying the MOST cBTC.
+    const best = quotes.sort((a, b) => Number(b.payload.price) - Number(a.payload.price))[0];
+    say("\n" + quotes.length + " quotes in — best " + best.payload.price + " cBTC", "ok");
+    const acc = await post("/api/swap/quotes/" + best.contractId + "/accept", { requester: S.party });
+    if (acc.build) { say("accepting (loop signs)", "dim");
+                     await signAndExecute(acc.commands, acc.disclosedContracts, "loopacc"); }
+
+    await settleRounds();
+  } catch (e) { say("trade failed: " + e.message, "bad"); el("b8").disabled = false; }
+};
+
+// Settlement is its own function because it is the part worth RESUMING. Re-running the
+// whole of step 7 would re-invite dealers on an RFQ that already has quotes; a run that
+// stops mid-settlement (a declined popup, a closed window) only needs these rounds again.
+async function settleRounds() {
+  {
+    say("\n--- settling ---", "dim");
+    const prop = await until("proposal", async () => {
+      const p = (await get("/api/swap/proposals?role=" + encodeURIComponent(S.party))).proposals || [];
+      return p.filter(mine).pop();
+    });
+    say("proposal " + prop.contractId.slice(0, 26) + "…", "dim");
+
+    for (let round = 1; round <= 8; round++) {
+      const r = await fetch("/api/swap/proposals/" + prop.contractId + "/settle-real",
+                            { method: "POST", headers: { "content-type": "application/json" },
+                              body: "{}" });
+      const body = await r.json().catch(() => ({}));
+      say("round " + round + " · HTTP " + r.status, "dim");
+      (body.steps || []).forEach((s) => say("   - " + s, "dim"));
+
+      if (r.status === 202 && body.awaiting) {
+        const a = body.awaiting;
+        const isMine = a.party === S.party;
+        say("   awaiting " + a.step + " from " + (isMine ? "THE LOOP PARTY" : String(a.party).slice(0, 22) + "…"),
+            isMine ? "warn" : "dim");
+        if (!isMine) { say("   that leg is not loop's and the server did not self-sign it — stopping", "bad"); break; }
+        if (a.step === "AllocateLeg") {
+          const h = await get("/api/real/holdings?role=" + encodeURIComponent(S.party));
+          const pick = (h.raw || []).filter((x) => x.id === a.allocate.instrument && !x.lock &&
+                                            Number(x.amount) >= Number(a.allocate.amount))
+                                    .sort((x, y) => Number(x.amount) - Number(y.amount))[0];
+          if (!pick) throw new Error("loop party has no unlocked " + a.allocate.instrument +
+                                     " >= " + a.allocate.amount);
+          const ab = await post("/api/real/allocate?build=1", {
+            build: true, senderRole: S.party, receiver: a.allocate.receiver,
+            admin: a.allocate.admin, id: a.allocate.instrument, amount: a.allocate.amount,
+            holdingCids: [pick.contractId], settleId: a.allocate.settlementRef,
+            legId: a.legId, registry: a.allocate.registry });
+          await signAndExecute(ab.commands, ab.disclosedContracts, "loopalloc");
+          say("   loop allocated the " + a.legId + " leg", "ok");
+        } else {
+          await signAndExecute(a.commands, [], "loopsettle");
+          say("   loop signed " + a.step, "ok");
+        }
+        await sleep(5000);
+        continue;
+      }
+
+      // ProposeRealSwap is consuming: once signed, the proposal is gone and the trade
+      // lives as a RealSwapPending awaiting the dealer, then as a settlement.
+      if (r.status === 404 && /proposal not found/i.test(String(body.error || ""))) {
+        say("   proposal consumed — chasing the settlement", "dim");
+        let setl = ((await get("/api/swap/settlements?role=" + encodeURIComponent(S.party)))
+                     .settlements || []).filter(mine).pop();
+        if (!setl) {
+          const pend = ((await get("/api/swap/pending-real?role=" + encodeURIComponent(S.party)))
+                         .pending || []).filter(mine).pop();
+          if (!pend) { say("   nothing pending and nothing settled", "warn"); break; }
+          const ab = await post("/api/swap/pending/" + pend.contractId + "/accept-real", {});
+          if (ab.build) { say("   dealer accept came back for signing", "dim");
+                          await signAndExecute(ab.commands, [], "loopacceptreal"); }
+          else say("   dealer accepted server-side", "dim");
+          setl = await until("settlement", async () =>
+            ((await get("/api/swap/settlements?role=" + encodeURIComponent(S.party)))
+              .settlements || []).filter(mine).pop());
+        }
+        say("   settlement " + setl.contractId.slice(0, 26) + "…", "dim");
+        // ExecuteRealSwap is `controller operator` -- the one signature meant to be the venue's.
+        const ex = await fetch("/api/swap/settlements/" + setl.contractId + "/execute-real",
+                               { method: "POST", headers: { "content-type": "application/json" },
+                                 body: "{}" });
+        const exBody = await ex.json().catch(() => ({}));
+        say("   EXECUTE " + ex.status + " " + JSON.stringify(exBody).slice(0, 200),
+            ex.status === 200 ? "ok" : "bad");
+        if (ex.status === 200) {
+          await sleep(9000);
+          const h = await get("/api/real/holdings?role=" + encodeURIComponent(S.party));
+          say("\nTRADE SETTLED — loop party holdings now:", "ok");
+          say("  " + JSON.stringify(h.instruments || []), "ok");
+          say("\nEvery requester signature came from loop. The venue never held its key,", "ok");
+          say("and loop never vetted umbra or submitted anything.", "ok");
+        }
+        break;
+      }
+      if (r.status !== 202) { say("   unexpected: " + JSON.stringify(body).slice(0, 240), "bad"); break; }
+    }
+  }
+}
+
+el("b9").onclick = async () => {
+  try { await settleRounds(); }
+  catch (e) { say("settle failed: " + e.message, "bad"); }
+};
+</script>

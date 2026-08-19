@@ -596,6 +596,21 @@ app.post("/api/dealers/register", async (req, res) => {
   try {
     const party = await partyIdFor(req.body.party || req.body.role || "");
     if (!party) return res.status(400).json({ error: "need a party" });
+    // Only parties this venue can actually list. /api/dealers builds the directory from
+    // the onboarded wallets and the two venue roles, so registering anything else wrote
+    // a row that could never be shown -- and answered "you are listed" while doing it.
+    // A wallet party hosted somewhere else is the case that bites: it connects fine,
+    // looks like a party, and is invisible here. Say so instead of accepting silently.
+    const listable = isWalletParty(party) ||
+      (await Promise.all(["dealer1", "dealer2"].map(r => partyIdFor(r).catch(() => null))))
+        .includes(party);
+    if (!listable) {
+      return res.status(400).json({
+        error: "that party is not hosted here, so it cannot appear in the dealer " +
+               "directory. Connect a wallet and onboard a party on this venue first.",
+        party,
+      });
+    }
     const active = req.body.active === undefined ? true : !!req.body.active;
     saveDealerOptIn(party, active);
     res.json({ ok: true, party, listed: active });
@@ -1547,7 +1562,14 @@ app.post("/api/real/send", async (req, res) => {
         sender, receiver, amount,
         instrumentId: { admin, id },
         requestedAt: iso(now),
-        executeBefore: iso(new Date(now.getTime() + 60 * 60000)),
+        // How long the receiver has to accept. This was a hardcoded hour, which is
+        // fine between two parties on our own validator and far too short for anyone
+        // else: a wallet user who has to sort out traffic, provisioning or simply
+        // being asleep loses the transfer and it silently returns to the sender.
+        // A Loop test lost a 5 CC transfer exactly this way, and the wallet had
+        // labelled it "Received" in the meantime.
+        executeBefore: iso(new Date(now.getTime() +
+          Number(b.expiryMins || process.env.UMBRA_TRANSFER_EXPIRY_MINS || 1440) * 60000)),
         inputHoldingCids: holdingCids,
         meta: { values: {} },
       },
@@ -1572,6 +1594,15 @@ app.post("/api/real/send", async (req, res) => {
       } }],
       disclosedContracts: disclosed,
     };
+    // A wallet party sends for ITSELF. Without this branch realSubmit refuses -- rightly,
+    // since no key for it exists here -- and the effect was a one-way door: assets could
+    // arrive and trade but never leave. Non-custody that cannot exit is only half of it.
+    if (req.query.build === "1" || b.build || isWalletParty(sender)) {
+      return res.json({ ok: true, build: true, party: sender,
+        commands: cmd.commands, disclosedContracts: cmd.disclosedContracts,
+        sent: { id, amount, from: sender, to: receiver },
+        note: "sign via /api/ext/prepare + /api/ext/execute; the receiver then accepts" });
+    }
     await realSubmit(cmd, "rsend");
     res.json({ ok: true, sent: { id, amount, from: senderRole, to: receiver },
       note: "receiver must accept via /api/real/pending/:cid/accept", disclosed: disclosed.length });
@@ -3847,6 +3878,12 @@ app.get("/api/market/rate", async (req, res) => {
     res.json({ ok: false, base, quote, mid: null, usd: null, series: [], error: e.message });
   }
 });
+
+// Diagnostic only, and only when UMBRA_PROBE=1: does this wallet sign raw bytes?
+// Wrapped because it is a diagnostic, not a dependency -- a checkout without it, or a
+// broken edit to it, must not stop the venue from starting.
+try { require("./probe_verify.js")(app); }
+catch (e) { console.log("[probe] not mounted:", e.message); }
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () =>

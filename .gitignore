@@ -27,6 +27,10 @@ patch_*.py
 *_patch.py
 backend/.env*
 probe_*.js
+# ...but the signature-encoding verifier is part of the wallet integration, not a
+# throwaway spike: server.js mounts it under UMBRA_PROBE=1 and it documents how the
+# Loop route was established.
+!backend/probe_verify.js
 spike/
 
 # scaffolding + backups (kept locally, never committed)
@@ -42,3 +46,4 @@ backend/package-lock.json
 # straight from disk.
 sdk-build/node_modules/
 sdk-build/package-lock.json
+*.local.js
