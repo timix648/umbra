@@ -5618,6 +5618,16 @@ function App() {
     try { return JSON.parse(sessionStorage.getItem("umbra-wallet") || "null"); } catch { return null; }
   });
 
+  // sessionStorage brings back WHO is signed in, not the wallet CONNECTION. Login is
+  // what normally calls restore(), and a restored session skips Login entirely -- so
+  // after a reload the adapter had no provider. That lost the user's own wallet
+  // address, and worse, left signing broken: a session that looked perfectly live
+  // would throw the moment it tried to sign. Reconnect on mount instead.
+  useEffect(() => {
+    if (!wallet) return;
+    Promise.resolve(WalletLink.restore()).catch(() => {});
+  }, []);
+
   const pick = (r) => {
     try { sessionStorage.setItem("umbra-role", r); sessionStorage.removeItem("umbra-wallet"); } catch {}
     setWallet(null);
