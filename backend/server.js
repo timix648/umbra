@@ -130,11 +130,11 @@ function feeFor(wantSymbol, price) {
 }
 
 // Operator-controlled parties (demo mode). The backend holds CanActAs on these.
+// The venue's own operator-namespaced party. This is NOT the "requester"
+// trading role -- that is an external party created by recFor() and signed for
+// by its own key. This one is the executor the venue acts as on its own behalf.
 const PARTIES = {
   requester: process.env.REQUESTER,
-  dealer1: process.env.DEALER1,
-  dealer2: process.env.DEALER2,
-  public: process.env.OBSERVER,
 };
 
 // ---------------------------------------------------------------------------
@@ -144,7 +144,10 @@ const PARTIES = {
 // cannot forge. `public` (Observer) stays operator-namespaced in both modes:
 // it is a read-only outsider that is never a stakeholder, so it sees nothing.
 // ---------------------------------------------------------------------------
-let SIGNED_MODE = String(process.env.SIGNED_MODE || "false").toLowerCase() === "true";
+// Signed mode is the product: every trading role is an external party holding
+// its own key, and the operator can read but never forge. The old operator-signs-
+// for-everyone demo path has been removed, so this is a constant.
+const SIGNED_MODE = true;
 const SIGNING_ROLES = ["requester", "dealer1", "dealer2"];
 const roleRec = {}; // role -> { partyId, fingerprint, privDer } (in-memory cache)
 
@@ -173,10 +176,9 @@ async function partyIdFor(role) {
   const raw = String(role || "");
   if (raw.includes("::")) return raw;                  // already a party id (incl. wallets)
   const r = raw.toLowerCase();
-  if (r === "public") return PARTIES.public;
   if (SIGNED_MODE && SIGNING_ROLES.includes(r)) return (await recFor(r)).partyId;
   const p = PARTIES[r];
-  if (!p) throw new Error(`unknown role '${role}'. use requester|dealer1|dealer2|public, or a full party id`);
+  if (!p) throw new Error(`unknown role '${role}'. use requester|dealer1|dealer2, or a full party id`);
   return p;
 }
 
@@ -202,7 +204,10 @@ async function act(role, tag, commands) {
     const rec = await recFor(r);
     return prepareSignExecute(rec, commands, tag); // async-accepted ({} on success)
   }
-  return submit(tag, PARTIES[r], commands); // synchronous commit
+  // Every valid trading role is handled above. Anything reaching here is a role
+  // the venue has no key for, and the operator must not submit on its behalf.
+  throw new Error(`no signing route for role '${role}'. use requester|dealer1|dealer2, ` +
+    `or route a wallet party through /api/ext/prepare + /api/ext/execute`);
 }
 
 
@@ -485,7 +490,7 @@ async function actMulti(roles, tag, commands) {
 }
 
 async function activePartyMap() {
-  const out = { public: PARTIES.public };
+  const out = {};
   for (const r of SIGNING_ROLES) out[r] = await partyIdFor(r).catch(() => null);
   return out;
 }
@@ -647,12 +652,11 @@ app.get("/api/dealers", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// body: { signed: true|false }. Turning ON pre-onboards the 3 roles so the
-// first signed trade isn't slow.
+// Pre-onboard the signing roles so the first trade isn't slow. This used to
+// toggle demo mode; that path is gone, so it only warms the keys now.
 app.post("/api/mode", async (req, res) => {
   try {
-    SIGNED_MODE = req.body.signed === true || String(req.body.signed).toLowerCase() === "true";
-    if (SIGNED_MODE) for (const r of SIGNING_ROLES) await recFor(r);
+    for (const r of SIGNING_ROLES) await recFor(r);
     res.json({ ok: true, signedMode: SIGNED_MODE, parties: await activePartyMap() });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -1097,12 +1101,11 @@ const idSetSwap = async (party, tmpl) =>
 app.post("/api/swap/registry/seed", async (req, res) => {
   try {
     const operator = await partyIdFor("requester"); // venue/operator-namespaced
-    const participants = [
-      await partyIdFor("requester"),
-      await partyIdFor("dealer1"),
-      await partyIdFor("dealer2"),
-      await partyIdFor("public"),
-    ];
+    const participants = await Promise.all([
+      partyIdFor("requester"),
+      partyIdFor("dealer1"),
+      partyIdFor("dealer2"),
+    ]);
     const assets = [];
     for (const a of (req.body.assets || [])) assets.push(await resolveAsset(a));
 
