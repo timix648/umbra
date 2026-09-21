@@ -25,3 +25,20 @@ export {
   CANTON_NETWORKS,
   CIP0103_METHODS,
 } from "@partylayer/sdk";
+
+// Two adapters PartyLayer publishes separately rather than bundling into the
+// SDK, so neither arrives with the export list above.
+//
+// WalletConnect is the wider of the two: it is a transport, not a single
+// wallet, so it reaches every mobile wallet that speaks the protocol rather
+// than one vendor's extension. We already carried @walletconnect/sign-client
+// as a build dependency -- this is the adapter that actually uses it.
+export { WalletConnectAdapter } from "@partylayer/adapter-walletconnect";
+
+// OneSwap ships its own CIP-0103 adapter rather than living in PartyLayer's
+// registry. It is a Canton AMM, so its users already hold the assets a block
+// trade needs.
+export {
+  OneSwapProviderAdapter,
+  createOneSwapProviderAdapter,
+} from "@oneswap/wallet-cip0103-adapter";

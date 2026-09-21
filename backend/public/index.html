@@ -1653,11 +1653,28 @@ const WalletLink = (() => {
     const S = typeof window !== "undefined" && window.PartyLayerSDK;
     if (!S || !S.createPartyLayer) return null;
     try {
+      // An adapter that throws on construction takes the whole picker down with
+      // it, not just its own wallet -- which is why Bron was dropped rather than
+      // guarded. So the list is assembled, not hardcoded: a wallet whose adapter
+      // is absent from the bundle or whose config we lack costs that one wallet.
+      // Bron still needs OAuth2 and WalletConnect needs a project id, so both
+      // stay out until those exist.
+      const WC_PROJECT_ID = (window.UMBRA_WC_PROJECT_ID || "").trim();
+      const optional = (a) => (a ? [a] : []);
+      const adapterList = [
+        S.LoopAdapter, S.ConsoleAdapter, S.Cantor8Adapter, S.NightlyAdapter, S.SendAdapter,
+        // OneSwap is a Canton AMM, so its users already hold the assets a block
+        // trade needs. Its adapter is a plain CIP-0103 provider and needs no config.
+        ...optional(S.OneSwapProviderAdapter),
+        // WalletConnect is a transport rather than one vendor's wallet, so it
+        // reaches every mobile wallet that speaks the protocol at once.
+        ...(WC_PROJECT_ID ? optional(S.WalletConnectAdapter) : []),
+      ].filter(Boolean);
+
       plClient = S.createPartyLayer({
         network: "devnet",
         app: { name: "Umbra", origin: location.origin },
-        // BronAdapter is omitted: it throws on construction without config we lack.
-        adapters: [S.LoopAdapter, S.ConsoleAdapter, S.Cantor8Adapter, S.NightlyAdapter, S.SendAdapter],
+        adapters: adapterList,
         discovery: { announce: true },
         logLevel: "warn",
       });
