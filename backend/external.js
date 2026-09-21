@@ -203,13 +203,28 @@ async function onboardWalletConfirm(o) {
       signedBy: o.fingerprint, signingAlgorithmSpec: "SIGNING_ALGORITHM_SPEC_ED25519",
     }],
   });
-  // Let the operator READ this party so the UI can display it. Read-only: it confers
-  // no ability to transact, which still requires the wallet's signature.
+  // CanReadAs lets the UI display the party. CanActAs is what lets this process
+  // SUBMIT a transaction the wallet has already signed: /v2/interactive-submission/
+  // execute refuses with 403 for a party the submitting user cannot act as, no matter
+  // who signed. Granting CanReadAs alone means every wallet user 403s on its first
+  // trade.
+  //
+  // Granting CanActAs on an EXTERNAL party is not a custody concession, and it was
+  // worth proving rather than assuming. Executing requires partySignatures verified
+  // against the party's registered key; with CanActAs held and the key absent, both a
+  // random signature and a valid signature from a different wallet's key are refused
+  // with FAILED_TO_EXECUTE_TRANSACTION. Custody lives in the signature, not in
+  // withholding the grant. (A LOCAL party is the opposite case -- there the
+  // participant signs, so CanActAs really is control. External parties are why this
+  // is safe.)
   try {
     await jpost(`/v2/users/${USER_ID}/rights`, {
-      userId: USER_ID, rights: [{ kind: { CanReadAs: { value: { party: o.partyId } } } }],
+      userId: USER_ID, rights: [
+        { kind: { CanActAs: { value: { party: o.partyId } } } },
+        { kind: { CanReadAs: { value: { party: o.partyId } } } },
+      ],
     });
-  } catch (e) { console.log("[wallet] readAs grant skipped:", e.message); }
+  } catch (e) { console.log("[wallet] rights grant skipped:", e.message); }
 
   const s = loadWallets();
   s[o.partyId] = { partyId: o.partyId, fingerprint: o.fingerprint,
