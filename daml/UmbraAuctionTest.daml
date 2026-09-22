@@ -1,0 +1,168 @@
+module UmbraAuctionTest where
+
+import UmbraSwap
+import Daml.Script
+import DA.Time (addRelTime, minutes)
+import DA.Assert ((===))
+
+-- ============================================================================
+-- ONE REQUEST, ONE WINNER.
+--
+-- A blind auction whose ledger cannot enforce a single winner is not an
+-- auction, it is a convention. Before these guards, AcceptSwapQuote consumed
+-- only the quote it was called on: every rival quote for the same request
+-- stayed live and independently acceptable, so a buyer could award the same
+-- block twice and two dealers could each commit collateral for a trade only one
+-- of them should have won. A disabled button in the UI is not a guarantee.
+--
+-- The mechanism is deliberately the one the model already used: every quote
+-- fetches the request it answers, so archiving the request on award closes the
+-- auction for everyone at once.
+-- ============================================================================
+
+data A = A
+  with
+    operator  : Party
+    requester : Party
+    dealerA   : Party
+    dealerB   : Party
+    cbtc      : AssetId
+    cc        : AssetId
+
+setupA : Script A
+setupA = do
+  operator  <- allocateParty "operator"
+  requester <- allocateParty "requester"
+  dealerA   <- allocateParty "dealerA"
+  dealerB   <- allocateParty "dealerB"
+  btcIssuer <- allocateParty "BitSafe"
+  ccAdmin   <- allocateParty "CantonCoin"
+  pure A with
+    operator; requester; dealerA; dealerB
+    cbtc = AssetId with admin = btcIssuer, symbol = "cBTC"
+    cc   = AssetId with admin = ccAdmin,   symbol = "CC"
+
+-- A request both dealers have priced. Returns the two quotes.
+twoQuotes : A -> Script (ContractId SwapQuote, ContractId SwapQuote)
+twoQuotes a = do
+  now <- getTime
+  rfq <- submit a.requester do
+    createCmd SwapRfq with
+      requester = a.requester; operator = a.operator
+      offerAsset = a.cbtc; offerAmount = 2.0
+      wantAsset = a.cc
+      invited = [a.dealerA, a.dealerB]
+      expiresAt = addRelTime now (minutes 30)
+  invA <- submit a.requester do exerciseCmd rfq InviteDealer with dealer = a.dealerA
+  invB <- submit a.requester do exerciseCmd rfq InviteDealer with dealer = a.dealerB
+  qA <- submit a.dealerA do
+    exerciseCmd invA SubmitSwapQuote with
+      price = 1000.0; validUntil = addRelTime now (minutes 20)
+  qB <- submit a.dealerB do
+    exerciseCmd invB SubmitSwapQuote with
+      price = 990.0;  validUntil = addRelTime now (minutes 20)
+  pure (qA, qB)
+
+-- | The defect. Two dealers price the same block; the buyer accepts one; the
+-- second acceptance must fail. It used to succeed.
+onlyOneQuoteCanWin : Script ()
+onlyOneQuoteCanWin = do
+  a <- setupA
+  (qA, qB) <- twoQuotes a
+
+  _ <- submit a.requester do
+    exerciseCmd qA AcceptSwapQuote with
+      venueFeeParty = None; venueFeeAmount = None
+
+  -- the losing quote is still on the ledger and must be inert
+  submitMustFail a.requester do
+    exerciseCmd qB AcceptSwapQuote with
+      venueFeeParty = None; venueFeeAmount = None
+
+  -- exactly one proposal exists, and it is dealerA's
+  props <- query @SwapProposal a.requester
+  case props of
+    [(_, p)] -> do
+      p.dealer === a.dealerA
+      p.price === 1000.0
+    _ -> assertFail ("expected exactly one proposal, got " <> show (length props))
+
+-- | The award is recorded, not merely implied by the request having vanished.
+-- An auditor asking "who won, at what price, for how much" should not have to
+-- infer it from an absence.
+theAwardNamesTheWinner : Script ()
+theAwardNamesTheWinner = do
+  a <- setupA
+  (_, qB) <- twoQuotes a
+
+  _ <- submit a.requester do
+    exerciseCmd qB AcceptSwapQuote with
+      venueFeeParty = None; venueFeeAmount = None
+
+  awards <- query @RfqAward a.requester
+  case awards of
+    [(_, w)] -> do
+      w.dealer === a.dealerB
+      w.price === 990.0
+      w.offerAmount === 2.0
+      -- today a request is filled whole, by one dealer
+      w.filledAmount === w.offerAmount
+    _ -> assertFail ("expected exactly one award, got " <> show (length awards))
+
+  -- the winner can see it: a dealer should know it won without being told
+  dealerSide <- query @RfqAward a.dealerB
+  length dealerSide === 1
+  -- the loser cannot
+  loserSide <- query @RfqAward a.dealerA
+  length loserSide === 0
+
+-- | Awarding closes the auction for everyone, not just for the winner. A dealer
+-- who had not yet priced cannot price it afterwards, because the request it
+-- would answer is gone.
+awardingClosesTheAuction : Script ()
+awardingClosesTheAuction = do
+  a <- setupA
+  now <- getTime
+  rfq <- submit a.requester do
+    createCmd SwapRfq with
+      requester = a.requester; operator = a.operator
+      offerAsset = a.cbtc; offerAmount = 2.0
+      wantAsset = a.cc
+      invited = [a.dealerA, a.dealerB]
+      expiresAt = addRelTime now (minutes 30)
+  invA <- submit a.requester do exerciseCmd rfq InviteDealer with dealer = a.dealerA
+  invB <- submit a.requester do exerciseCmd rfq InviteDealer with dealer = a.dealerB
+
+  -- only A has priced it so far
+  qA <- submit a.dealerA do
+    exerciseCmd invA SubmitSwapQuote with
+      price = 1000.0; validUntil = addRelTime now (minutes 20)
+  _ <- submit a.requester do
+    exerciseCmd qA AcceptSwapQuote with
+      venueFeeParty = None; venueFeeAmount = None
+
+  -- B turns up late with a better price; the auction is over
+  submitMustFail a.dealerB do
+    exerciseCmd invB SubmitSwapQuote with
+      price = 900.0; validUntil = addRelTime now (minutes 20)
+
+  rfqs <- query @SwapRfq a.requester
+  length rfqs === 0
+
+-- | The award does not let the buyer double-spend the same request by
+-- re-accepting the WINNING quote either. AcceptSwapQuote is consuming, so this
+-- is really a check that the two mechanisms agree.
+theWinningQuoteCannotBeAcceptedTwice : Script ()
+theWinningQuoteCannotBeAcceptedTwice = do
+  a <- setupA
+  (qA, _) <- twoQuotes a
+
+  _ <- submit a.requester do
+    exerciseCmd qA AcceptSwapQuote with
+      venueFeeParty = None; venueFeeAmount = None
+  submitMustFail a.requester do
+    exerciseCmd qA AcceptSwapQuote with
+      venueFeeParty = None; venueFeeAmount = None
+
+  awards <- query @RfqAward a.requester
+  length awards === 1

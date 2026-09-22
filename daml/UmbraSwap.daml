@@ -304,6 +304,34 @@ template SwapInvitation
       do pure ()
 
 
+-- Which dealer won a request, and on what terms.
+--
+-- It exists because nothing previously recorded an award at all: AcceptSwapQuote
+-- consumed the quote it was called on and left every OTHER quote for the same
+-- request independently acceptable, so a buyer could award the same block twice
+-- and two dealers could each commit collateral for a trade only one should have.
+--
+-- THIS IS ALSO WHERE PARTIAL FILLS WILL LIVE. Today filledAmount always equals
+-- the full offerAmount and a request is filled by exactly one dealer, because a
+-- block larger than any single dealer can cover has nowhere to go. When that
+-- changes, the remaining size belongs here and an award becomes a sequence
+-- rather than a single event -- which is why the amount is recorded explicitly
+-- rather than implied by the request being gone.
+template RfqAward
+  with
+    requester    : Party
+    operator     : Party
+    dealer       : Party        -- the winner
+    offerAsset   : AssetId
+    offerAmount  : Decimal      -- the size that was requested
+    filledAmount : Decimal      -- awarded to this dealer; == offerAmount today
+    wantAsset    : AssetId
+    price        : Decimal
+    awardedAt    : Time
+  where
+    signatory requester
+    observer operator, dealer
+
 -- A dealer's private quote. Signed by the dealer, visible only to the
 -- requester -- the ledger itself withholds it from rival dealers (P1).
 template SwapQuote
@@ -341,6 +369,26 @@ template SwapQuote
         -- fails once CancelRfq has archived it.
         _ <- fetch rfqCid
         assertMsg "this quote is no longer firm" (now < validUntil)
+
+        -- ONE WINNER, AND THE LEDGER ENFORCES IT.
+        --
+        -- Archiving the request is the mechanism: every quote answering it
+        -- fetches it first (the same guard that makes a cancelled request
+        -- unquotable), so once the request is gone no second acceptance can
+        -- succeed. Before this, accepting a quote consumed only that quote and
+        -- every rival quote stayed live and acceptable.
+        --
+        -- A partial-fill venue would replace the request with a smaller one here
+        -- instead of archiving it; the award below already carries the amount so
+        -- that change does not need a new record.
+        archive rfqCid
+        _ <- create RfqAward with
+          requester; operator; dealer
+          offerAsset; offerAmount
+          filledAmount = offerAmount
+          wantAsset; price
+          awardedAt = now
+
         create SwapProposal with
           requester; operator; dealer
           offerAsset; offerAmount
