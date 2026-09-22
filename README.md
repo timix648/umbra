@@ -271,6 +271,30 @@ executing party discloses the counterparty's allocation from the counterparty's 
 so the single-party prepare can reference it. This is the wall every wallet-signed CIP-56 DvP
 hits; Umbra is through it.
 
+### Governance — `daml/UmbraGovernance.daml`
+
+Every privileged choice above is `controller operator`. One key lists assets, delists them,
+decides who may see the registry, and fires the execution path of a settled trade — so that key
+can also hold a settled trade hostage or quietly cut a member off. `UmbraGovernance` wraps each
+of those as a proposal implementing BitSafe's `GovernableAction` interface, so a threshold of
+operators decides instead of one key.
+
+| Template | Governs |
+|---|---|
+| `CreateRegistryProposal` | Bringing the registry into existence, already governed |
+| `ListAssetProposal` / `DelistAssetProposal` | Making a pair tradeable, or removing it |
+| `SetParticipantsProposal` | Who may see the venue at all |
+| `ExecuteRealSwapProposal` | **Settlement itself** — both legs and the fee, one transaction |
+
+A proposal is inert: it is `signatory proposer`, and `GovernableAction_Execute` is
+`controller governanceParty`, so the proposer who signed it cannot execute it. Order flow is
+deliberately **not** governed — a threshold in front of a quote would make the venue unusable and
+would show every operator the order flow the privacy claim says they must not see.
+
+Seven `daml test` scripts in `daml/UmbraGovernanceTest.daml` prove it, starting with the negative
+case. Full reference, including how to adapt the pattern to another application:
+**[docs/GOVERNANCE.md](docs/GOVERNANCE.md)**.
+
 ### Backend
 
 The venue speaks the Canton JSON Ledger API v2. The blind auction runs over `/api/swap/*`; the
@@ -347,8 +371,8 @@ SIGNED_MODE=false
 
 ```bash
 export PATH="$HOME/.daml/bin:$PATH"
-daml build          # -> .daml/dist/umbra-v8-0.1.1.dar
-daml test           # 8 swap proofs + the legacy suites
+daml build          # -> .daml/dist/umbra-v9-0.5.2.dar
+daml test           # 8 swap proofs, 7 governance proofs, and the legacy suites
 ```
 
 ### 3. Deploy the package
@@ -360,7 +384,7 @@ matched by package-id). Upload the DAR to the participant over the JSON API:
 curl -X POST "$LEDGER_API/v2/packages" \
   -H "Content-Type: application/octet-stream" \
   -H "Authorization: Bearer $TOKEN" \
-  --data-binary @.daml/dist/umbra-v8-0.1.1.dar
+  --data-binary @.daml/dist/umbra-v9-0.5.2.dar
 ```
 
 ### 4. Run
