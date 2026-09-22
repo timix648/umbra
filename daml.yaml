@@ -33,7 +33,12 @@ init-script: UmbraTest:umbraDemo
 # was venue authorization state living in a JSON file beside the server;
 # DealerRegistration is signed by the dealer (so nobody is enlisted, and nobody
 # is held) and DealerSuspension by the venue, reached through governance.
-version: 0.6.0
+# 0.7.0: ExecuteRealSwap now validates that the allocations ARE this trade
+# (sender, receiver, amount, asset, and the fee leg too) and refuses an
+# incomplete fee rather than silently skipping it; and both execution paths
+# emit a SettlementReceipt, because AbortSwap also archives the settlement so
+# "was archived" could never mean "was executed".
+version: 0.7.0
 dependencies:
   - daml-prim
   - daml-stdlib

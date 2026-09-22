@@ -2178,30 +2178,31 @@ app.get("/api/swap/history", async (req, res) => {
   try {
     const role = req.query.role || "requester";
     const party = await partyIdFor(role);
-    const [settlements, rfqs] = await Promise.all([
+    const [settlements, rfqs, receipts] = await Promise.all([
       queryHistory(party, "UmbraSwap:SwapSettlement").catch(() => []),
-      queryHistory(party, "UmbraSwap:SwapRfq").catch(() => [])
+      queryHistory(party, "UmbraSwap:SwapRfq").catch(() => []),
+      queryHistory(party, "UmbraSwap:SettlementReceipt").catch(() => [])
     ]);
-    // A SwapSettlement only represents a COMPLETED trade if it was consumed by
-    // ExecuteSwap / ExecuteRealSwap (both consuming). A settlement that was created but
-    // never executed (swap failed -> rolled back) stays ACTIVE and must NOT appear in
-    // "Your book" as a completed trade. The archive events ride along in the same
-    // updates stream, so collect them here -- no extra ledger query.
-    const _archived = new Set();
-    for (const it of (settlements || [])) {
-      const _tx = it && it.update && it.update.Transaction && it.update.Transaction.value;
-      for (const ev of ((_tx && _tx.events) || [])) {
-        const ae = ev && ev.ArchivedEvent;
-        if (ae && ae.contractId) _archived.add(ae.contractId);
-      }
-    }
+    // A trade is COMPLETED only if it left a SettlementReceipt, which the two
+    // execution choices create in the same transaction as the transfers.
+    //
+    // This used to classify by "was the settlement archived". That is wrong:
+    // AbortSwap is ALSO consuming, so an aborted trade archived its settlement
+    // and appeared in the book as executed. An archive event cannot say which
+    // choice produced it. A receipt can, because nothing else creates one.
     const _allSettlements = flattenUpdates(settlements);
-    const _done = _allSettlements.filter(x => _archived.has(x.contractId));
+    const _receipts = flattenUpdates(receipts);
+    const _done = _receipts;
     const _showAll = String(req.query.all || "") === "1";
+    // An aborted trade is a real event and belongs in the record -- it is just
+    // not a completed one. Reported separately rather than silently dropped.
+    const _aborted = Math.max(0, _allSettlements.length - _receipts.length);
     res.json({ ok: true, role,
       settlements: _showAll ? _allSettlements : _done,
       settlementsCreated: _allSettlements.length,
-      settlementsExecuted: _done.length,
+      settlementsExecuted: _receipts.length,
+      settlementsNotExecuted: _aborted,
+      receipts: _receipts,
       rfqs: flattenUpdates(rfqs) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

@@ -1,0 +1,301 @@
+module UmbraSettlementGuardTest where
+
+import UmbraSwap
+import Splice.Api.Token.AllocationV1
+import Splice.Api.Token.MetadataV1
+import Daml.Script
+import DA.Assert ((===))
+
+-- ============================================================================
+-- ExecuteRealSwap is where value moves. These are the hostile inputs.
+--
+-- Two defects motivated this file, both found by review rather than by tests,
+-- which is the point: the previous suite proved the HAPPY path settled and
+-- never asked what a malformed command would do.
+--
+--   1. A fee that was agreed could be silently skipped. The guard checked that
+--      a fee ALLOCATION existed, but execution required the allocation AND its
+--      choice-context. Supply the id, omit the context: guard passes, fee never
+--      moves, trade settles anyway.
+--
+--   2. Nothing checked that the allocations WERE this trade. Atomicity
+--      guarantees the chosen transfers happen together; it says nothing about
+--      whether they are the agreed terms. Two allocations of the right shape and
+--      the wrong size, direction, owner or asset executed just as faithfully.
+--
+-- Every test below is a command that used to succeed, or that must never start
+-- succeeding.
+--
+-- NOTE the readAs on every exercise. In production the backend supplies the
+-- counterparties' holdings as DISCLOSED CONTRACTS; in Script, readAs is the
+-- equivalent. It is not decoration: without it the operator cannot see the
+-- holdings, every exercise fails on visibility, and the negative tests below
+-- would pass without ever reaching the guard they claim to test.
+-- ============================================================================
+
+data G = G
+  with
+    operator  : Party
+    requester : Party
+    dealer    : Party
+    thief     : Party
+    cbtc      : AssetId
+    cc        : AssetId
+
+setupG : Script G
+setupG = do
+  operator  <- allocateParty "operator"
+  requester <- allocateParty "requester"
+  dealer    <- allocateParty "dealer"
+  thief     <- allocateParty "thief"
+  btcIssuer <- allocateParty "BitSafe"
+  ccAdmin   <- allocateParty "CantonCoin"
+  pure G with
+    operator; requester; dealer; thief
+    cbtc = AssetId with admin = btcIssuer, symbol = "cBTC"
+    cc   = AssetId with admin = ccAdmin,   symbol = "CC"
+
+mintG : Party -> AssetId -> Decimal -> Script (ContractId AssetHolding)
+mintG owner asset amount =
+  submitMulti [owner, asset.admin] [] do
+    createCmd AssetHolding with owner; asset; amount
+
+-- A funded, real Allocation. Umbra's own AssetAllocation implements the CIP-56
+-- Allocation interface, so it exercises the same code path a registry-issued
+-- allocation does -- and needs no registry context, which is what makes these
+-- guards testable offline at all.
+allocG : G -> Party -> Party -> AssetId -> Decimal -> Text -> Script (ContractId Allocation)
+allocG g sender receiver asset amount legId = do
+  h <- mintG sender asset amount
+  c <- submit sender do
+    createCmd AssetAllocation with
+      sender; receiver; executor = g.operator
+      asset; amount; holdingCid = h; legId
+  pure (toInterfaceContractId @Allocation c)
+
+-- A settlement marked "real", with whatever legs the caller wants to put on it.
+settleWith
+  :  G
+  -> ContractId Allocation -> ContractId Allocation
+  -> Optional Party -> Optional Decimal -> Optional (ContractId Allocation)
+  -> Script (ContractId SwapSettlement)
+settleWith g offerA wantA fp fa fc =
+  submitMulti [g.requester, g.dealer] [] do
+    createCmd SwapSettlement with
+      requester = g.requester
+      operator = g.operator
+      dealer = g.dealer
+      offerAsset = g.cbtc
+      offerAmount = 2.0
+      wantAsset = g.cc
+      price = 1000.0          -- TOTAL want amount for the whole offer
+      refMid = None
+      offerAllocCid = offerA
+      wantAllocCid = wantA
+      settledVia = "real"
+      feeParty = fp
+      feeAmount = fa
+      feeAllocCid = fc
+
+-- The fee recipient is the VENUE (operator), which is what UMBRA_FEE_PARTY is
+-- in production. It also matters mechanically: the stand-in AssetAllocation
+-- creates the receiving holding, which needs the receiver's authority, and the
+-- operator's authority is already carried by this exercise.
+ea : ExtraArgs
+ea = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+
+-- | The positive control. Correct legs, correct fee, everything moves.
+-- Without this the whole file would also pass if ExecuteRealSwap refused
+-- everything.
+aWellFormedSettlementExecutes : Script ()
+aWellFormedSettlementExecutes = do
+  g <- setupG
+  o <- allocG g g.requester g.dealer g.cbtc 2.0 "offer-leg"
+  w <- allocG g g.dealer g.requester g.cc 1000.0 "want-leg"
+  f <- allocG g g.dealer g.operator g.cc 5.0 "fee-leg"
+  stl <- settleWith g o w (Some g.operator) (Some 5.0) (Some f)
+
+  submitMulti [g.operator] [g.requester, g.dealer] do
+    exerciseCmd stl ExecuteRealSwap with
+      offerArgs = ea; wantArgs = ea; feeArgs = Some ea
+
+  -- the settlement is consumed, so the trade is done
+  none <- queryContractId g.requester stl
+  none === None
+
+-- | THE DEFECT. A fee was agreed and a fee allocation supplied, but the
+-- choice-context was omitted -- which used to pass the guard and then fall
+-- through the case without moving the fee. The trade settled; the venue was
+-- not paid.
+feeAgreedButContextOmittedIsRefused : Script ()
+feeAgreedButContextOmittedIsRefused = do
+  g <- setupG
+  o <- allocG g g.requester g.dealer g.cbtc 2.0 "offer-leg"
+  w <- allocG g g.dealer g.requester g.cc 1000.0 "want-leg"
+  f <- allocG g g.dealer g.operator g.cc 5.0 "fee-leg"
+  stl <- settleWith g o w (Some g.operator) (Some 5.0) (Some f)
+
+  submitMultiMustFail [g.operator] [g.requester, g.dealer] do
+    exerciseCmd stl ExecuteRealSwap with
+      offerArgs = ea; wantArgs = ea; feeArgs = None
+
+  -- and nothing moved: the settlement is still live
+  Some s <- queryContractId g.requester stl
+  s.settledVia === "real"
+
+-- | The same hole from the other side: a fee was agreed but no allocation was
+-- supplied at all.
+feeAgreedButNoAllocationIsRefused : Script ()
+feeAgreedButNoAllocationIsRefused = do
+  g <- setupG
+  o <- allocG g g.requester g.dealer g.cbtc 2.0 "offer-leg"
+  w <- allocG g g.dealer g.requester g.cc 1000.0 "want-leg"
+  stl <- settleWith g o w (Some g.operator) (Some 5.0) None
+
+  submitMultiMustFail [g.operator] [g.requester, g.dealer] do
+    exerciseCmd stl ExecuteRealSwap with
+      offerArgs = ea; wantArgs = ea; feeArgs = None
+
+-- | And the reverse: a fee leg riding along on a settlement that agreed no fee.
+-- The dealer signed terms with no fee; a fee taken anyway is a fee nobody
+-- agreed to.
+anUnagreedFeeLegIsRefused : Script ()
+anUnagreedFeeLegIsRefused = do
+  g <- setupG
+  o <- allocG g g.requester g.dealer g.cbtc 2.0 "offer-leg"
+  w <- allocG g g.dealer g.requester g.cc 1000.0 "want-leg"
+  f <- allocG g g.dealer g.operator g.cc 5.0 "fee-leg"
+  stl <- settleWith g o w None None (Some f)
+
+  submitMultiMustFail [g.operator] [g.requester, g.dealer] do
+    exerciseCmd stl ExecuteRealSwap with
+      offerArgs = ea; wantArgs = ea; feeArgs = Some ea
+
+-- | An offer allocation for LESS than the settlement says. The buyer would
+-- receive the agreed want amount having parted with less than the agreed offer.
+shortOfferLegIsRefused : Script ()
+shortOfferLegIsRefused = do
+  g <- setupG
+  o <- allocG g g.requester g.dealer g.cbtc 0.5 "offer-leg"    -- agreed 2.0
+  w <- allocG g g.dealer g.requester g.cc 1000.0 "want-leg"
+  stl <- settleWith g o w None None None
+
+  submitMultiMustFail [g.operator] [g.requester, g.dealer] do
+    exerciseCmd stl ExecuteRealSwap with
+      offerArgs = ea; wantArgs = ea; feeArgs = None
+
+-- | A want allocation for less than the agreed price. Same defect, the side
+-- that costs the buyer.
+shortWantLegIsRefused : Script ()
+shortWantLegIsRefused = do
+  g <- setupG
+  o <- allocG g g.requester g.dealer g.cbtc 2.0 "offer-leg"
+  w <- allocG g g.dealer g.requester g.cc 1.0 "want-leg"       -- agreed 1000.0
+  stl <- settleWith g o w None None None
+
+  submitMultiMustFail [g.operator] [g.requester, g.dealer] do
+    exerciseCmd stl ExecuteRealSwap with
+      offerArgs = ea; wantArgs = ea; feeArgs = None
+
+-- | A want leg paying someone who is not the buyer. The buyer gives up the
+-- offer asset and a third party is paid for it.
+misdirectedWantLegIsRefused : Script ()
+misdirectedWantLegIsRefused = do
+  g <- setupG
+  o <- allocG g g.requester g.dealer g.cbtc 2.0 "offer-leg"
+  w <- allocG g g.dealer g.thief g.cc 1000.0 "want-leg"        -- not the requester
+  stl <- settleWith g o w None None None
+
+  submitMultiMustFail [g.operator] [g.requester, g.dealer] do
+    exerciseCmd stl ExecuteRealSwap with
+      offerArgs = ea; wantArgs = ea; feeArgs = None
+
+-- | A leg in the wrong ASSET entirely. 1000 of something worthless settles a
+-- trade priced in 1000 CC, unless the asset is checked.
+wrongAssetIsRefused : Script ()
+wrongAssetIsRefused = do
+  g <- setupG
+  o <- allocG g g.requester g.dealer g.cbtc 2.0 "offer-leg"
+  w <- allocG g g.dealer g.requester g.cbtc 1000.0 "want-leg"  -- cBTC, not CC
+  stl <- settleWith g o w None None None
+
+  submitMultiMustFail [g.operator] [g.requester, g.dealer] do
+    exerciseCmd stl ExecuteRealSwap with
+      offerArgs = ea; wantArgs = ea; feeArgs = None
+
+-- | A fee leg paying the wrong recipient. The dealer pays the agreed fee and
+-- the venue does not receive it.
+misdirectedFeeIsRefused : Script ()
+misdirectedFeeIsRefused = do
+  g <- setupG
+  o <- allocG g g.requester g.dealer g.cbtc 2.0 "offer-leg"
+  w <- allocG g g.dealer g.requester g.cc 1000.0 "want-leg"
+  f <- allocG g g.dealer g.thief g.cc 5.0 "fee-leg"            -- not feeTaker
+  stl <- settleWith g o w (Some g.operator) (Some 5.0) (Some f)
+
+  submitMultiMustFail [g.operator] [g.requester, g.dealer] do
+    exerciseCmd stl ExecuteRealSwap with
+      offerArgs = ea; wantArgs = ea; feeArgs = Some ea
+
+-- | A fee leg for less than was agreed.
+shortFeeIsRefused : Script ()
+shortFeeIsRefused = do
+  g <- setupG
+  o <- allocG g g.requester g.dealer g.cbtc 2.0 "offer-leg"
+  w <- allocG g g.dealer g.requester g.cc 1000.0 "want-leg"
+  f <- allocG g g.dealer g.operator g.cc 0.01 "fee-leg"        -- agreed 5.0
+  stl <- settleWith g o w (Some g.operator) (Some 5.0) (Some f)
+
+  submitMultiMustFail [g.operator] [g.requester, g.dealer] do
+    exerciseCmd stl ExecuteRealSwap with
+      offerArgs = ea; wantArgs = ea; feeArgs = Some ea
+
+-- | An ABORT is not an execution, and the ledger must be able to tell them
+-- apart. Both consume the settlement, so "the settlement was archived" cannot
+-- distinguish them -- which is precisely why the book counted aborted trades as
+-- completed until the receipt existed.
+anAbortLeavesNoReceipt : Script ()
+anAbortLeavesNoReceipt = do
+  g <- setupG
+  o <- allocG g g.requester g.dealer g.cbtc 2.0 "offer-leg"
+  w <- allocG g g.dealer g.requester g.cc 1000.0 "want-leg"
+  stl <- settleWith g o w None None None
+
+  submit g.requester do exerciseCmd stl AbortSwap
+
+  -- the settlement is gone, exactly as it would be after a real execution
+  gone <- queryContractId g.requester stl
+  gone === None
+  -- but nothing claims the trade happened
+  rs <- query @SettlementReceipt g.requester
+  length rs === 0
+
+-- | An execution leaves exactly one receipt, carrying the terms that settled.
+-- This is what the book should count, and what an auditor should read.
+anExecutionLeavesOneReceipt : Script ()
+anExecutionLeavesOneReceipt = do
+  g <- setupG
+  o <- allocG g g.requester g.dealer g.cbtc 2.0 "offer-leg"
+  w <- allocG g g.dealer g.requester g.cc 1000.0 "want-leg"
+  f <- allocG g g.dealer g.operator g.cc 5.0 "fee-leg"
+  stl <- settleWith g o w (Some g.operator) (Some 5.0) (Some f)
+
+  submitMulti [g.operator] [g.requester, g.dealer] do
+    exerciseCmd stl ExecuteRealSwap with
+      offerArgs = ea; wantArgs = ea; feeArgs = Some ea
+
+  rs <- query @SettlementReceipt g.requester
+  case rs of
+    [(_, r)] -> do
+      r.requester === g.requester
+      r.dealer === g.dealer
+      r.offerAmount === 2.0
+      r.price === 1000.0
+      r.feeAmount === Some 5.0
+      r.settledVia === "real"
+    _ -> assertFail ("expected exactly one receipt, got " <> show (length rs))
+
+  -- and the dealer has its own copy: the receipt is signed by both principals,
+  -- so neither can quietly hold a different version of what happened
+  dealerSide <- query @SettlementReceipt g.dealer
+  length dealerSide === 1

@@ -587,6 +587,34 @@ template SwapDealerPending
 -- Signed by requester AND dealer (via the chain of accepts) -- so ExecuteSwap,
 -- controlled by the operator/executor, carries all the authority the nested
 -- Allocation_ExecuteTransfer on each leg requires.
+-- Evidence that a settlement EXECUTED, rather than merely stopped existing.
+--
+-- AbortSwap is also consuming, so "the settlement was archived" is NOT "the
+-- trade happened" -- and the history endpoint classified completion by exactly
+-- that, which meant an aborted trade appeared in the book as executed. An
+-- archive event cannot say which choice produced it; a receipt can, because it
+-- is created in the SAME transaction as the transfers and by nothing else.
+--
+-- Signed by both principals, so it is their joint record and neither can write
+-- it alone. Kept deliberately small: what traded, at what price, what the venue
+-- took, and when.
+template SettlementReceipt
+  with
+    requester   : Party
+    operator    : Party
+    dealer      : Party
+    offerAsset  : AssetId
+    offerAmount : Decimal
+    wantAsset   : AssetId
+    price       : Decimal
+    feeParty    : Optional Party
+    feeAmount   : Optional Decimal
+    settledVia  : Text        -- "standin" or "real", matching the settlement
+    executedAt  : Time
+  where
+    signatory requester, dealer
+    observer operator
+
 template SwapSettlement
   with
     requester    : Party
@@ -637,6 +665,12 @@ template SwapSettlement
         let ea = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
         _ <- exercise offerAllocCid Allocation_ExecuteTransfer with extraArgs = ea
         _ <- exercise wantAllocCid Allocation_ExecuteTransfer with extraArgs = ea
+        now <- getTime
+        _ <- create SettlementReceipt with
+          requester; operator; dealer
+          offerAsset; offerAmount; wantAsset; price
+          feeParty; feeAmount; settledVia
+          executedAt = now
         pure ()
 
     -- v7 REAL path: one-command, all-signed atomic settle for registry tokens.
@@ -655,21 +689,76 @@ template SwapSettlement
       do
         assertMsg "ExecuteRealSwap is for real settlements"
           (settledVia == "real")
-        -- A fee that was agreed must actually be paid. Without this the operator could
-        -- execute the trade and quietly drop the fee leg -- or, more importantly, a
-        -- settlement could be assembled that looks fee-bearing but is not.
-        let feePresent = case (feeAmount, feeAllocCid) of
-              (Some a, None) -> a <= 0.0
-              _ -> True
-        assertMsg "a fee was agreed but no fee allocation was supplied" feePresent
+        -- A fee that was agreed must actually be paid, COMPLETELY.
+        --
+        -- The previous guard checked only that an allocation EXISTED. Supplying the
+        -- allocation id while omitting its choice-context passed that check and then
+        -- fell through the case below without moving anything -- so the trade settled
+        -- and the fee silently did not. The fee leg is all-or-nothing with the trade,
+        -- so its inputs have to be too, in both directions: a fee that was agreed must
+        -- be payable, and a fee leg nobody agreed to must not ride along.
+        let feeAgreed = case feeAmount of
+              Some a -> a > 0.0
+              None -> False
+            feeReady = case (feeAllocCid, feeArgs) of
+              (Some _, Some _) -> True
+              _ -> False
+        assertMsg "a fee was agreed but the fee leg is incomplete: both the allocation and its choice-context are required"
+          (not feeAgreed || feeReady)
+        assertMsg
+          "a fee leg was supplied but this settlement agreed no fee"
+          (feeAgreed || not feeReady)
+
+        -- THE ALLOCATIONS MUST BE THIS TRADE.
+        --
+        -- Atomicity guarantees that the transfers chosen here happen together. It says
+        -- nothing about whether they are the terms the counterparties agreed. Without
+        -- this, whoever assembles the command could point at two allocations of the
+        -- right SHAPE and the wrong size, owner, direction or asset, and the ledger
+        -- would execute them as faithfully as the real ones.
+        --
+        -- price is the TOTAL want amount for the whole offer (see SwapQuote), which is
+        -- exactly what CommitDealerLeg allocates, so it is the amount to check against.
+        offerAlloc <- fetch offerAllocCid
+        wantAlloc  <- fetch wantAllocCid
+        let ol = (view offerAlloc).allocation.transferLeg
+            wl = (view wantAlloc).allocation.transferLeg
+        assertMsg "the offer allocation is not this settlement's offer leg"
+          (ol.sender == requester && ol.receiver == dealer
+            && ol.amount == offerAmount
+            && ol.instrumentId.id == offerAsset.symbol
+            && ol.instrumentId.admin == offerAsset.admin)
+        assertMsg "the want allocation is not this settlement's want leg"
+          (wl.sender == dealer && wl.receiver == requester
+            && wl.amount == price
+            && wl.instrumentId.id == wantAsset.symbol
+            && wl.instrumentId.admin == wantAsset.admin)
+
         _ <- exercise offerAllocCid Allocation_ExecuteTransfer with extraArgs = offerArgs
         _ <- exercise wantAllocCid Allocation_ExecuteTransfer with extraArgs = wantArgs
         -- Third leg, same transaction. All three move or none do.
         case (feeAllocCid, feeArgs) of
           (Some fc, Some fa) -> do
+            -- The fee is borne by the winning dealer and denominated in the WANT
+            -- asset, so it is checked the same way the two principal legs are. A fee
+            -- leg pointing anywhere else is not this venue's fee.
+            feeAlloc <- fetch fc
+            let fl = (view feeAlloc).allocation.transferLeg
+            assertMsg "the fee allocation is not this settlement's fee leg"
+              (Some fl.receiver == feeParty
+                && fl.sender == dealer
+                && Some fl.amount == feeAmount
+                && fl.instrumentId.id == wantAsset.symbol
+                && fl.instrumentId.admin == wantAsset.admin)
             _ <- exercise fc Allocation_ExecuteTransfer with extraArgs = fa
             pure ()
           _ -> pure ()
+        now <- getTime
+        _ <- create SettlementReceipt with
+          requester; operator; dealer
+          offerAsset; offerAmount; wantAsset; price
+          feeParty; feeAmount; settledVia
+          executedAt = now
         pure ()
 
     -- Either principal can abort before execution; both allocations are then
