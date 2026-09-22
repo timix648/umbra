@@ -1,0 +1,270 @@
+module UmbraPartialFillTest where
+
+import UmbraSwap
+import Daml.Script
+import DA.Time (addRelTime, minutes)
+import DA.Assert ((===))
+import DA.List (sortOn)
+
+-- ============================================================================
+-- A BLOCK BIGGER THAN ONE DEALER.
+--
+-- "One dealer must cover your whole clip" is a real limitation of an RFQ venue:
+-- a large block is normally worked across several dealers. Until now accepting a
+-- quote filled the entire request, so a buyer whose size exceeded any single
+-- dealer's appetite had nowhere to go.
+--
+-- TWO THINGS MAKE THIS SAFE RATHER THAN MERELY POSSIBLE:
+--
+--   The dealer states its own limit. A price for the full clip is NOT a promise
+--   to do half of it -- size moves price, and a dealer may want all or nothing.
+--   So maxFillAmount is the dealer's number and the buyer is held to it. Letting
+--   the buyer split a quote unilaterally would invent terms nobody agreed to,
+--   which is the same class of defect as an allocation that did not match its
+--   settlement.
+--
+--   Nothing is reserved. Each fill is funded when it is accepted, so an unfilled
+--   remainder was never committed and there is no balance to return. The buyer
+--   walks away with CancelRfq and nothing is stranded. That is why this does not
+--   drag in reservations, concurrent-spend rules and reconciliation.
+-- ============================================================================
+
+data P = P
+  with
+    operator  : Party
+    buyer     : Party
+    dealerA   : Party
+    dealerB   : Party
+    cbtc      : AssetId
+    cc        : AssetId
+
+setupP : Script P
+setupP = do
+  operator <- allocateParty "operator"
+  buyer    <- allocateParty "buyer"
+  dealerA  <- allocateParty "dealerA"
+  dealerB  <- allocateParty "dealerB"
+  btc      <- allocateParty "BitSafe"
+  ccAdmin  <- allocateParty "CantonCoin"
+  pure P with
+    operator; buyer; dealerA; dealerB
+    cbtc = AssetId with admin = btc, symbol = "cBTC"
+    cc   = AssetId with admin = ccAdmin, symbol = "CC"
+
+-- A 10 cBTC block both dealers are invited to.
+openBlock : P -> Script (ContractId SwapRfq)
+openBlock p = do
+  now <- getTime
+  submit p.buyer do
+    createCmd SwapRfq with
+      requester = p.buyer; operator = p.operator
+      offerAsset = p.cbtc; offerAmount = 10.0
+      wantAsset = p.cc
+      invited = [p.dealerA, p.dealerB]
+      expiresAt = addRelTime now (minutes 60)
+
+-- The live invitation for a dealer is the one for the SMALLEST size: a request
+-- that has been partially filled leaves its earlier invitations behind, inert,
+-- because they point at an archived request.
+liveInvitation : P -> Party -> Script (ContractId SwapInvitation)
+liveInvitation p who = do
+  invs <- query @SwapInvitation who
+  case sortOn (\(_, i) -> i.offerAmount) invs of
+    ((cid, _) :: _) -> pure cid
+    [] -> abort "no invitation for that dealer"
+
+quoteIt : P -> Party -> Decimal -> Optional Decimal -> Script (ContractId SwapQuote)
+quoteIt p who price maxFill = do
+  now <- getTime
+  inv <- liveInvitation p who
+  submit who do
+    exerciseCmd inv SubmitSwapQuote with
+      price; validUntil = addRelTime now (minutes 30); maxFillAmount = maxFill
+
+-- | The core behaviour: take part of the block, leave the rest open.
+aPartialFillLeavesTheRestOpen : Script ()
+aPartialFillLeavesTheRestOpen = do
+  p <- setupP
+  rfq <- openBlock p
+  _ <- submit p.buyer do exerciseCmd rfq InviteDealer with dealer = p.dealerA
+  _ <- submit p.buyer do exerciseCmd rfq InviteDealer with dealer = p.dealerB
+
+  qA <- quoteIt p p.dealerA 1000.0 (Some 4.0)
+  _ <- submit p.buyer do
+    exerciseCmd qA AcceptSwapQuote with
+      venueFeeParty = None; venueFeeAmount = None
+      fillAmount = Some 4.0
+
+  -- the request continues, smaller
+  rfqs <- query @SwapRfq p.buyer
+  case rfqs of
+    [(_, r)] -> do
+      r.offerAmount === 6.0
+      r.invited === [p.dealerA, p.dealerB]
+    _ -> assertFail ("expected one remaining request, got " <> show (length rfqs))
+
+  -- and the other dealer can still act on it: fresh invitations were issued,
+  -- because the old ones point at a request that no longer exists
+  Some liveB <- do
+    invs <- query @SwapInvitation p.dealerB
+    pure (case sortOn (\(_, i) -> i.offerAmount) invs of
+            ((_, i) :: _) -> Some i.offerAmount
+            [] -> None)
+  liveB === 6.0
+
+-- | THE FLOW, end to end: best price first, then the next best finishes it.
+fillsAccumulateUntilTheBlockIsDone : Script ()
+fillsAccumulateUntilTheBlockIsDone = do
+  p <- setupP
+  rfq <- openBlock p
+  _ <- submit p.buyer do exerciseCmd rfq InviteDealer with dealer = p.dealerA
+  _ <- submit p.buyer do exerciseCmd rfq InviteDealer with dealer = p.dealerB
+
+  -- A is the better price but will only take 4
+  qA <- quoteIt p p.dealerA 1000.0 (Some 4.0)
+  _ <- submit p.buyer do
+    exerciseCmd qA AcceptSwapQuote with
+      venueFeeParty = None; venueFeeAmount = None; fillAmount = Some 4.0
+
+  -- B prices the remaining 6 and takes all of it
+  qB <- quoteIt p p.dealerB 660.0 None
+  _ <- submit p.buyer do
+    exerciseCmd qB AcceptSwapQuote with
+      venueFeeParty = None; venueFeeAmount = None; fillAmount = None
+
+  -- nothing left open
+  rfqs <- query @SwapRfq p.buyer
+  length rfqs === 0
+
+  -- two awards, two dealers, and together they are the whole block
+  awards <- query @RfqAward p.buyer
+  length awards === 2
+  let total = sum (map (\(_, w) -> w.filledAmount) awards)
+  total === 10.0
+
+  -- and two separate trades to settle, one per dealer
+  props <- query @SwapProposal p.buyer
+  length props === 2
+
+-- | The price follows the size, pro rata at the level the dealer quoted.
+-- 1000 for the whole 10 means 400 for 4 -- not 1000 for 4.
+priceScalesWithTheFill : Script ()
+priceScalesWithTheFill = do
+  p <- setupP
+  rfq <- openBlock p
+  _ <- submit p.buyer do exerciseCmd rfq InviteDealer with dealer = p.dealerA
+  qA <- quoteIt p p.dealerA 1000.0 (Some 4.0)
+  _ <- submit p.buyer do
+    exerciseCmd qA AcceptSwapQuote with
+      venueFeeParty = None; venueFeeAmount = None; fillAmount = Some 4.0
+
+  props <- query @SwapProposal p.buyer
+  case props of
+    [(_, pr)] -> do
+      pr.offerAmount === 4.0
+      pr.price === 400.0
+    _ -> assertFail "expected one proposal"
+
+  awards <- query @RfqAward p.buyer
+  case awards of
+    [(_, w)] -> do
+      w.filledAmount === 4.0
+      w.price === 400.0        -- what this dealer is actually paying
+    _ -> assertFail "expected one award"
+
+-- | A dealer cannot be made to take more than it said it would. This is the
+-- guard that stops a partial fill becoming a way to invent terms.
+aDealerIsHeldOnlyToWhatItOffered : Script ()
+aDealerIsHeldOnlyToWhatItOffered = do
+  p <- setupP
+  rfq <- openBlock p
+  _ <- submit p.buyer do exerciseCmd rfq InviteDealer with dealer = p.dealerA
+  qA <- quoteIt p p.dealerA 1000.0 (Some 3.0)
+
+  -- the buyer wants 7 at that price; the dealer said 3
+  submitMustFail p.buyer do
+    exerciseCmd qA AcceptSwapQuote with
+      venueFeeParty = None; venueFeeAmount = None; fillAmount = Some 7.0
+
+  -- and "all of it" is equally refused when a limit is set
+  submitMustFail p.buyer do
+    exerciseCmd qA AcceptSwapQuote with
+      venueFeeParty = None; venueFeeAmount = None; fillAmount = None
+
+  -- within the limit it works
+  _ <- submit p.buyer do
+    exerciseCmd qA AcceptSwapQuote with
+      venueFeeParty = None; venueFeeAmount = None; fillAmount = Some 3.0
+  awards <- query @RfqAward p.buyer
+  length awards === 1
+
+-- | A fill must be a real part of the request: not more than it, not zero,
+-- not negative.
+nonsenseFillsAreRefused : Script ()
+nonsenseFillsAreRefused = do
+  p <- setupP
+  rfq <- openBlock p
+  _ <- submit p.buyer do exerciseCmd rfq InviteDealer with dealer = p.dealerA
+  qA <- quoteIt p p.dealerA 1000.0 None
+
+  submitMustFail p.buyer do
+    exerciseCmd qA AcceptSwapQuote with
+      venueFeeParty = None; venueFeeAmount = None; fillAmount = Some 11.0
+  submitMustFail p.buyer do
+    exerciseCmd qA AcceptSwapQuote with
+      venueFeeParty = None; venueFeeAmount = None; fillAmount = Some 0.0
+  submitMustFail p.buyer do
+    exerciseCmd qA AcceptSwapQuote with
+      venueFeeParty = None; venueFeeAmount = None; fillAmount = Some (-1.0)
+
+  rfqs <- query @SwapRfq p.buyer
+  case rfqs of
+    [(_, r)] -> r.offerAmount === 10.0      -- untouched
+    _ -> assertFail "the request should still be open at full size"
+
+-- | The buyer can stop with the block half done, and nothing is stranded.
+--
+-- This is the question "do I get my balance back", and the answer is that there
+-- was never a balance to get back: each fill is funded when it is accepted, so
+-- the unfilled remainder was never committed to anything.
+theBuyerCanStopEarly : Script ()
+theBuyerCanStopEarly = do
+  p <- setupP
+  rfq <- openBlock p
+  _ <- submit p.buyer do exerciseCmd rfq InviteDealer with dealer = p.dealerA
+  qA <- quoteIt p p.dealerA 1000.0 (Some 4.0)
+  _ <- submit p.buyer do
+    exerciseCmd qA AcceptSwapQuote with
+      venueFeeParty = None; venueFeeAmount = None; fillAmount = Some 4.0
+
+  [(remainingCid, r)] <- query @SwapRfq p.buyer
+  r.offerAmount === 6.0
+  submit p.buyer do exerciseCmd remainingCid CancelRfq
+
+  -- the request is gone, the 4 that traded stands, and nothing else is held
+  rfqs <- query @SwapRfq p.buyer
+  length rfqs === 0
+  awards <- query @RfqAward p.buyer
+  case awards of
+    [(_, w)] -> w.filledAmount === 4.0
+    _ -> assertFail "the completed fill should still stand"
+
+-- | A quote limit larger than the request, or at zero, is refused when the
+-- quote is made rather than when it is accepted -- so a dealer finds out
+-- immediately rather than at the moment the buyer tries to lift it.
+anIncoherentQuoteLimitIsRefused : Script ()
+anIncoherentQuoteLimitIsRefused = do
+  p <- setupP
+  rfq <- openBlock p
+  _ <- submit p.buyer do exerciseCmd rfq InviteDealer with dealer = p.dealerA
+  now <- getTime
+  inv <- liveInvitation p p.dealerA
+
+  submitMustFail p.dealerA do
+    exerciseCmd inv SubmitSwapQuote with
+      price = 1000.0; validUntil = addRelTime now (minutes 30)
+      maxFillAmount = Some 25.0          -- more than the request
+  submitMustFail p.dealerA do
+    exerciseCmd inv SubmitSwapQuote with
+      price = 1000.0; validUntil = addRelTime now (minutes 30)
+      maxFillAmount = Some 0.0           -- a refusal dressed as a quote

@@ -283,6 +283,9 @@ template SwapInvitation
       with
         price      : Decimal
         validUntil : Time
+        -- Optional: the most of this request the dealer will take. None = all
+        -- of it, which is how every pre-0.8.0 caller behaves.
+        maxFillAmount : Optional Decimal
       controller dealer
       do
         now <- getTime
@@ -294,10 +297,17 @@ template SwapInvitation
         assertMsg "price must be positive" (price > 0.0)
         assertMsg "this request has expired" (now < expiresAt)
         assertMsg "quote validity must be in the future" (validUntil > now)
+        -- A limit above the request is meaningless; one at or below zero is a
+        -- refusal dressed up as a quote.
+        case maxFillAmount of
+          Some m -> do
+            assertMsg "a fill limit must be positive" (m > 0.0)
+            assertMsg "a fill limit cannot exceed the request" (m <= offerAmount)
+          None -> pure ()
         create SwapQuote with
           requester; operator; dealer
           offerAsset; offerAmount; wantAsset; price; validUntil
-          rfqCid
+          rfqCid; maxFillAmount
 
     choice DeclineInvitation : ()
       controller dealer
@@ -342,9 +352,19 @@ template SwapQuote
     offerAsset  : AssetId
     offerAmount : Decimal
     wantAsset   : AssetId
-    price       : Decimal     -- total wantAsset the dealer pays for the offer
+    price       : Decimal     -- total wantAsset the dealer pays for the WHOLE offer
     validUntil  : Time        -- the dealer's price is firm until this moment
     rfqCid      : ContractId SwapRfq   -- the request this quote answers
+    -- The most of this request the dealer is willing to take at that price.
+    -- None means the whole thing, which is what every quote meant before
+    -- partial fills existed and is why this is Optional rather than required.
+    --
+    -- It has to be the DEALER'S number. A buyer who split a quote unilaterally
+    -- would be inventing terms the dealer never agreed to: a price for the full
+    -- clip is not a promise to do half of it, and a dealer may well price size
+    -- differently. So the dealer states its limit and the ledger holds the buyer
+    -- to it.
+    maxFillAmount : Optional Decimal
   where
     signatory dealer
     observer requester
@@ -359,6 +379,10 @@ template SwapQuote
         -- caller still type-checks, and so a fee-free venue stays possible.
         venueFeeParty  : Optional Party
         venueFeeAmount : Optional Decimal
+        -- How much of the request this acceptance fills. None = all of it,
+        -- which is what accepting a quote meant before partial fills, so every
+        -- existing caller keeps its behaviour unchanged.
+        fillAmount     : Optional Decimal
       controller requester
       do
         now <- getTime
@@ -367,32 +391,78 @@ template SwapQuote
         -- request could still be shown a liftable price against it. The requester is
         -- the SwapRfq's signatory, so this fetch succeeds while the request is live and
         -- fails once CancelRfq has archived it.
-        _ <- fetch rfqCid
+        rfq <- fetch rfqCid
         assertMsg "this quote is no longer firm" (now < validUntil)
 
-        -- ONE WINNER, AND THE LEDGER ENFORCES IT.
+        -- HOW MUCH OF THE BLOCK THIS DEALER TAKES.
+        let fill = fromOptional offerAmount fillAmount
+        assertMsg "a fill must be positive" (fill > 0.0)
+        assertMsg "a fill cannot exceed the request" (fill <= offerAmount)
+        -- The dealer's own limit. A price for the full clip is not a promise to
+        -- do half of it, so the buyer is held to what the dealer actually said.
+        case maxFillAmount of
+          Some m -> assertMsg
+            "this dealer will not take that much of the request at this price"
+            (fill <= m)
+          None -> pure ()
+
+        -- Pro-rata at the quoted level. Multiply before dividing: (fill /
+        -- offerAmount) first would throw away precision this then scales up.
+        let fillPrice = if fill == offerAmount then price
+                        else (price * fill) / offerAmount
+            remaining = offerAmount - fill
+
+        -- ONE AWARD PER REQUEST, AND THE LEDGER ENFORCES IT.
         --
-        -- Archiving the request is the mechanism: every quote answering it
-        -- fetches it first (the same guard that makes a cancelled request
-        -- unquotable), so once the request is gone no second acceptance can
-        -- succeed. Before this, accepting a quote consumed only that quote and
-        -- every rival quote stayed live and acceptable.
-        --
-        -- A partial-fill venue would replace the request with a smaller one here
-        -- instead of archiving it; the award below already carries the amount so
-        -- that change does not need a new record.
+        -- The request is consumed either way. Every quote answering it fetches
+        -- it first -- the same guard that makes a cancelled request unquotable --
+        -- so no second acceptance can hit the same request. Before this,
+        -- accepting consumed only the quote it was called on and every rival
+        -- quote stayed live and independently acceptable.
         archive rfqCid
         _ <- create RfqAward with
           requester; operator; dealer
           offerAsset; offerAmount
-          filledAmount = offerAmount
-          wantAsset; price
+          filledAmount = fill
+          wantAsset
+          price = fillPrice
           awardedAt = now
+
+        -- WHAT IS LEFT STAYS OPEN, as a smaller request.
+        --
+        -- Invitations point at a contract id, so a request that shrinks cannot
+        -- keep its old ones -- they would fetch an archived contract and fail.
+        -- Fresh invitations go to the same dealers at the new size. The stale
+        -- ones are left where they are rather than hunted down: they are
+        -- already inert for exactly that reason, and archiving them would mean
+        -- carrying their ids around to no purpose.
+        if remaining > 0.0
+          then do
+            newRfq <- create SwapRfq with
+              requester; operator
+              offerAsset
+              offerAmount = remaining
+              wantAsset
+              invited = rfq.invited
+              expiresAt = rfq.expiresAt
+            _ <- forA rfq.invited (\d ->
+              create SwapInvitation with
+                requester; operator
+                dealer = d
+                offerAsset
+                offerAmount = remaining
+                wantAsset
+                expiresAt = rfq.expiresAt
+                rfqCid = newRfq)
+            pure ()
+          else pure ()
 
         create SwapProposal with
           requester; operator; dealer
-          offerAsset; offerAmount
-          wantAsset; price
+          offerAsset
+          offerAmount = fill
+          wantAsset
+          price = fillPrice
           -- 15/30 minutes mirrors the window the backend already requests when it
           -- allocates a real leg, so the on-ledger view and the registry agree.
           requestedAt = Some now

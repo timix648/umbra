@@ -57,10 +57,10 @@ twoQuotes a = do
   invB <- submit a.requester do exerciseCmd rfq InviteDealer with dealer = a.dealerB
   qA <- submit a.dealerA do
     exerciseCmd invA SubmitSwapQuote with
-      price = 1000.0; validUntil = addRelTime now (minutes 20)
+      price = 1000.0; validUntil = addRelTime now (minutes 20); maxFillAmount = None
   qB <- submit a.dealerB do
     exerciseCmd invB SubmitSwapQuote with
-      price = 990.0;  validUntil = addRelTime now (minutes 20)
+      price = 990.0;  validUntil = addRelTime now (minutes 20); maxFillAmount = None
   pure (qA, qB)
 
 -- | The defect. Two dealers price the same block; the buyer accepts one; the
@@ -72,12 +72,12 @@ onlyOneQuoteCanWin = do
 
   _ <- submit a.requester do
     exerciseCmd qA AcceptSwapQuote with
-      venueFeeParty = None; venueFeeAmount = None
+      venueFeeParty = None; venueFeeAmount = None; fillAmount = None
 
   -- the losing quote is still on the ledger and must be inert
   submitMustFail a.requester do
     exerciseCmd qB AcceptSwapQuote with
-      venueFeeParty = None; venueFeeAmount = None
+      venueFeeParty = None; venueFeeAmount = None; fillAmount = None
 
   -- exactly one proposal exists, and it is dealerA's
   props <- query @SwapProposal a.requester
@@ -97,7 +97,7 @@ theAwardNamesTheWinner = do
 
   _ <- submit a.requester do
     exerciseCmd qB AcceptSwapQuote with
-      venueFeeParty = None; venueFeeAmount = None
+      venueFeeParty = None; venueFeeAmount = None; fillAmount = None
 
   awards <- query @RfqAward a.requester
   case awards of
@@ -105,7 +105,7 @@ theAwardNamesTheWinner = do
       w.dealer === a.dealerB
       w.price === 990.0
       w.offerAmount === 2.0
-      -- today a request is filled whole, by one dealer
+      -- fillAmount = None means take the whole request, so this is a full fill
       w.filledAmount === w.offerAmount
     _ -> assertFail ("expected exactly one award, got " <> show (length awards))
 
@@ -136,15 +136,15 @@ awardingClosesTheAuction = do
   -- only A has priced it so far
   qA <- submit a.dealerA do
     exerciseCmd invA SubmitSwapQuote with
-      price = 1000.0; validUntil = addRelTime now (minutes 20)
+      price = 1000.0; validUntil = addRelTime now (minutes 20); maxFillAmount = None
   _ <- submit a.requester do
     exerciseCmd qA AcceptSwapQuote with
-      venueFeeParty = None; venueFeeAmount = None
+      venueFeeParty = None; venueFeeAmount = None; fillAmount = None
 
   -- B turns up late with a better price; the auction is over
   submitMustFail a.dealerB do
     exerciseCmd invB SubmitSwapQuote with
-      price = 900.0; validUntil = addRelTime now (minutes 20)
+      price = 900.0; validUntil = addRelTime now (minutes 20); maxFillAmount = None
 
   rfqs <- query @SwapRfq a.requester
   length rfqs === 0
@@ -159,10 +159,10 @@ theWinningQuoteCannotBeAcceptedTwice = do
 
   _ <- submit a.requester do
     exerciseCmd qA AcceptSwapQuote with
-      venueFeeParty = None; venueFeeAmount = None
+      venueFeeParty = None; venueFeeAmount = None; fillAmount = None
   submitMustFail a.requester do
     exerciseCmd qA AcceptSwapQuote with
-      venueFeeParty = None; venueFeeAmount = None
+      venueFeeParty = None; venueFeeAmount = None; fillAmount = None
 
   awards <- query @RfqAward a.requester
   length awards === 1

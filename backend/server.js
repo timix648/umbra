@@ -2345,7 +2345,11 @@ app.post("/api/swap/invitations/:cid/quote", async (req, res) => {
     const cmds = [{
       ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapInvitation`,
         contractId: req.params.cid, choice: "SubmitSwapQuote",
-        choiceArgument: { price: String(req.body.price), validUntil } } }];
+        choiceArgument: { price: String(req.body.price), validUntil,
+          // How much of the block this dealer will actually take. Absent means
+          // all of it, which is what every quote meant before partial fills.
+          maxFillAmount: req.body.maxFillAmount == null
+            ? null : String(req.body.maxFillAmount) } } }];
     // SubmitSwapQuote is controller `dealer`. A dealer trading from its own wallet
     // signs for itself, so hand the command back instead of failing inside act().
     if (req.query.build === "1" || req.body.build || isWalletParty(dealerParty)) {
@@ -2487,6 +2491,10 @@ app.post("/api/swap/quotes/:cid/accept", async (req, res) => {
         choiceArgument: {
           venueFeeParty: venueFeeAmount ? FEE_PARTY : null,
           venueFeeAmount: venueFeeAmount,
+          // Partial fill: take part of the block and leave the rest open for
+          // another dealer. Absent = take all of it.
+          fillAmount: (req.body && req.body.fillAmount != null)
+            ? String(req.body.fillAmount) : null,
         } } }];
     if (req.query.build === "1" || (req.body && req.body.build) || isWalletParty(requester)) {
       return res.json({ ok: true, build: true, party: requester, commands: cmds,
@@ -3499,7 +3507,7 @@ app.post("/api/swap/award", async (req, res) => {
     await act(dealerRole, "swap-quote", [{
       ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapInvitation`,
         contractId: invCid, choice: "SubmitSwapQuote",
-        choiceArgument: { price: wantAmount, validUntil } } }]);
+        choiceArgument: { price: wantAmount, validUntil, maxFillAmount: null } } }]);
     const quoteCid = await pollNewCid(dealer, "UmbraSwap:SwapQuote", b);
     steps.push(`${dealerRole} quoted ${wantAmount} ${wantAsset.symbol}`);
 
@@ -3507,7 +3515,8 @@ app.post("/api/swap/award", async (req, res) => {
     b = await idSetSwap(requester, "UmbraSwap:SwapProposal");
     await act("requester", "swap-accept", [{
       ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapQuote`,
-        contractId: quoteCid, choice: "AcceptSwapQuote", choiceArgument: {} } }]);
+        contractId: quoteCid, choice: "AcceptSwapQuote",
+        choiceArgument: { venueFeeParty: null, venueFeeAmount: null, fillAmount: null } } }]);
     const propCid = await pollNewCid(requester, "UmbraSwap:SwapProposal", b);
     steps.push("requester accepted quote");
 

@@ -38,7 +38,13 @@ init-script: UmbraTest:umbraDemo
 # incomplete fee rather than silently skipping it; and both execution paths
 # emit a SettlementReceipt, because AbortSwap also archives the settlement so
 # "was archived" could never mean "was executed".
-version: 0.7.0
+# 0.8.0: partial fills. A quote now carries maxFillAmount -- the most of the
+# request that dealer will take at its price -- and AcceptSwapQuote takes a
+# fillAmount. What is left stays open as a smaller request with fresh
+# invitations, because invitations point at a contract id and cannot survive
+# their request shrinking. Both fields are Optional and absent means "the whole
+# thing", so every pre-0.8.0 caller keeps its behaviour.
+version: 0.8.0
 dependencies:
   - daml-prim
   - daml-stdlib
