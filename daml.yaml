@@ -20,7 +20,12 @@ init-script: UmbraTest:umbraDemo
 # decentralized party can put multi-sig on them. Bumped rather than reusing
 # 0.4.0 because 0.4.0 is already uploaded to two ledgers and a rebuild under the
 # same version would be a different package with the same name.
-version: 0.5.0
+# 0.5.1: adds CreateRegistryProposal. The registry's signatory is the governed
+# party, so once that party is decentralized nobody holds a key that can create
+# it -- and DecMan's contract-deployment API cannot either, its field encoding
+# has no list type. A proposal can: it is signed by the proposer, and the
+# registry it creates is signed by the governance party.
+version: 0.5.1
 dependencies:
   - daml-prim
   - daml-stdlib

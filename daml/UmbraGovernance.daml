@@ -24,6 +24,45 @@ module UmbraGovernance where
 import Governance.Action
 import UmbraSwap
 
+-- | Bring the registry into existence under governance.
+--
+-- There is a bootstrapping problem otherwise: AssetRegistry is `signatory
+-- operator`, and once the operator is the decentralized party, nobody holds a
+-- key that can create it. The Decentralization Manager's own contract-deployment
+-- API cannot do it either -- its field encoding has no list type at all (single
+-- parties, scalars, Set, record, optional; `party_set` is explicitly a
+-- DA.Set.Types:Set, not a list), so a template with `participants : [Party]` and
+-- `assets : [AssetId]` cannot be expressed there.
+--
+-- A proposal sidesteps both. THIS contract is `signatory proposer`, so the venue
+-- creates it with its own key and no governance authority at all; the registry it
+-- creates is signed by the governance party, because executeImpl runs with that
+-- authority once the operators have confirmed. So the registry is governed from
+-- the moment it exists, and was never owned by one key even briefly.
+template CreateRegistryProposal
+  with
+    governanceParty : Party
+    proposer        : Party
+    participants    : [Party]
+  where
+    signatory proposer
+    observer governanceParty
+
+    interface instance GovernableAction for CreateRegistryProposal where
+      view = GovernableActionView with
+        governanceParty
+        proposer
+        actionLabel = "CreateAssetRegistry"
+        description = "Create the venue's asset registry, governed, visible to "
+                   <> show (length participants) <> " participants"
+
+      executeImpl = do
+        _ <- create AssetRegistry with
+          operator = governanceParty
+          participants
+          assets = []
+        pure ()
+
 -- | List an asset on the venue. The pair goes live only once the operators agree.
 template ListAssetProposal
   with
