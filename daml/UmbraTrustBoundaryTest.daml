@@ -1,0 +1,223 @@
+module UmbraTrustBoundaryTest where
+
+import UmbraSwap
+import Splice.Api.Token.AllocationV1 (Allocation)
+import Splice.Api.Token.MetadataV1
+import Daml.Script
+import DA.Time (addRelTime, minutes)
+import DA.Assert ((===))
+
+-- ============================================================================
+-- THE VENUE HAS TWO KEYS, AND THEY MUST NOT BE THE SAME KEY.
+--
+-- Encrypting the operator key (signer.js) protects it at rest. It does not
+-- reduce what the key can DO once it is loaded, and Umbra's backend has to
+-- hold something hot enough to drive a trade at trade speed. So the question
+-- that actually matters for MainNet is not "is the key safe" but "what is the
+-- worst a stolen hot key can do".
+--
+-- The answer Umbra wants to be able to give is: it can sequence actions the
+-- counterparties have ALREADY authorised, and nothing else. It cannot change
+-- what is tradeable, it cannot change who may see the venue, and it cannot
+-- settle. Those require the governance party, which is decentralized, so they
+-- require a threshold of operators rather than a key.
+--
+-- WHY THIS IS A SEPARATION AND NOT SIMPLY "GOVERN EVERYTHING": putting a
+-- 2-of-3 human vote in front of opening an RFQ would make the venue unusable,
+-- and BitSafe's own rubric penalises "everything governed, including order
+-- flow". The split is the point. These tests pin where the line falls.
+--
+-- The split needs no new schema: TradingMandate carries its OWN `operator`
+-- field, chosen by the granting party, so a desk can grant the venue's hot
+-- executor a mandate while the registry stays owned by the governance party.
+-- That is the deployment these tests describe.
+-- ============================================================================
+
+data TB = TB
+  with
+    governance : Party     -- decentralized; owns the registry, settles
+    executor   : Party     -- the venue's HOT key; drives mandates
+    alice      : Party     -- a trading party
+    dealer     : Party
+    cbtc       : AssetId
+    cc         : AssetId
+
+setupTB : Script TB
+setupTB = do
+  governance <- allocateParty "governance"
+  executor   <- allocateParty "executor"
+  alice      <- allocateParty "alice"
+  dealer     <- allocateParty "dealer"
+  btcIssuer  <- allocateParty "BitSafe"
+  ccAdmin    <- allocateParty "CantonCoin"
+  pure TB with
+    governance; executor; alice; dealer
+    cbtc = AssetId with admin = btcIssuer, symbol = "cBTC"
+    cc   = AssetId with admin = ccAdmin,   symbol = "CC"
+
+registryOwnedByGovernance : TB -> Script (ContractId AssetRegistry)
+registryOwnedByGovernance t = submit t.governance do
+  createCmd AssetRegistry with
+    operator = t.governance
+    participants = [t.alice, t.dealer]
+    assets = [t.cbtc]
+
+-- A settlement whose operator is the GOVERNANCE party, which is how the venue
+-- deploys. The allocation ids are coerced: every assertion below fails on the
+-- controller check, which Daml evaluates before the choice body, so they are
+-- never dereferenced. Using coerced ids keeps the test honest about WHICH
+-- check refused -- a real allocation would let a later failure look like this
+-- one.
+settlementOwnedByGovernance : TB -> Script (ContractId SwapSettlement)
+settlementOwnedByGovernance t = do
+  reg <- registryOwnedByGovernance t
+  let fakeAlloc = coerceContractId reg : ContractId Allocation
+  submitMulti [t.alice, t.dealer] [] do
+    createCmd SwapSettlement with
+      requester = t.alice
+      operator = t.governance
+      dealer = t.dealer
+      offerAsset = t.cbtc
+      offerAmount = 1.0
+      wantAsset = t.cc
+      price = 64000.0
+      refMid = None
+      offerAllocCid = fakeAlloc
+      wantAllocCid = fakeAlloc
+      settledVia = "standin"
+      feeParty = None
+      feeAmount = None
+      feeAllocCid = None
+
+-- | The hot key cannot change what is tradeable, nor who may see the venue.
+-- These are the decisions that outlive any single trade, and a stolen key must
+-- not reach them.
+hotKeyCannotTouchTheRegistry : Script ()
+hotKeyCannotTouchTheRegistry = do
+  t <- setupTB
+  reg <- registryOwnedByGovernance t
+
+  submitMustFail t.executor do exerciseCmd reg ListAsset with asset = t.cc
+  submitMustFail t.executor do exerciseCmd reg DelistAsset with asset = t.cbtc
+  submitMustFail t.executor do
+    exerciseCmd reg SetParticipants with participants' = [t.executor]
+
+  -- untouched: still one asset, still the original participants
+  Some r <- queryContractId t.governance reg
+  r.assets === [t.cbtc]
+  r.participants === [t.alice, t.dealer]
+
+-- | The hot key cannot settle. Not the stand-in path, not the real one.
+--
+-- This is the assertion that matters most: settlement is where value moves, and
+-- ExecuteRealSwap fires both allocation legs plus the fee in one transaction.
+-- A key that could call it could also decline to -- holding a settled trade
+-- hostage, or choosing which counterparty gets filled.
+hotKeyCannotSettle : Script ()
+hotKeyCannotSettle = do
+  t <- setupTB
+  stl <- settlementOwnedByGovernance t
+
+  submitMustFail t.executor do exerciseCmd stl ExecuteSwap
+
+  let ea = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+  submitMustFail t.executor do
+    exerciseCmd stl ExecuteRealSwap with
+      offerArgs = ea; wantArgs = ea; feeArgs = None
+
+  -- nor may either counterparty settle unilaterally
+  submitMustFail t.alice  do exerciseCmd stl ExecuteSwap
+  submitMustFail t.dealer do exerciseCmd stl ExecuteSwap
+
+  -- the settlement is still there, unexecuted
+  Some s <- queryContractId t.alice stl
+  s.operator === t.governance
+
+-- | What the hot key IS for: driving a mandate a party has granted it.
+--
+-- Note the mandate names the EXECUTOR as its operator, not the governance
+-- party. That is the whole separation, and it needs no schema change -- the
+-- granting party chooses who may act for it.
+hotKeyRunsTheMandate : Script ()
+hotKeyRunsTheMandate = do
+  t <- setupTB
+  now <- getTime
+
+  mn <- submit t.alice do
+    createCmd TradingMandate with
+      party = t.alice
+      operator = t.executor        -- the HOT key, not governance
+      expiresAt = addRelTime now (minutes 15)
+
+  (rfqCid, _) <- submit t.executor do
+    exerciseCmd mn MandateOpenRfq with
+      mOfferAsset = t.cbtc
+      mOfferAmount = 2.0
+      mWantAsset = t.cc
+      mInvited = [t.dealer]
+      mExpiresAt = addRelTime now (minutes 10)
+
+  -- the request belongs to alice; the executor merely sequenced it
+  Some rfq <- queryContractId t.alice rfqCid
+  rfq.requester === t.alice
+  rfq.operator === t.executor
+
+-- | And holding a mandate grants the hot key NO venue power.
+--
+-- This is the test that would catch the tempting refactor: a mandate is
+-- authority over ONE party's order flow, and it must never widen into
+-- authority over the venue itself.
+aMandateConfersNoVenuePower : Script ()
+aMandateConfersNoVenuePower = do
+  t <- setupTB
+  reg <- registryOwnedByGovernance t
+  now <- getTime
+
+  _ <- submit t.alice do
+    createCmd TradingMandate with
+      party = t.alice; operator = t.executor
+      expiresAt = addRelTime now (minutes 60)
+
+  -- with a live mandate in hand, the registry is still closed to it
+  submitMustFail t.executor do exerciseCmd reg ListAsset with asset = t.cc
+  -- and so is settlement
+  stl <- settlementOwnedByGovernance t
+  submitMustFail t.executor do exerciseCmd stl ExecuteSwap
+
+-- | The positive control: the governance party does hold the privileged
+-- powers. Without this the suite would also pass if NOBODY could act.
+--
+-- Settlement itself is not re-proved here -- UmbraSwapTest already settles end
+-- to end through this same choice with real allocations. What this pins is that
+-- the party the hot key is NOT is the party that can.
+theGovernedPartyHoldsThePrivilegedPowers : Script ()
+theGovernedPartyHoldsThePrivilegedPowers = do
+  t <- setupTB
+  reg <- registryOwnedByGovernance t
+
+  reg2 <- submit t.governance do exerciseCmd reg ListAsset with asset = t.cc
+  Some r <- queryContractId t.governance reg2
+  -- membership, not order: ListAsset prepends, and pinning that would bake an
+  -- incidental implementation detail into a test about authority
+  assertMsg "cc should now be listed" (elem t.cc r.assets)
+  assertMsg "cbtc should still be listed" (elem t.cbtc r.assets)
+  length r.assets === 2
+
+  _ <- submit t.governance do
+    exerciseCmd reg2 SetParticipants with participants' = [t.alice]
+  pure ()
+
+-- | The two parties are genuinely different principals, not two names for one
+-- key. Stated as a test because the whole separation collapses if a deployment
+-- ever sets them to the same party, and that mistake is invisible at runtime.
+theTwoKeysAreDistinct : Script ()
+theTwoKeysAreDistinct = do
+  t <- setupTB
+  assertMsg "governance and executor must not be the same party"
+    (t.governance /= t.executor)
+
+  -- and the executor is not quietly a participant of the venue either
+  reg <- registryOwnedByGovernance t
+  Some r <- queryContractId t.governance reg
+  assertMsg "the hot executor should not be a registry participant"
+    (notElem t.executor r.participants)

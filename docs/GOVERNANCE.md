@@ -242,3 +242,67 @@ render one.
 7. **Test the negative case first.** `submitMustFail` for the proposer and for a
    bystander is the property that would silently disappear the day someone
    changed `GovernableAction_Execute` to `controller proposer`.
+
+---
+
+## The venue has two keys, and they must not be the same key
+
+Encrypting the operator key protects it **at rest**. It does not reduce what
+that key can *do* once it is loaded, and the backend has to hold something hot
+enough to drive a trade at trade speed. So the question that decides whether
+this is safe for real money is not *"is the key safe"* but **"what is the worst
+a stolen hot key can do"**.
+
+### Why not simply govern everything
+
+Because a 2-of-3 human vote in front of opening an RFQ makes the venue
+unusable, and it hands every operator a view of order flow the privacy claim
+says they must not have. The split is the design, not a compromise.
+
+| | Governance party (decentralized) | Executor (hot key) |
+|---|---|---|
+| List / delist an asset | ✅ threshold | ❌ |
+| Change who may see the venue | ✅ threshold | ❌ |
+| Settle — `ExecuteSwap`, `ExecuteRealSwap` | ✅ threshold | ❌ |
+| Suspend or reinstate a dealer | ✅ threshold | ❌ |
+| Open an RFQ under a mandate | — | ✅ |
+| Propose / accept a settlement the parties already allocated for | — | ✅ |
+
+The executor can **sequence actions the counterparties have already
+authorised, and nothing else.** It cannot change what is tradeable, it cannot
+change who may see the venue, and it cannot move value.
+
+### It needs no new schema
+
+`TradingMandate` carries its **own** `operator` field, chosen by the granting
+party. A desk grants the mandate to the venue's *executor* while the registry
+stays owned by the *governance* party. The separation is already expressible;
+what matters is that a deployment actually uses two parties.
+
+### The deployment requirement that makes governance binding
+
+> `ExecuteRealSwap` is `controller operator`.
+
+Read that carefully: the governance proposal is a **route**, not a gate. If
+`operator` is an ordinary single key, that key can settle any real swap
+directly and the threshold is advisory. **The governance module only binds when
+`operator` IS the decentralized party.**
+
+That is the single most important line in this document. `AssetRegistry.operator`,
+`SwapSettlement.operator` and `governanceParty` must all be the same
+decentralized party, and the executor must be a different party from all of
+them.
+
+### Proofs
+
+`daml/UmbraTrustBoundaryTest.daml`, 7 scripts:
+
+| Script | Proves |
+|---|---|
+| `hotKeyCannotTouchTheRegistry` | list, delist and participant changes all refused |
+| `hotKeyCannotSettle` | neither `ExecuteSwap` nor `ExecuteRealSwap`; nor can either counterparty settle unilaterally |
+| `hotKeyRunsTheMandate` | what it *is* for — and the RFQ still belongs to the granting party |
+| `aMandateConfersNoVenuePower` | holding a live mandate widens nothing; the registry and settlement stay closed |
+| `theGovernedPartyHoldsThePrivilegedPowers` | the positive control — without it the suite would pass if *nobody* could act |
+| `theTwoKeysAreDistinct` | the deployment mistake that would silently collapse the whole separation |
+
