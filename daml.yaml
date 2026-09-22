@@ -41,14 +41,20 @@ data-dependencies:
   - vendor/registry-matched/splice-api-token-allocation-request-v1-6fe84853.dalf
   - vendor/registry-matched/daml-stdlib-9d1a644e.dalf
   - vendor/registry-matched/daml-prim-54f85ebf.dalf
-  # BitSafe's Decentralization Manager governance interface, from the published
-  # release DAR (decentralization-manager, hackathon branch, releases/v1).
-  # SDK 3.4.11 and target 2.2, same as this project, and it depends only on
-  # daml-prim/daml-stdlib -- so it adds no transitive weight.
-  - vendor/governance/governance-action-v1-0.1.0.dar
+  # BitSafe's Decentralization Manager governance interface, extracted from the
+  # published release DAR (decentralization-manager, hackathon branch,
+  # releases/v1/governance-action-v1-0.1.0.dar). Kept as a .dalf like the
+  # registry-matched packages above, because .gitignore excludes vendor/**/*.dar
+  # as build output and a submission has to build from a clean clone.
+  # SDK 3.4.11, target 2.2 -- same as this project -- and it depends only on
+  # daml-prim/daml-stdlib, so it adds no transitive weight.
+  - vendor/governance/governance-action-v1-48acd500.dalf
 
 build-options:
   - --package=splice-api-token-holding-v1-1.0.0
   - --package=splice-api-token-metadata-v1-1.0.0
   - --package=splice-api-token-allocation-v1-1.0.0
   - --package=splice-api-token-allocation-request-v1-1.0.0
+  # A .dalf ships without the metadata a .dar carries, so the package has to be
+  # exposed explicitly or its module is hidden -- same as the four above.
+  - --package=governance-action-v1-0.1.0
