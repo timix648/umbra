@@ -222,14 +222,21 @@ A dealer may also **decline** — the requester sees who has not priced, but nev
 ```
 umbra/
   daml/
-    UmbraSwap.daml       The unified any-to-any engine  <- the HackCanton build
-    UmbraSwapTest.daml   8 headless proofs (P1-P8)
-    Umbra.daml           Legacy single-asset engine (Encode; kept as fallback)
-    UmbraDvP.daml        Legacy CIP-56 DvP path
-    UmbraTest.daml / UmbraDvpTest.daml
+    UmbraSwap.daml              The venue: RFQ, blind auction, atomic settlement
+    UmbraGovernance.daml        Privileged actions behind a threshold of operators
+    UmbraSwapTest.daml          the swap proofs
+    UmbraGovernanceTest.daml    governed actions confer no authority on their own
+    UmbraMandateTest.daml       the one delegation, and its limits
+    UmbraDealerTest.daml        the on-ledger dealer directory
+    UmbraTrustBoundaryTest.daml the venue's two keys have disjoint powers
+    UmbraSettlementGuardTest.daml  hostile inputs to settlement
+    UmbraAuctionTest.daml       one request, one winner
+    UmbraPartialFillTest.daml   a block worked across several dealers
   backend/
     server.js            Express over the Canton JSON Ledger API v2
-    token.js             OAuth client-credentials + ledger fetch
+    token.js             OAuth client-credentials, password grant, static JWT
+    auth.js              Sessions proved by signing a nonce with the party's key
+    signer.js            The only place a private key is a key, not ciphertext
     external.js          External-party onboarding, prepare/sign/execute (multi-party)
     public/
       landing.html       /
@@ -412,7 +419,7 @@ ask for the buyer's view, and an authenticated dealer cannot ask for a rival's.
 ```bash
 export PATH="$HOME/.daml/bin:$PATH"
 daml build          # -> .daml/dist/umbra-v9-0.7.0.dar
-daml test           # 71 scripts: swap, governance, mandate, dealer registry,
+daml test           # 66 scripts: swap, governance, mandate, dealer registry,
                     # trust boundary, settlement guards, auction and partial-fill proofs
 ```
 

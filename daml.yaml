@@ -4,7 +4,8 @@
 sdk-version: 3.4.11
 name: umbra-v9
 source: daml
-init-script: UmbraTest:umbraDemo
+# No init-script: the v1 demo it pointed at (UmbraTest:umbraDemo) lives on the
+# v2 branch now. `daml start` seeds nothing; the venue is seeded over the API.
 # 0.2.0: SwapProposal now carries real settlement deadlines and a unique trade id,
 # so the CIP-56 AllocationRequest view reports them instead of invented constants.
 # Bumped rather than reusing 0.1.0 so this package is distinguishable on-ledger

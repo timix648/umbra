@@ -14,7 +14,7 @@ feature was worth.
 ## Before recording
 
 ```bash
-daml build && daml test          # 71 scripts; a green run is beat 0
+daml build && daml test          # 66 scripts; a green run is beat 0
 cd backend && node --test test/*.test.js   # 21 tests
 ```
 
