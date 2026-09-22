@@ -22,6 +22,7 @@
 module UmbraGovernance where
 
 import Governance.Action
+import Splice.Api.Token.MetadataV1
 import UmbraSwap
 
 -- | Bring the registry into existence under governance.
@@ -132,3 +133,57 @@ template SetParticipantsProposal
       executeImpl = do
         _ <- exercise registryCid SetParticipants with participants' = participants
         pure ()
+
+-- | Settle a block trade only when a threshold of operators agrees.
+--
+-- This is the one that matters. The three above govern configuration; this
+-- governs money moving. ExecuteRealSwap is `controller operator` and fires both
+-- allocation legs plus the fee in a single transaction, so the operator key that
+-- can call it can also decline to -- holding a settled trade hostage, or picking
+-- which counterparty gets filled. A threshold removes that.
+--
+-- WHY THE TRADE IS DESCRIBED ON THE PROPOSAL RATHER THAN READ FROM THE
+-- SETTLEMENT: the interface view is a pure function, so it cannot fetch. A
+-- proposal that carried only a ContractId would show each operator an opaque
+-- hash and ask them to approve it, which is not approval, it is a rubber stamp.
+-- So the trade is summarised on the proposal where the view can reach it.
+--
+-- That summary is not taken on trust. executeImpl fetches the settlement and
+-- asserts the summary matches before exercising anything, so a proposer who
+-- describes a small trade and points at a large one fails at execution rather
+-- than succeeding quietly. The operators approve what they read.
+template ExecuteRealSwapProposal
+  with
+    governanceParty : Party                          -- the settlement's operator
+    proposer        : Party
+    settlementCid   : ContractId SwapSettlement
+    -- Denormalised purely so the view can render it; checked on execute.
+    offerSymbol     : Text
+    offerAmount     : Decimal
+    wantSymbol      : Text
+    -- Registry choice-context, built off-ledger by the venue. Daml cannot
+    -- assemble these itself, which is why they are supplied rather than derived.
+    offerArgs       : ExtraArgs
+    wantArgs        : ExtraArgs
+    feeArgs         : Optional ExtraArgs
+  where
+    signatory proposer
+    observer governanceParty
+
+    interface instance GovernableAction for ExecuteRealSwapProposal where
+      view = GovernableActionView with
+        governanceParty
+        proposer
+        actionLabel = "ExecuteRealSwap"
+        description = "Settle " <> show offerAmount <> " " <> offerSymbol
+                   <> " for " <> wantSymbol <> " - both legs, one transaction"
+
+      executeImpl = do
+        s <- fetch settlementCid
+        assertMsg
+          ("the settlement does not match the approved summary: expected "
+            <> show offerAmount <> " " <> offerSymbol <> " for " <> wantSymbol)
+          (s.offerAsset.symbol == offerSymbol
+            && s.offerAmount == offerAmount
+            && s.wantAsset.symbol == wantSymbol)
+        exercise settlementCid ExecuteRealSwap with offerArgs, wantArgs, feeArgs

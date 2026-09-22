@@ -25,7 +25,11 @@ init-script: UmbraTest:umbraDemo
 # it -- and DecMan's contract-deployment API cannot either, its field encoding
 # has no list type. A proposal can: it is signed by the proposer, and the
 # registry it creates is signed by the governance party.
-version: 0.5.1
+# 0.5.2: adds ExecuteRealSwapProposal - governance over settlement itself, not
+# just configuration. The trade is summarised on the proposal so the view can
+# render it (the view is pure and cannot fetch), and executeImpl asserts the
+# summary matches the settlement before exercising, so the summary cannot lie.
+version: 0.5.2
 dependencies:
   - daml-prim
   - daml-stdlib
