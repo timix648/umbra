@@ -1,0 +1,95 @@
+-- Put multi-sig on the venue's privileged actions.
+--
+-- Umbra's operator can list and delist assets, decide who may see the registry,
+-- and approve the execution path of a settled trade. Every one of those is
+-- `controller operator` in UmbraSwap, which means one key decides all of them.
+-- That is the single point of control a decentralized party is meant to remove.
+--
+-- Each template here wraps ONE of those choices as a proposal. The proposal is
+-- inert on its own: GovernableAction_Execute is `controller governanceParty`,
+-- so nothing happens until the Decentralization Manager has collected enough
+-- confirmations and exercises it with the governance party's authority.
+--
+-- THE ONE CONSTRAINT THAT DECIDES WHETHER THIS WORKS: executeImpl runs with the
+-- governance party's authority and nothing else. So the venue's `operator` must
+-- BE the governance party -- the AssetRegistry's operator field and
+-- governanceParty here are the same Party. Point this at a registry owned by
+-- someone else and the exercise fails for want of authority, which is the
+-- failure the briefing warns custom actions hit first.
+--
+-- The proposer signs the proposal and can retract it alone
+-- (GovernableAction_ProposerCancel); only governance can execute it.
+module UmbraGovernance where
+
+import Governance.Action
+import UmbraSwap
+
+-- | List an asset on the venue. The pair goes live only once the operators agree.
+template ListAssetProposal
+  with
+    governanceParty : Party                      -- the registry's operator
+    proposer        : Party
+    registryCid     : ContractId AssetRegistry
+    asset           : AssetId
+  where
+    signatory proposer
+    observer governanceParty
+
+    interface instance GovernableAction for ListAssetProposal where
+      view = GovernableActionView with
+        governanceParty
+        proposer
+        actionLabel = "ListAsset"
+        description = "List " <> asset.symbol <> " as tradeable on the venue"
+
+      executeImpl = do
+        _ <- exercise registryCid ListAsset with asset
+        pure ()
+
+-- | Remove an asset from the tradeable set. Delisting strands anyone mid-trade
+-- in that pair, so it is exactly as privileged as listing.
+template DelistAssetProposal
+  with
+    governanceParty : Party
+    proposer        : Party
+    registryCid     : ContractId AssetRegistry
+    asset           : AssetId
+  where
+    signatory proposer
+    observer governanceParty
+
+    interface instance GovernableAction for DelistAssetProposal where
+      view = GovernableActionView with
+        governanceParty
+        proposer
+        actionLabel = "DelistAsset"
+        description = "Remove " <> asset.symbol <> " from the tradeable set"
+
+      executeImpl = do
+        _ <- exercise registryCid DelistAsset with asset
+        pure ()
+
+-- | Change who may observe the registry. This is the venue's membership list:
+-- adding a party lets it see what is tradeable, removing one cuts it off. A
+-- single operator being able to do that quietly is the reason it is here.
+template SetParticipantsProposal
+  with
+    governanceParty : Party
+    proposer        : Party
+    registryCid     : ContractId AssetRegistry
+    participants    : [Party]
+  where
+    signatory proposer
+    observer governanceParty
+
+    interface instance GovernableAction for SetParticipantsProposal where
+      view = GovernableActionView with
+        governanceParty
+        proposer
+        actionLabel = "SetParticipants"
+        description = "Set the registry's participant list to "
+                   <> show (length participants) <> " parties"
+
+      executeImpl = do
+        _ <- exercise registryCid SetParticipants with participants' = participants
+        pure ()

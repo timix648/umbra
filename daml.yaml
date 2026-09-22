@@ -15,7 +15,12 @@ init-script: UmbraTest:umbraDemo
 # 0.2.2: SubmitSwapQuote and AcceptSwapQuote now fetch the SwapRfq they answer, so a
 # cancelled request can no longer be quoted or lifted. CancelRfq archived only the RFQ;
 # invitations and quotes are separate contracts and outlived it. Body-only again.
-version: 0.4.0
+# 0.5.0: adds UmbraGovernance, which wraps the operator-only registry choices
+# (ListAsset, DelistAsset, SetParticipants) as GovernableAction proposals so a
+# decentralized party can put multi-sig on them. Bumped rather than reusing
+# 0.4.0 because 0.4.0 is already uploaded to two ledgers and a rebuild under the
+# same version would be a different package with the same name.
+version: 0.5.0
 dependencies:
   - daml-prim
   - daml-stdlib
@@ -36,6 +41,11 @@ data-dependencies:
   - vendor/registry-matched/splice-api-token-allocation-request-v1-6fe84853.dalf
   - vendor/registry-matched/daml-stdlib-9d1a644e.dalf
   - vendor/registry-matched/daml-prim-54f85ebf.dalf
+  # BitSafe's Decentralization Manager governance interface, from the published
+  # release DAR (decentralization-manager, hackathon branch, releases/v1).
+  # SDK 3.4.11 and target 2.2, same as this project, and it depends only on
+  # daml-prim/daml-stdlib -- so it adds no transitive weight.
+  - vendor/governance/governance-action-v1-0.1.0.dar
 
 build-options:
   - --package=splice-api-token-holding-v1-1.0.0
