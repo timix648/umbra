@@ -1,0 +1,229 @@
+module UmbraGovernanceTest where
+
+import UmbraSwap
+import UmbraGovernance
+import Governance.Action
+import Daml.Script
+import DA.Assert ((===))
+
+-- ============================================================================
+-- Proofs for the governed venue actions.
+--
+-- The claim these defend is narrow and worth stating plainly: a proposal
+-- confers NO authority by itself. Creating one is something any proposer can
+-- do with their own key; acting on one is something only the governance party
+-- can do. Everything below is a variation on that.
+--
+-- These run without a Decentralization Manager. The manager decides WHEN the
+-- threshold is met and exercises GovernableAction_Execute; these prove what
+-- happens on either side of that moment, which is the part that lives in Daml.
+--
+-- NOT COVERED HERE: ExecuteRealSwapProposal's summary guard. Exercising it
+-- needs a SwapSettlement holding two registry-issued Allocation contracts, and
+-- nothing in this package can mint those -- the same reason UmbraSwapTest
+-- proves settlement through the stand-in ExecuteSwap rather than
+-- ExecuteRealSwap. That guard is exercised against a real registry, not here.
+-- ============================================================================
+
+data Gov = Gov
+  with
+    governance : Party      -- the decentralized party; the registry's operator
+    proposer   : Party      -- an operator proposing; signs the proposal alone
+    outsider   : Party      -- neither; must never be able to act
+    member1    : Party
+    member2    : Party
+    cbtc       : AssetId
+    ceth       : AssetId
+
+setupGov : Script Gov
+setupGov = do
+  governance <- allocateParty "governance"
+  proposer   <- allocateParty "proposer"
+  outsider   <- allocateParty "outsider"
+  member1    <- allocateParty "member1"
+  member2    <- allocateParty "member2"
+  btcIssuer  <- allocateParty "btcIssuer"
+  ethIssuer  <- allocateParty "ethIssuer"
+  pure Gov with
+    governance; proposer; outsider; member1; member2
+    cbtc = AssetId with admin = btcIssuer, symbol = "cBTC"
+    ceth = AssetId with admin = ethIssuer, symbol = "cETH"
+
+-- A registry owned by the governance party, which is the arrangement every
+-- proposal below assumes.
+governedRegistry : Gov -> Script (ContractId AssetRegistry)
+governedRegistry g = submit g.governance do
+  createCmd AssetRegistry with
+    operator = g.governance
+    participants = [g.member1, g.member2]
+    assets = []
+
+-- | A proposal on its own moves nothing. The proposer signed it and still
+-- cannot execute it -- which is the whole point, and the property that would
+-- silently disappear if GovernableAction_Execute were ever made
+-- `controller proposer`.
+proposalConfersNoAuthority : Script ()
+proposalConfersNoAuthority = do
+  g <- setupGov
+  reg <- governedRegistry g
+
+  prop <- submit g.proposer do
+    createCmd ListAssetProposal with
+      governanceParty = g.governance
+      proposer = g.proposer
+      registryCid = reg
+      asset = g.cbtc
+
+  let iface = toInterfaceContractId @GovernableAction prop
+
+  -- the proposer cannot
+  submitMustFail g.proposer do exerciseCmd iface GovernableAction_Execute
+  -- and neither can a bystander
+  submitMustFail g.outsider do exerciseCmd iface GovernableAction_Execute
+
+  -- the registry is untouched
+  Some r <- queryContractId g.governance reg
+  r.assets === []
+
+-- | The governance party executes, and the asset is actually listed. This is
+-- the positive case: authority flows through the exercise chain, so executeImpl
+-- can exercise a choice that is `controller operator`.
+governanceListsTheAsset : Script ()
+governanceListsTheAsset = do
+  g <- setupGov
+  reg <- governedRegistry g
+
+  prop <- submit g.proposer do
+    createCmd ListAssetProposal with
+      governanceParty = g.governance
+      proposer = g.proposer
+      registryCid = reg
+      asset = g.cbtc
+
+  submit g.governance do
+    exerciseCmd (toInterfaceContractId @GovernableAction prop) GovernableAction_Execute
+
+  -- ListAsset is consuming, so the registry is a NEW contract
+  rs <- query @AssetRegistry g.governance
+  case rs of
+    [(_, r)] -> r.assets === [g.cbtc]
+    _ -> assertFail ("expected exactly one registry, got " <> show (length rs))
+
+-- | The view an operator reads before confirming is the venue's own sentence,
+-- not a contract id. That text is what crosses into the manager's UI, so it is
+-- worth pinning: a change that empties it would not fail any other test.
+proposalDescribesItself : Script ()
+proposalDescribesItself = do
+  g <- setupGov
+  reg <- governedRegistry g
+  prop <- submit g.proposer do
+    createCmd ListAssetProposal with
+      governanceParty = g.governance
+      proposer = g.proposer
+      registryCid = reg
+      asset = g.ceth
+
+  Some v <- queryInterfaceContractId @GovernableAction g.governance
+              (toInterfaceContractId @GovernableAction prop)
+  v.actionLabel === "ListAsset"
+  v.description === "List cETH as tradeable on the venue"
+  v.governanceParty === g.governance
+  v.proposer === g.proposer
+
+-- | A proposer may retract their own proposal without a vote. Nobody else may.
+proposerRetractsAlone : Script ()
+proposerRetractsAlone = do
+  g <- setupGov
+  reg <- governedRegistry g
+  prop <- submit g.proposer do
+    createCmd ListAssetProposal with
+      governanceParty = g.governance
+      proposer = g.proposer
+      registryCid = reg
+      asset = g.cbtc
+
+  let iface = toInterfaceContractId @GovernableAction prop
+  submitMustFail g.outsider do exerciseCmd iface GovernableAction_ProposerCancel
+  submit g.proposer do exerciseCmd iface GovernableAction_ProposerCancel
+
+  -- retracting must not have listed anything
+  Some r <- queryContractId g.governance reg
+  r.assets === []
+
+-- | Delisting is as privileged as listing, and goes the same route.
+governanceDelists : Script ()
+governanceDelists = do
+  g <- setupGov
+  reg0 <- submit g.governance do
+    createCmd AssetRegistry with
+      operator = g.governance
+      participants = [g.member1]
+      assets = [g.cbtc, g.ceth]
+
+  prop <- submit g.proposer do
+    createCmd DelistAssetProposal with
+      governanceParty = g.governance
+      proposer = g.proposer
+      registryCid = reg0
+      asset = g.cbtc
+
+  submitMustFail g.proposer do
+    exerciseCmd (toInterfaceContractId @GovernableAction prop) GovernableAction_Execute
+  submit g.governance do
+    exerciseCmd (toInterfaceContractId @GovernableAction prop) GovernableAction_Execute
+
+  rs <- query @AssetRegistry g.governance
+  case rs of
+    [(_, r)] -> r.assets === [g.ceth]
+    _ -> assertFail "expected exactly one registry"
+
+-- | Membership changes are governed too: who may see the venue is not a
+-- decision one operator should make quietly.
+governanceSetsParticipants : Script ()
+governanceSetsParticipants = do
+  g <- setupGov
+  reg <- governedRegistry g
+
+  prop <- submit g.proposer do
+    createCmd SetParticipantsProposal with
+      governanceParty = g.governance
+      proposer = g.proposer
+      registryCid = reg
+      participants = [g.member1]
+
+  submit g.governance do
+    exerciseCmd (toInterfaceContractId @GovernableAction prop) GovernableAction_Execute
+
+  rs <- query @AssetRegistry g.governance
+  case rs of
+    [(_, r)] -> r.participants === [g.member1]
+    _ -> assertFail "expected exactly one registry"
+
+-- | The bootstrap case. There is no registry yet and the party that must sign
+-- one is the governed party, so a proposal is the only way in. Proves the
+-- registry is governed from the moment it exists rather than being created by a
+-- key and handed over afterwards.
+registryIsBornGoverned : Script ()
+registryIsBornGoverned = do
+  g <- setupGov
+
+  prop <- submit g.proposer do
+    createCmd CreateRegistryProposal with
+      governanceParty = g.governance
+      proposer = g.proposer
+      participants = [g.member1, g.member2]
+
+  -- nobody holds a key that can make this registry directly
+  submitMustFail g.proposer do
+    exerciseCmd (toInterfaceContractId @GovernableAction prop) GovernableAction_Execute
+
+  submit g.governance do
+    exerciseCmd (toInterfaceContractId @GovernableAction prop) GovernableAction_Execute
+
+  rs <- query @AssetRegistry g.governance
+  case rs of
+    [(_, r)] -> do
+      r.operator === g.governance
+      r.participants === [g.member1, g.member2]
+      r.assets === []
+    _ -> assertFail "expected the registry to have been created"
