@@ -187,3 +187,65 @@ template ExecuteRealSwapProposal
             && s.offerAmount == offerAmount
             && s.wantAsset.symbol == wantSymbol)
         exercise settlementCid ExecuteRealSwap with offerArgs, wantArgs, feeArgs
+
+-- | Stop routing flow to a desk. This is the venue telling a counterparty it is
+-- no longer welcome, which is a reputational act with money behind it -- exactly
+-- the kind of decision that should not rest on one operator having a bad day, or
+-- on one operator quietly favouring a competitor by suspending it.
+--
+-- The dealer is an observer of the suspension it creates, so the desk can read
+-- the stated reason off the ledger rather than being told nothing. A file on the
+-- venue's disk could never offer that.
+template SuspendDealerProposal
+  with
+    governanceParty : Party        -- the venue; signs the suspension
+    proposer        : Party
+    dealer          : Party
+    reason          : Text
+  where
+    signatory proposer
+    observer governanceParty
+
+    interface instance GovernableAction for SuspendDealerProposal where
+      view = GovernableActionView with
+        governanceParty
+        proposer
+        actionLabel = "SuspendDealer"
+        description = "Stop routing flow to this desk - " <> reason
+
+      executeImpl = do
+        now <- getTime
+        _ <- create DealerSuspension with
+          operator = governanceParty
+          dealer; reason
+          since = now
+        pure ()
+
+-- | And the way back. Reinstating is as privileged as suspending: a single key
+-- able to lift a suspension the operators agreed on would make the threshold
+-- decorative.
+template LiftSuspensionProposal
+  with
+    governanceParty : Party
+    proposer        : Party
+    suspensionCid   : ContractId DealerSuspension
+    dealer          : Party        -- denormalised so the view can name the desk
+  where
+    signatory proposer
+    observer governanceParty
+
+    interface instance GovernableAction for LiftSuspensionProposal where
+      view = GovernableActionView with
+        governanceParty
+        proposer
+        actionLabel = "LiftSuspension"
+        description = "Reinstate a suspended desk and route flow to it again"
+
+      executeImpl = do
+        s <- fetch suspensionCid
+        -- Same discipline as ExecuteRealSwapProposal: the summary an operator
+        -- approved has to match the contract being acted on, or a proposal
+        -- could name one desk and reinstate another.
+        assertMsg "the suspension does not match the approved summary"
+          (s.dealer == dealer)
+        exercise suspensionCid LiftSuspension

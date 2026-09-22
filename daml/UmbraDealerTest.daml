@@ -1,0 +1,230 @@
+module UmbraDealerTest where
+
+import UmbraSwap
+import UmbraGovernance
+import Governance.Action
+import Daml.Script
+import DA.Assert ((===))
+
+-- ============================================================================
+-- Proofs for the on-ledger dealer directory.
+--
+-- This replaced backend/dealer-optin.local.txt, a JSON file beside the server.
+-- The point of moving it was not tidiness. A file gives the venue three powers
+-- it should not have: to list a desk that never agreed, to remove one without
+-- trace, and to tell a party it is listed when it is not. The tests below are
+-- each one of those powers being refused by the ledger instead of by a promise.
+--
+-- The asymmetry is deliberate and is the whole design:
+--   registering and leaving  belong to the DEALER  -> signatory / controller dealer
+--   suspending and lifting   belong to the VENUE   -> and so go through governance
+-- ============================================================================
+
+data D = D
+  with
+    governance : Party      -- the venue operator, decentralized
+    proposer   : Party      -- an operator proposing
+    dealer     : Party
+    other      : Party      -- a second desk, to catch mistaken identity
+    outsider   : Party
+
+setupD : Script D
+setupD = do
+  governance <- allocateParty "governance"
+  proposer   <- allocateParty "proposer"
+  dealer     <- allocateParty "dealer"
+  other      <- allocateParty "other"
+  outsider   <- allocateParty "outsider"
+  pure D with governance; proposer; dealer; other; outsider
+
+registerD : D -> Party -> Script (ContractId DealerRegistration)
+registerD d who = do
+  now <- getTime
+  submit who do
+    createCmd DealerRegistration with
+      dealer = who
+      operator = d.governance
+      since = now
+
+-- | Nobody is enlisted. The venue cannot put a desk in its own directory,
+-- because the registration is signed by the desk -- which is the difference
+-- between a directory and a list of names the venue typed.
+onlyTheDeskCanListItself : Script ()
+onlyTheDeskCanListItself = do
+  d <- setupD
+  now <- getTime
+
+  submitMustFail d.governance do
+    createCmd DealerRegistration with
+      dealer = d.dealer; operator = d.governance; since = now
+  submitMustFail d.outsider do
+    createCmd DealerRegistration with
+      dealer = d.dealer; operator = d.governance; since = now
+
+  -- the desk itself can, and the venue sees it
+  reg <- registerD d d.dealer
+  Some r <- queryContractId d.governance reg
+  r.dealer === d.dealer
+  r.operator === d.governance
+
+-- | And nobody is held. A desk leaves on its own authority; the venue is an
+-- observer, and an observer cannot block an archive.
+--
+-- This is the property the file version could not offer at all: withdrawing
+-- meant asking the venue to delete a row, and trusting that it had.
+theDeskLeavesWithoutPermission : Script ()
+theDeskLeavesWithoutPermission = do
+  d <- setupD
+  reg <- registerD d d.dealer
+
+  submitMustFail d.governance do exerciseCmd reg WithdrawRegistration
+  submitMustFail d.outsider   do exerciseCmd reg WithdrawRegistration
+
+  submit d.dealer do exerciseCmd reg WithdrawRegistration
+  regs <- query @DealerRegistration d.governance
+  length regs === 0
+
+-- | Suspension is the venue's act, so it takes a threshold rather than a key.
+-- A single operator able to cut a competitor out of the flow is the conflict of
+-- interest this removes.
+suspensionTakesGovernance : Script ()
+suspensionTakesGovernance = do
+  d <- setupD
+  _ <- registerD d d.dealer
+
+  prop <- submit d.proposer do
+    createCmd SuspendDealerProposal with
+      governanceParty = d.governance
+      proposer = d.proposer
+      dealer = d.dealer
+      reason = "failed to settle three times"
+
+  let iface = toInterfaceContractId @GovernableAction prop
+  submitMustFail d.proposer do exerciseCmd iface GovernableAction_Execute
+  submitMustFail d.outsider do exerciseCmd iface GovernableAction_Execute
+
+  -- nothing happened on the way to being refused
+  sus0 <- query @DealerSuspension d.governance
+  length sus0 === 0
+
+  submit d.governance do exerciseCmd iface GovernableAction_Execute
+
+  sus <- query @DealerSuspension d.governance
+  case sus of
+    [(_, s)] -> do
+      s.dealer === d.dealer
+      s.operator === d.governance
+      s.reason === "failed to settle three times"
+    _ -> assertFail "expected exactly one suspension"
+
+-- | The suspended desk can read why. It is an observer of the suspension, so
+-- the reason is on the ledger in front of the party it is about -- rather than
+-- in a field of a file only the venue could see.
+theSuspendedDeskCanReadTheReason : Script ()
+theSuspendedDeskCanReadTheReason = do
+  d <- setupD
+  _ <- registerD d d.dealer
+  prop <- submit d.proposer do
+    createCmd SuspendDealerProposal with
+      governanceParty = d.governance; proposer = d.proposer
+      dealer = d.dealer; reason = "under review"
+  submit d.governance do
+    exerciseCmd (toInterfaceContractId @GovernableAction prop) GovernableAction_Execute
+
+  -- read as the DEALER, not as the venue
+  mine <- query @DealerSuspension d.dealer
+  case mine of
+    [(_, s)] -> s.reason === "under review"
+    _ -> assertFail "the suspended desk cannot see its own suspension"
+
+  -- and it is not visible to an unrelated party
+  theirs <- query @DealerSuspension d.outsider
+  length theirs === 0
+
+-- | Suspension does NOT archive the registration, and that is intentional.
+--
+-- Archiving would be theatre: the desk would re-register a second later.
+-- Registration is signed by the dealer alone and so cannot be made to consult
+-- a contract the venue controls -- requiring that would hand the venue a veto
+-- over registering at all, which is the power this design removes.
+--
+-- So both facts stand and the directory is the difference between them. The
+-- test pins that, because a later refactor "tidying up" by archiving would
+-- silently restore the veto.
+bothFactsStandAndTheDirectoryIsTheDifference : Script ()
+bothFactsStandAndTheDirectoryIsTheDifference = do
+  d <- setupD
+  reg <- registerD d d.dealer
+  prop <- submit d.proposer do
+    createCmd SuspendDealerProposal with
+      governanceParty = d.governance; proposer = d.proposer
+      dealer = d.dealer; reason = "under review"
+  submit d.governance do
+    exerciseCmd (toInterfaceContractId @GovernableAction prop) GovernableAction_Execute
+
+  -- the registration is untouched: the desk still says it is available
+  Some r <- queryContractId d.governance reg
+  r.dealer === d.dealer
+  -- and the venue's own record says it is not being routed to
+  sus <- query @DealerSuspension d.governance
+  length sus === 1
+
+  -- the desk may still withdraw while suspended; the two are independent
+  submit d.dealer do exerciseCmd reg WithdrawRegistration
+
+-- | Reinstating is as privileged as suspending. A key that could lift a
+-- suspension the operators agreed on would make the threshold decorative.
+liftingTakesGovernanceToo : Script ()
+liftingTakesGovernanceToo = do
+  d <- setupD
+  _ <- registerD d d.dealer
+  p1 <- submit d.proposer do
+    createCmd SuspendDealerProposal with
+      governanceParty = d.governance; proposer = d.proposer
+      dealer = d.dealer; reason = "under review"
+  submit d.governance do
+    exerciseCmd (toInterfaceContractId @GovernableAction p1) GovernableAction_Execute
+
+  [(susCid, _)] <- query @DealerSuspension d.governance
+
+  p2 <- submit d.proposer do
+    createCmd LiftSuspensionProposal with
+      governanceParty = d.governance; proposer = d.proposer
+      suspensionCid = susCid; dealer = d.dealer
+
+  let iface = toInterfaceContractId @GovernableAction p2
+  submitMustFail d.proposer do exerciseCmd iface GovernableAction_Execute
+  submit d.governance do exerciseCmd iface GovernableAction_Execute
+
+  sus <- query @DealerSuspension d.governance
+  length sus === 0
+
+-- | A lift proposal that names one desk and points at another's suspension is
+-- refused. Operators approve the sentence they read -- "reinstate this desk" --
+-- so the contract acted on has to be the one that sentence describes.
+aLiftCannotNameOneDeskAndReinstateAnother : Script ()
+aLiftCannotNameOneDeskAndReinstateAnother = do
+  d <- setupD
+  _ <- registerD d d.other
+
+  p1 <- submit d.proposer do
+    createCmd SuspendDealerProposal with
+      governanceParty = d.governance; proposer = d.proposer
+      dealer = d.other; reason = "under review"
+  submit d.governance do
+    exerciseCmd (toInterfaceContractId @GovernableAction p1) GovernableAction_Execute
+
+  [(susCid, _)] <- query @DealerSuspension d.governance
+
+  -- the proposal SAYS d.dealer; the suspension it points at is d.other's
+  bad <- submit d.proposer do
+    createCmd LiftSuspensionProposal with
+      governanceParty = d.governance; proposer = d.proposer
+      suspensionCid = susCid; dealer = d.dealer
+
+  submitMustFail d.governance do
+    exerciseCmd (toInterfaceContractId @GovernableAction bad) GovernableAction_Execute
+
+  -- the other desk is still suspended
+  sus <- query @DealerSuspension d.governance
+  length sus === 1

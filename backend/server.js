@@ -580,20 +580,60 @@ app.get("/api/package", async (req, res) => {
 // its own RFQ on the next, exactly as a real desk does; the directory already hides you
 // from your own auction. This flag says "list me as available to price", nothing more.
 //
-// Stored beside the other local registries. On-ledger registration would be stronger --
-// auditable, and revocable by the party without the venue's cooperation -- and is the
-// right shape later; this keeps the semantics correct now without another DAR.
+// THIS NOW LIVES ON THE LEDGER (v0.6.0). It used to be dealer-optin.local.txt, a
+// JSON file beside this server, which gave the venue three powers it should not
+// have: to list a desk that never agreed, to remove one without trace, and to
+// answer "you are listed" to a party that was not.
+//
+// DealerRegistration is signed by the DEALER, so nobody is enlisted and nobody is
+// held -- WithdrawRegistration is the dealer's alone. DealerSuspension is signed
+// by the VENUE and is reached through governance (SuspendDealerProposal), so one
+// key cannot cut a competitor out of the flow.
+//
+// The directory is the DIFFERENCE between those two facts. Suspension deliberately
+// does not archive the registration: it could, and the desk would re-register a
+// second later. See the comment block above DealerRegistration in UmbraSwap.daml.
 const DEALER_OPTIN_FILE = require("path").join(__dirname, "dealer-optin.local.txt");
-function loadDealerOptIns() {
+
+// Read-only, and only as a fallback: a deployment still on 0.5.x has neither
+// template on the ledger, and emptying the directory there would look like every
+// desk had withdrawn.
+function loadLegacyOptIns() {
   try { return JSON.parse(require("fs").readFileSync(DEALER_OPTIN_FILE, "utf8")); }
   catch (e) { return {}; }
 }
-function saveDealerOptIn(partyId, active) {
-  const all = loadDealerOptIns();
-  if (active) all[partyId] = { partyId, since: new Date().toISOString() };
-  else delete all[partyId];
-  require("fs").writeFileSync(DEALER_OPTIN_FILE, JSON.stringify(all, null, 2));
-  return all;
+
+async function loadDealerDirectory() {
+  try {
+    // Read as the venue, which is an observer on both templates.
+    const venue = await partyIdFor("requester");
+    const [regs, sus] = await Promise.all([
+      queryActive(venue, "UmbraSwap:DealerRegistration"),
+      queryActive(venue, "UmbraSwap:DealerSuspension"),
+    ]);
+    const suspended = {};
+    for (const c of sus) {
+      const d = c.payload && c.payload.dealer;
+      if (d) suspended[d] = { reason: c.payload.reason, since: c.payload.since,
+                              contractId: c.contractId };
+    }
+    const dealers = {};
+    for (const c of regs) {
+      const d = c.payload && c.payload.dealer;
+      if (!d) continue;
+      dealers[d] = {
+        partyId: d, since: c.payload.since, contractId: c.contractId,
+        suspended: !!suspended[d],
+        // The desk can read this off the ledger itself -- it is an observer on
+        // its own suspension. Surfacing it here is convenience, not disclosure.
+        suspensionReason: suspended[d] ? suspended[d].reason : null,
+      };
+    }
+    return { source: "ledger", dealers, suspended };
+  } catch (e) {
+    return { source: "legacy-file", dealers: loadLegacyOptIns(), suspended: {},
+             note: "ledger read failed, showing the pre-0.6.0 file: " + e.message };
+  }
 }
 
 // A party lists (or delists) itself. Self-service by design: nobody is enlisted.
@@ -617,8 +657,46 @@ app.post("/api/dealers/register", async (req, res) => {
       });
     }
     const active = req.body.active === undefined ? true : !!req.body.active;
-    saveDealerOptIn(party, active);
-    res.json({ ok: true, party, listed: active });
+    const who = req.body.party || req.body.role || "";
+    const operator = await partyIdFor("requester");
+
+    // The registration is `signatory dealer`, so the DESK signs it -- not the
+    // venue. act() signs for a venue role and refuses a wallet party by design;
+    // hand that caller the commands so its own wallet can sign them, rather than
+    // failing with a 500 that reads like a bug.
+    const cmds = active
+      ? [{ CreateCommand: {
+            templateId: `#${PKGN}:UmbraSwap:DealerRegistration`,
+            createArguments: { dealer: party, operator, since: new Date().toISOString() },
+          } }]
+      : await (async () => {
+          const dir = await loadDealerDirectory();
+          const mine = dir.dealers[party];
+          if (!mine || !mine.contractId) {
+            throw Object.assign(new Error("that party is not listed, so there is " +
+              "nothing to withdraw"), { status: 404 });
+          }
+          return [{ ExerciseCommand: {
+            templateId: `#${PKGN}:UmbraSwap:DealerRegistration`,
+            contractId: mine.contractId,
+            choice: "WithdrawRegistration",
+            choiceArgument: {},
+          } }];
+        })();
+
+    try {
+      const result = await act(who, active ? "dealer-list" : "dealer-unlist", cmds);
+      return res.json({ ok: true, party, listed: active, onLedger: true, result });
+    } catch (e) {
+      if (/no signing key for wallet party/.test(e.message)) {
+        return res.status(409).json({
+          error: "this desk signs for itself: send these commands through " +
+                 "/api/ext/prepare then /api/ext/execute",
+          party, listed: active, needsWalletSignature: true, commands: cmds,
+        });
+      }
+      throw e;
+    }
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -633,7 +711,8 @@ app.get("/api/dealers", async (req, res) => {
     }
     // Only wallets that asked to be listed. `?all=1` shows the rest so a party can find
     // itself in order to opt in.
-    const optedIn = loadDealerOptIns();
+    const dir = await loadDealerDirectory();
+    const optedIn = dir.dealers;
     const showAll = req.query.all === "1";
     for (const w of Object.values(loadWallets())) {
       const listed = !!optedIn[w.partyId];
@@ -643,12 +722,18 @@ app.get("/api/dealers", async (req, res) => {
       // for real desk names later; until a party can set one, this is what we have.
       const hint = String(w.partyId).split("::")[0];
       const short = hint.length > 12 ? hint.slice(0, 6) + "…" + hint.slice(-4) : hint;
+      const d = optedIn[w.partyId] || {};
       out.push({ id: w.partyId, partyId: w.partyId,
         name: w.profileName || short, hint,
         profileName: w.profileName || null,
-        kind: "wallet", custody: "self", listed });
+        kind: "wallet", custody: "self", listed,
+        // A suspended desk stays visible and is not routable. Hiding it would
+        // make a governed decision look like the desk had simply left.
+        suspended: !!d.suspended,
+        suspensionReason: d.suspensionReason || null });
     }
-    res.json({ ok: true, dealers: out.filter(d => d.partyId !== me) });
+    res.json({ ok: true, source: dir.source, note: dir.note,
+      dealers: out.filter(x => x.partyId !== me) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

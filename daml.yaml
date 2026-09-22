@@ -29,7 +29,11 @@ init-script: UmbraTest:umbraDemo
 # just configuration. The trade is summarised on the proposal so the view can
 # render it (the view is pure and cannot fetch), and executeImpl asserts the
 # summary matches the settlement before exercising, so the summary cannot lie.
-version: 0.5.2
+# 0.6.0: moves the dealer directory on-ledger. Who may be asked to price a block
+# was venue authorization state living in a JSON file beside the server;
+# DealerRegistration is signed by the dealer (so nobody is enlisted, and nobody
+# is held) and DealerSuspension by the venue, reached through governance.
+version: 0.6.0
 dependencies:
   - daml-prim
   - daml-stdlib

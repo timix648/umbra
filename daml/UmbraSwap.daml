@@ -790,3 +790,67 @@ template TradingMandate
 -- Convenience helper for tooling: is an asset listed in a registry snapshot?
 isListed : [AssetId] -> AssetId -> Bool
 isListed assets a = isSome (find (== a) assets)
+
+
+-- ============================================================================
+-- THE DEALER DIRECTORY, ON-LEDGER
+--
+-- Who is available to price a block is venue authorization state. It lived in
+-- backend/dealer-optin.local.txt -- a JSON file next to the server, which meant
+-- the venue could add a name nobody agreed to, remove one without trace, and
+-- answer "you are listed" to a party that was not. None of that is visible to
+-- the party it concerns.
+--
+-- Two contracts, because the two facts have different owners:
+--
+--   DealerRegistration  is SIGNED BY THE DEALER. The venue cannot create one,
+--                       so nobody is ever enlisted; and it is withdrawable by
+--                       the dealer alone, so the venue cannot hold a desk in a
+--                       directory it wants to leave.
+--
+--   DealerSuspension    is SIGNED BY THE OPERATOR, and is how the venue stops
+--                       routing flow to a desk. Privileged, so it is reached
+--                       through governance rather than one key -- see
+--                       SuspendDealerProposal in UmbraGovernance.
+--
+-- WHY SUSPENSION DOES NOT SIMPLY ARCHIVE THE REGISTRATION: it could, and the
+-- desk would re-register a second later, which would make suspension theatre.
+-- Nor can registration check for a suspension first -- it is signed by the
+-- dealer alone, and a dealer cannot be made to fetch a contract the venue
+-- controls without handing the venue a veto over registering at all.
+--
+-- So both facts stand, and the venue's directory is the difference between
+-- them. That is not a workaround, it is how a venue actually works: you cannot
+-- stop a firm calling itself a dealer, you can stop doing business with it.
+-- Both halves are on the ledger, so both are auditable by the party affected --
+-- which a file on the venue's disk never was.
+-- ============================================================================
+
+template DealerRegistration
+  with
+    dealer   : Party
+    operator : Party
+    since    : Time
+  where
+    signatory dealer
+    observer operator
+
+    -- Nobody's permission but the dealer's. The venue is an observer here and
+    -- observers cannot block an archive.
+    choice WithdrawRegistration : ()
+      controller dealer
+      do pure ()
+
+template DealerSuspension
+  with
+    operator : Party
+    dealer   : Party
+    reason   : Text       -- recorded on-ledger; the suspended party can read it
+    since    : Time
+  where
+    signatory operator
+    observer dealer
+
+    choice LiftSuspension : ()
+      controller operator
+      do pure ()
