@@ -117,6 +117,41 @@ app.get("/api/auth/whoami", (req, res) => {
 // falling back to someone else's view.
 const readParty = (req, requested) => auth.resolveReadParty(req, requested, isDemoRole);
 
+// --- AND THE WRITE PATH ------------------------------------------------------
+// Reads were the severe hole; writes are the lesser one, but they are a hole.
+// act() refuses wallet parties outright -- it has no key for them -- so the
+// exposure is narrower than "anyone can trade as you": it is "anyone can make
+// the VENUE sign as its own demo parties". Still not something to leave open on
+// a deployment carrying real order flow.
+//
+// One gate with an explicit allowlist, rather than a check bolted onto each of
+// 40-odd handlers, because the failure mode of the per-handler approach is
+// forgetting one and never noticing.
+//
+// The allowlist is small and each entry has a reason:
+//   /api/auth/*            you cannot hold a session before you obtain one
+//   /api/ext/onboard/*     you cannot hold a session before your party exists
+//   /api/ext/prepare       builds an unsigned command; grants nothing
+//   /api/ext/execute       carries the party's own signature, which the LEDGER
+//                          verifies -- that is stronger than a session
+const OPEN_POSTS = [
+  /^\/api\/auth\//,
+  /^\/api\/ext\/onboard\//,
+  /^\/api\/ext\/(prepare|execute)$/,
+];
+
+app.use((req, res, next) => {
+  if (req.method !== "POST" || !req.path.startsWith("/api/")) return next();
+  if (OPEN_POSTS.some((re) => re.test(req.path))) return next();
+  if (auth.callerParty(req)) return next();
+  if (auth.DEMO_ROLES) return next();
+  return res.status(401).json({
+    error: "this endpoint changes state. Authenticate first: POST /api/auth/challenge " +
+           "then /api/auth/verify, and send Authorization: Bearer <token>.",
+    path: req.path,
+  });
+});
+
 const PKG = process.env.PACKAGE_ID;
 const PKGN = process.env.PACKAGE_NAME;
 

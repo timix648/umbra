@@ -356,23 +356,64 @@ LEDGER_USER_ID=...
 SYNCHRONIZER_ID=global-domain::1220...
 
 # templates are resolved BY NAME — this must match daml.yaml
-PACKAGE_NAME=umbra-v8
+PACKAGE_NAME=umbra-v9
 
 REQUESTER=Requester::1220...
 DEALER1=Dealer1::1220...
 DEALER2=Dealer2::1220...
-OBSERVER=Observer::1220...
 
 PORT=4000
-SIGNED_MODE=false
+
+# Where the venue's own party keys live. `file` encrypts them with AES-256-GCM
+# under a scrypt-derived key and writes 0600; `env` keeps nothing on disk.
+# Losing the passphrase loses the parties, so keep it somewhere you control.
+UMBRA_KEYSTORE=file
+UMBRA_KEYSTORE_PASSPHRASE=...
+
+# Sessions do not survive a restart without this.
+UMBRA_SESSION_SECRET=...
+
+# The venue's own demo parties (requester/dealer1/dealer2) are readable and
+# usable WITHOUT authentication when this is set. It is what makes the
+# sample-data walkthrough work, and it must never be set on a deployment
+# carrying real order flow.
+UMBRA_DEMO_ROLES=1
+
+# Optional: the venue's fee. With no fee party the venue runs fee-free and
+# settlements carry two legs instead of three.
+UMBRA_FEE_PARTY=...
+UMBRA_FEE_BPS=5
 ```
+
+There is no `SIGNED_MODE` switch any more. Every trading party signs with its
+own key; the operator-signs-for-everyone path was removed, along with the
+observer party.
+
+### Authenticating
+
+Party-scoped reads and every state-changing call require a session. A caller
+proves it controls a party by signing a nonce with the same ed25519 key the
+party was onboarded with — the key that is already its identity on Canton:
+
+```bash
+NONCE=$(curl -sS -X POST localhost:4000/api/auth/challenge   -H 'Content-Type: application/json'   -d '{"party":"'$PARTY'"}' | jq -r .nonce)
+
+# the wallet signs $NONCE and returns base64
+TOKEN=$(curl -sS -X POST localhost:4000/api/auth/verify   -H 'Content-Type: application/json'   -d '{"party":"'$PARTY'","nonce":"'$NONCE'","signature":"'$SIG'"}' | jq -r .token)
+
+curl -sS localhost:4000/api/swap/quotes -H "Authorization: Bearer $TOKEN"
+```
+
+The party is taken from the token, never from the request — so a dealer cannot
+ask for the buyer's view, and an authenticated dealer cannot ask for a rival's.
 
 ### 2. Build and prove
 
 ```bash
 export PATH="$HOME/.daml/bin:$PATH"
-daml build          # -> .daml/dist/umbra-v9-0.5.2.dar
-daml test           # 8 swap proofs, 7 governance proofs, and the legacy suites
+daml build          # -> .daml/dist/umbra-v9-0.7.0.dar
+daml test           # 63 scripts: swap, governance, mandate, dealer registry,
+                    # trust boundary, settlement guards and auction proofs
 ```
 
 ### 3. Deploy the package
@@ -384,7 +425,7 @@ matched by package-id). Upload the DAR to the participant over the JSON API:
 curl -X POST "$LEDGER_API/v2/packages" \
   -H "Content-Type: application/octet-stream" \
   -H "Authorization: Bearer $TOKEN" \
-  --data-binary @.daml/dist/umbra-v9-0.5.2.dar
+  --data-binary @.daml/dist/umbra-v9-0.7.0.dar
 ```
 
 ### 4. Run
