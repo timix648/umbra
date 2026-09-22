@@ -7,10 +7,15 @@ require("dotenv").config();
 const SYNC = process.env.SYNCHRONIZER_ID ||
   "global-domain::1220be58c29e65de40bf273be1dc2b266d43a9a002ea5b18955aeef7aac881bb471a";
 const USER_ID = process.env.LEDGER_USER_ID || "6";
-const STORE = path.join(__dirname, "ext-parties.local.txt"); // gitignored by *.local.txt
+// The venue's own party keys live behind signer.js and never come back out of it:
+// callers ask it to sign and receive a signature. That is what makes a KMS
+// backend droppable later without touching a single call site here.
+const { getSigner, newKey } = require("./signer");
+const signer = getSigner();
 
-function loadStore() { try { return JSON.parse(fs.readFileSync(STORE, "utf8")); } catch { return {}; } }
-function saveStore(s) { fs.writeFileSync(STORE, JSON.stringify(s, null, 2)); }
+// Sign `hashB64` as `rec`'s party. rec carries no key -- only the role that
+// names one inside the keystore.
+const signAs = (rec, hashB64) => signer.sign(rec.role, hashB64);
 
 // POST helper: returns parsed JSON, throws on non-2xx with the body text
 async function jpost(p, body) {
@@ -22,22 +27,18 @@ async function jpost(p, body) {
 
 // Onboard (or reuse) an external party for a role. Persists its ed25519 key.
 async function onboardExternalParty(role) {
-  const store = loadStore();
-  if (store[role]) return store[role];
+  const existing = signer.recordFor(role);
+  if (existing) return existing;
 
-  const kp = crypto.generateKeyPairSync("ed25519", {
-    publicKeyEncoding: { type: "spki", format: "der" },
-    privateKeyEncoding: { type: "pkcs8", format: "der" },
-  });
-  const rawPub = kp.publicKey.subarray(kp.publicKey.length - 32).toString("base64");
-  const privDer = kp.privateKey.toString("base64");
-  const priv = crypto.createPrivateKey({ key: kp.privateKey, format: "der", type: "pkcs8" });
-  const pk = { format: "CRYPTO_KEY_FORMAT_RAW", keyData: rawPub, keySpec: "SIGNING_KEY_SPEC_EC_CURVE25519" };
+  // Held only until the party id exists -- allocate needs a signature over the
+  // topology, and there is nothing to file the key under until that lands.
+  const handle = newKey();
+  const pk = { format: "CRYPTO_KEY_FORMAT_RAW", keyData: handle.publicKeyRaw, keySpec: "SIGNING_KEY_SPEC_EC_CURVE25519" };
 
   const g = await jpost("/v2/parties/external/generate-topology", {
     partyHint: role + "-" + Date.now(), synchronizer: SYNC, publicKey: pk,
   });
-  const sigTopo = crypto.sign(null, Buffer.from(g.multiHash, "base64"), priv).toString("base64");
+  const sigTopo = handle.sign(g.multiHash);
   await jpost("/v2/parties/external/allocate", {
     synchronizer: SYNC,
     onboardingTransactions: g.topologyTransactions.map((t) => ({ transaction: t })),
@@ -52,8 +53,8 @@ async function onboardExternalParty(role) {
     });
   } catch (e) { console.log("[ext] readAs grant skipped:", e.message); }
 
-  const rec = { role, partyId: g.partyId, fingerprint: g.publicKeyFingerprint, privDer };
-  store[role] = rec; saveStore(store);
+  const rec = signer.commit(role, handle,
+    { partyId: g.partyId, fingerprint: g.publicKeyFingerprint });
   console.log(`[ext] onboarded ${role} -> ${g.partyId}`);
   return rec;
 }
@@ -70,8 +71,7 @@ async function prepareSignExecute(rec, commands, tag = "ext", disclosed = []) {
     synchronizerId: SYNC, packageIdSelectionPreference: [], commands,
     disclosedContracts: disclosed,
   });
-  const priv = crypto.createPrivateKey({ key: Buffer.from(rec.privDer, "base64"), format: "der", type: "pkcs8" });
-  const sig = crypto.sign(null, Buffer.from(prep.preparedTransactionHash, "base64"), priv).toString("base64");
+  const sig = signAs(rec, prep.preparedTransactionHash);
   const out = await jpost("/v2/interactive-submission/execute", {
     preparedTransaction: prep.preparedTransaction,
     hashingSchemeVersion: prep.hashingSchemeVersion,
@@ -95,12 +95,8 @@ async function prepareSignExecuteMulti(recs, commands, tag = "extm", disclosed =
     synchronizerId: SYNC, packageIdSelectionPreference: [], commands,
     disclosedContracts: disclosed,
   });
-  const hash = Buffer.from(prep.preparedTransactionHash, "base64");
   const signatures = recs.map((rec) => {
-    const priv = crypto.createPrivateKey({
-      key: Buffer.from(rec.privDer, "base64"), format: "der", type: "pkcs8",
-    });
-    const sig = crypto.sign(null, hash, priv).toString("base64");
+    const sig = signAs(rec, prep.preparedTransactionHash);
     return { party: rec.partyId, signatures: [{
       format: "SIGNATURE_FORMAT_RAW", signature: sig, signedBy: rec.fingerprint,
       signingAlgorithmSpec: "SIGNING_ALGORITHM_SPEC_ED25519" }] };
@@ -161,9 +157,10 @@ async function executeSigned(o) {
 // ---------------------------------------------------------------------------
 // ONBOARD A PARTY FROM A PUBLIC KEY -- the server never sees the private half.
 //
-// onboardExternalParty() above GENERATES the keypair here and persists privDer, which
-// is why this process can sign as those parties at all. That is fine for demo parties
-// and disqualifying for a real user: a venue holding your key can transact as you.
+// onboardExternalParty() above generates the keypair for a VENUE party and files it
+// in the keystore, which is why this process can sign as those parties at all. Even
+// encrypted, that would be disqualifying for a real user: a venue that can sign for
+// you can transact as you. So a user's wallet never takes that path.
 //
 // Onboarding is generate-topology -> sign multiHash -> allocate. Only the middle step
 // needs the private key, so it is split out and left to the wallet. What gets stored
@@ -173,7 +170,10 @@ async function executeSigned(o) {
 // ---------------------------------------------------------------------------
 const WALLET_STORE = path.join(__dirname, "ext-wallets.local.txt"); // gitignored by *.local.txt
 function loadWallets() { try { return JSON.parse(fs.readFileSync(WALLET_STORE, "utf8")); } catch { return {}; } }
-function saveWallets(s) { fs.writeFileSync(WALLET_STORE, JSON.stringify(s, null, 2)); }
+function saveWallets(s) {
+  fs.writeFileSync(WALLET_STORE, JSON.stringify(s, null, 2), { mode: 0o600 });
+  try { fs.chmodSync(WALLET_STORE, 0o600); } catch { /* non-posix */ }
+}
 
 async function onboardWalletPrepare(publicKeyB64, partyHint) {
   if (!publicKeyB64) throw new Error("need the wallet's raw ed25519 public key (base64)");
