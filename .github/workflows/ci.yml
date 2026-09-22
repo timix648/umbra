@@ -1,0 +1,90 @@
+name: build and test
+
+# BitSafe's first judging criterion is "runs from your own instructions on a
+# clean machine". A green run here IS that check, performed on every push
+# against a fresh checkout, rather than asserted in a README.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  daml:
+    name: daml build + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # daml.yaml is the single source of truth for the SDK version, so the
+      # workflow cannot drift from the project the way a pinned literal would.
+      - name: Read the SDK version from daml.yaml
+        id: sdk
+        run: echo "version=$(awk '/^sdk-version:/ {print $2}' daml.yaml)" >> "$GITHUB_OUTPUT"
+
+      # The SDK tarball is ~750MB. Cache it or every run pays for it again.
+      - uses: actions/cache@v4
+        id: daml-cache
+        with:
+          path: ~/.daml
+          key: daml-${{ runner.os }}-${{ steps.sdk.outputs.version }}
+
+      - name: Install the Daml SDK
+        if: steps.daml-cache.outputs.cache-hit != 'true'
+        run: curl -sSL https://get.daml.com/ | sh -s "${{ steps.sdk.outputs.version }}"
+
+      - run: echo "$HOME/.daml/bin" >> "$GITHUB_PATH"
+
+      # The real test of the vendored .dalf + --package arrangement: it works
+      # locally whether or not it is right, and only a clean checkout tells you.
+      - name: Build
+        run: daml build --no-legacy-assistant-warning
+
+      - name: Test
+        run: daml test --no-legacy-assistant-warning
+
+      - name: Name the DAR
+        id: dar
+        run: echo "path=$(ls .daml/dist/*.dar | head -1)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: umbra-dar
+          path: ${{ steps.dar.outputs.path }}
+          retention-days: 14
+
+  backend:
+    name: backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # The backend has no build step -- server.js is run straight from disk --
+      # so a syntax error ships unless something parses every file. The demo and
+      # probe scripts are included on purpose: they are how the wallet routes
+      # were established and they are cited in the submission.
+      - name: Parse every backend source file
+        run: |
+          set -e
+          n=0
+          for f in $(find . -name '*.js' -not -path './node_modules/*'); do
+            node --check "$f"
+            n=$((n+1))
+          done
+          echo "parsed $n files"
+        working-directory: backend
+
+      - name: Keystore tests
+        run: node --test test/*.test.js
+        working-directory: backend

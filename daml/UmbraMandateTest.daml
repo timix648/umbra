@@ -1,0 +1,247 @@
+module UmbraMandateTest where
+
+import UmbraSwap
+import Splice.Api.Token.AllocationV1 (Allocation)
+import Daml.Script
+import DA.Time (addRelTime, minutes)
+import DA.Assert ((===))
+
+-- ============================================================================
+-- Proofs for TradingMandate -- the one place a party lets the venue act for it.
+--
+-- Everywhere else in Umbra the operator signs nothing: each party holds its own
+-- key and the venue coordinates. TradingMandate is the deliberate exception, so
+-- it is the template where an overreach would actually be possible, and the only
+-- one whose guards are load-bearing rather than belt-and-braces.
+--
+-- Four things have to hold, and each is a test below:
+--   the grant is a SESSION, not a standing power     -> expiry is enforced
+--   it is withdrawable by the grantor ALONE          -> revocation is unilateral
+--   it speaks for ONE party                          -> no authority laundering
+--   it cannot be granted on someone else's behalf    -> signatory party
+-- ============================================================================
+
+data M = M
+  with
+    operator  : Party
+    alice     : Party     -- grants the mandate
+    bob       : Party     -- a different party with his own trades
+    dealer    : Party
+    outsider  : Party     -- holds nothing, must never be able to act
+    cbtc      : AssetId
+    cc        : AssetId
+
+setupM : Script M
+setupM = do
+  operator  <- allocateParty "Operator"
+  alice     <- allocateParty "Alice"
+  bob       <- allocateParty "Bob"
+  dealer    <- allocateParty "Dealer"
+  outsider  <- allocateParty "Outsider"
+  btcIssuer <- allocateParty "BitSafe"
+  ccAdmin   <- allocateParty "CantonCoin"
+  pure M with
+    operator; alice; bob; dealer; outsider
+    cbtc = AssetId with admin = btcIssuer, symbol = "cBTC"
+    cc   = AssetId with admin = ccAdmin,   symbol = "CC"
+
+-- A mandate from alice to the operator, valid for `mins` minutes.
+mandateFor : M -> Int -> Script (ContractId TradingMandate)
+mandateFor m mins = do
+  now <- getTime
+  submit m.alice do
+    createCmd TradingMandate with
+      party = m.alice
+      operator = m.operator
+      expiresAt = addRelTime now (minutes mins)
+
+-- | The mandate works while it is alive, and the RFQ it opens belongs to the
+-- MANDATING party -- not to the operator that exercised the choice. Delegation
+-- must not launder who is asking for the price; a dealer seeing `operator` as
+-- the requester would be pricing for the wrong counterparty.
+mandateOpensRfqAsTheGrantor : Script ()
+mandateOpensRfqAsTheGrantor = do
+  m <- setupM
+  mn <- mandateFor m 15
+  now <- getTime
+
+  (rfqCid, invs) <- submit m.operator do
+    exerciseCmd mn MandateOpenRfq with
+      mOfferAsset = m.cbtc
+      mOfferAmount = 2.0
+      mWantAsset = m.cc
+      mInvited = [m.dealer]
+      mExpiresAt = addRelTime now (minutes 10)
+
+  Some rfq <- queryContractId m.alice rfqCid
+  rfq.requester === m.alice        -- NOT m.operator
+  rfq.operator  === m.operator
+  rfq.invited   === [m.dealer]
+
+  -- the invitation is addressed from alice too
+  case invs of
+    [invCid] -> do
+      Some inv <- queryContractId m.dealer invCid
+      inv.requester === m.alice
+      inv.dealer    === m.dealer
+    _ -> assertFail ("expected exactly one invitation, got " <> show (length invs))
+
+-- | A mandate is a session, not a standing grant. Once the window closes the
+-- operator can do nothing with it, even though the contract is still on the
+-- ledger and still names the operator as controller.
+--
+-- This is the property that makes the grant safe to give: it expires whether or
+-- not anyone remembers to revoke it.
+expiredMandateIsInert : Script ()
+expiredMandateIsInert = do
+  m <- setupM
+  mn <- mandateFor m 5
+  passTime (minutes 6)
+  now <- getTime
+
+  submitMustFail m.operator do
+    exerciseCmd mn MandateOpenRfq with
+      mOfferAsset = m.cbtc
+      mOfferAmount = 1.0
+      mWantAsset = m.cc
+      mInvited = [m.dealer]
+      mExpiresAt = addRelTime now (minutes 10)
+
+  -- and nothing was created on the way to failing
+  rfqs <- query @SwapRfq m.alice
+  length rfqs === 0
+
+-- | The grantor can withdraw at any moment, alone, and the operator cannot
+-- stand in the way. After revocation the mandate is gone and the operator is
+-- back to being able to do nothing on alice's behalf.
+grantorRevokesAlone : Script ()
+grantorRevokesAlone = do
+  m <- setupM
+  mn <- mandateFor m 60
+  now <- getTime
+
+  -- neither the operator who benefits from it nor a bystander may revoke
+  submitMustFail m.operator do exerciseCmd mn RevokeMandate
+  submitMustFail m.outsider do exerciseCmd mn RevokeMandate
+
+  submit m.alice do exerciseCmd mn RevokeMandate
+
+  -- the grant is archived, so the operator's power ends with it
+  submitMustFail m.operator do
+    exerciseCmd mn MandateOpenRfq with
+      mOfferAsset = m.cbtc
+      mOfferAmount = 1.0
+      mWantAsset = m.cc
+      mInvited = [m.dealer]
+      mExpiresAt = addRelTime now (minutes 10)
+
+-- | A mandate speaks for exactly one party. Alice's grant must not let the
+-- operator drive Bob's trade -- the guard in MandateProposeRealSwap exists for
+-- precisely this, and it is checked before anything is exercised.
+--
+-- Bob's proposal is reached through the mandate alice signed; the refusal is
+-- what stops one party's session becoming authority over another's order.
+mandateSpeaksForOnePartyOnly : Script ()
+mandateSpeaksForOnePartyOnly = do
+  m <- setupM
+  mn <- mandateFor m 60
+  now <- getTime
+
+  -- Bob has a proposal of his own. SwapProposal is `signatory requester`, so
+  -- bob creates it himself and alice has nothing to do with it.
+  bobProp <- submit m.bob do
+    createCmd SwapProposal with
+      requester = m.bob
+      operator = m.operator
+      dealer = m.dealer
+      offerAsset = m.cbtc
+      offerAmount = 1.0
+      wantAsset = m.cc
+      price = 64000.0
+      requestedAt = Some now
+      allocateBefore = Some (addRelTime now (minutes 10))
+      settleBefore = Some (addRelTime now (minutes 20))
+      tradeId = Some "bob-1"
+      feeParty = None
+      feeAmount = None
+
+  -- The allocations are never dereferenced: the ownership assertion fires
+  -- first, which is the point. Coerced ids keep the test honest about WHICH
+  -- guard refused -- a real allocation would let a later failure masquerade
+  -- as this one.
+  let fakeAlloc = coerceContractId bobProp : ContractId Allocation
+
+  submitMustFail m.operator do
+    exerciseCmd mn MandateProposeRealSwap with
+      mProposalCid = bobProp
+      mOfferAlloc = fakeAlloc
+      mWantAlloc = fakeAlloc
+      mRefMid = None
+      mFeeAlloc = None
+
+  -- bob's proposal is untouched
+  Some p <- queryContractId m.bob bobProp
+  p.requester === m.bob
+
+-- | Only the operator named on the mandate may use it. An outsider holding the
+-- contract id gets nothing from it -- visibility is not authority.
+onlyTheNamedOperatorMayUseIt : Script ()
+onlyTheNamedOperatorMayUseIt = do
+  m <- setupM
+  mn <- mandateFor m 60
+  now <- getTime
+
+  submitMustFail m.outsider do
+    exerciseCmd mn MandateOpenRfq with
+      mOfferAsset = m.cbtc
+      mOfferAmount = 1.0
+      mWantAsset = m.cc
+      mInvited = [m.dealer]
+      mExpiresAt = addRelTime now (minutes 10)
+
+  -- nor may the grantor drive her own mandate: the choice is the operator's,
+  -- and alice opening an RFQ directly is a different path entirely
+  submitMustFail m.alice do
+    exerciseCmd mn MandateOpenRfq with
+      mOfferAsset = m.cbtc
+      mOfferAmount = 1.0
+      mWantAsset = m.cc
+      mInvited = [m.dealer]
+      mExpiresAt = addRelTime now (minutes 10)
+
+-- | Nobody can grant a mandate over a party that has not signed it. The
+-- operator cannot write itself authority over alice, which is what `signatory
+-- party` buys and what would be catastrophic to lose in a refactor.
+mandateCannotBeGrantedForSomeoneElse : Script ()
+mandateCannotBeGrantedForSomeoneElse = do
+  m <- setupM
+  now <- getTime
+
+  submitMustFail m.operator do
+    createCmd TradingMandate with
+      party = m.alice
+      operator = m.operator
+      expiresAt = addRelTime now (minutes 60)
+
+  submitMustFail m.outsider do
+    createCmd TradingMandate with
+      party = m.alice
+      operator = m.outsider
+      expiresAt = addRelTime now (minutes 60)
+
+-- | The same soundness guard the direct path has: a request that offers and
+-- wants the same asset is not a trade. Routing through a mandate must not be a
+-- way around a check that applies to everyone else.
+mandateKeepsTheSameAssetGuard : Script ()
+mandateKeepsTheSameAssetGuard = do
+  m <- setupM
+  mn <- mandateFor m 60
+  now <- getTime
+
+  submitMustFail m.operator do
+    exerciseCmd mn MandateOpenRfq with
+      mOfferAsset = m.cbtc
+      mOfferAmount = 1.0
+      mWantAsset = m.cbtc        -- same asset both sides
+      mInvited = [m.dealer]
+      mExpiresAt = addRelTime now (minutes 10)
