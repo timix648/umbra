@@ -3882,6 +3882,97 @@ app.get("/api/market/rate", async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// GOVERNANCE -- this venue's own operator console, and ONLY its own.
+//
+// Umbra runs one of the decentralized party's operators. That operator is an
+// Umbra user, so making them leave the trading UI to approve a trade they can
+// already see in full is silly -- these endpoints let them confirm in place.
+//
+// WHAT THIS DELIBERATELY IS NOT: the approval surface for the other operators.
+// They are independent organisations running their own nodes, and if approving
+// required this frontend then this frontend would be load-bearing for all of
+// them -- which is the single dependency the whole exercise removes. They use
+// their own Decentralization Manager. That is also why the proposal carries a
+// human-readable summary: it is the only thing that reaches an operator who
+// will never load this page.
+//
+// Off unless both are set: DECMAN_URL (this operator's own node) and DEC_PARTY.
+// ---------------------------------------------------------------------------
+const DECMAN_URL = (process.env.DECMAN_URL || "").replace(/\/$/, "");
+const DEC_PARTY = process.env.DEC_PARTY || "";
+const GOV_READY = () => !!(DECMAN_URL && DEC_PARTY);
+
+// Every proposal template this venue knows how to render.
+const GOV_TEMPLATES = [
+  "UmbraGovernance:ExecuteRealSwapProposal",
+  "UmbraGovernance:ListAssetProposal",
+  "UmbraGovernance:DelistAssetProposal",
+  "UmbraGovernance:SetParticipantsProposal",
+  "UmbraGovernance:CreateRegistryProposal",
+];
+
+app.get("/api/governance/pending", async (req, res) => {
+  if (!GOV_READY()) return res.status(404).json({ error: "governance is not configured" });
+  try {
+    // The proposals carry `observer governanceParty`, so the governed party sees
+    // them all. Read as that party rather than as any one operator.
+    const out = [];
+    for (const t of GOV_TEMPLATES) {
+      let cs = [];
+      try { cs = await queryActive(DEC_PARTY, t); } catch (e) { continue; }
+      for (const c of cs) out.push({ contractId: c.contractId, template: t, payload: c.payload });
+    }
+
+    // Confirmation counts live off-ledger in the manager, not in the contract, so
+    // the card cannot show "1 of 3" without asking. A failure here must not hide
+    // the proposals themselves -- an operator who cannot see a pending trade is
+    // worse off than one who cannot see its tally.
+    let tally = {};
+    try {
+      const r = await fetch(`${DECMAN_URL}/governance/confirmations?party_id=${encodeURIComponent(DEC_PARTY)}`);
+      if (r.ok) {
+        const j = await r.json();
+        for (const a of (j.domain_actions || [])) {
+          tally[a.proposal_cid] = {
+            confirmations: a.confirmation_count,
+            canExecute: !!a.can_execute,
+            label: a.action_label,
+            description: a.description,
+          };
+        }
+      }
+    } catch (e) { dbg("[gov] tally unavailable:", e.message); }
+
+    res.json({ ok: true, party: DEC_PARTY,
+      proposals: out.map((p) => Object.assign(p, tally[p.contractId] || {})) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Confirm on THIS operator's node. `action` is required by the manager's schema
+// and ignored for core_domain, which builds its choice from proposal_cid -- the
+// placeholder is what its own demo sends.
+app.post("/api/governance/confirm", async (req, res) => {
+  if (!GOV_READY()) return res.status(404).json({ error: "governance is not configured" });
+  try {
+    const { proposalCid, rulesContractId } = req.body || {};
+    if (!proposalCid) return res.status(400).json({ error: "need proposalCid" });
+    const rules = rulesContractId || process.env.DEC_RULES_CID;
+    if (!rules) return res.status(400).json({ error: "need rulesContractId (or set DEC_RULES_CID)" });
+    const r = await fetch(`${DECMAN_URL}/governance/confirm`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        party_id: DEC_PARTY, rules_contract_id: rules,
+        action: { type: "governance_set_threshold", new_threshold: 0 },
+        governance_type: "core_domain", proposal_cid: proposalCid,
+      }),
+    });
+    const text = await r.text();
+    if (!r.ok) return res.status(r.status).json({ error: text.slice(0, 300) });
+    res.json({ ok: true, confirmed: proposalCid, result: text.slice(0, 200) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Diagnostic only, and only when UMBRA_PROBE=1: does this wallet sign raw bytes?
 // Wrapped because it is a diagnostic, not a dependency -- a checkout without it, or a
 // broken edit to it, must not stop the venue from starting.

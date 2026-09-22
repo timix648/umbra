@@ -4255,6 +4255,67 @@ function LedgerProof({ cid, role, onClose }) {
 // assembly thunks home. One piece now. Irreversible.
 // If the ledger refuses the trade, the door is rejected at contact and both
 // leaves recoil to rest. Nothing moved. That is P6, made physical.
+// Pending governed actions, for THIS venue's operator only.
+//
+// Umbra runs one of the decentralized party's operators. This panel exists so
+// that operator can approve a trade in the UI where they can already see it,
+// rather than in a separate admin console. It is NOT the approval surface for
+// the other operators -- they are independent organisations on their own nodes,
+// and this page must never become something they depend on.
+//
+// Empty and silent when governance is not configured: /api/governance/pending
+// 404s unless DECMAN_URL and DEC_PARTY are both set, and a venue running with a
+// single operator key should see no trace of this.
+function GovernancePanel({ onOpen }) {
+  const [items, setItems] = useState(null);
+
+  const load = async () => {
+    try {
+      const r = await fetch("/api/governance/pending");
+      if (!r.ok) { setItems(null); return; }     // not configured; stay invisible
+      const j = await r.json();
+      setItems(j.proposals || []);
+    } catch (e) { setItems(null); }
+  };
+
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 10000);
+    return () => clearInterval(t);
+  }, []);
+
+  if (!items || !items.length) return null;
+
+  return React.createElement("div", { className: "card", "data-role": "governance" },
+    React.createElement("div", { className: "vl-eyb" },
+      "Awaiting your approval · " + items.length),
+    items.map((p) => {
+      const pl = p.payload || {};
+      const isSwap = /ExecuteRealSwapProposal/.test(p.template);
+      return React.createElement("div", {
+        key: p.contractId, className: "vl-rr", "data-role": "rrow"
+      },
+        React.createElement("span", null,
+          p.description || p.label || p.template.split(":").pop()),
+        React.createElement("button", {
+          className: "btn",
+          onClick: () => onOpen({
+            // A governed trade reuses the settlement legs, so an operator sees the
+            // same two-sided view a trader does rather than a contract id.
+            pending: true,
+            proposalCid: p.contractId,
+            description: p.description,
+            confirmations: p.confirmations,
+            threshold: 2,
+            offerSym: isSwap ? pl.offerSymbol : "—",
+            offerAmt: isSwap ? pl.offerAmount : "",
+            wantSym: isSwap ? pl.wantSymbol : "—",
+            wantAmt: "",
+            onConfirmed: load,
+          }),
+        }, "Review")); }));
+}
+
 function SettlementVault({ trade, onClose, role }) {
   const [phase, setPhase] = useState("idle");
   const [proof, setProof] = useState(null);
@@ -4262,12 +4323,18 @@ function SettlementVault({ trade, onClose, role }) {
   // A trade waiting on the counterparty is neither settled nor refused. It must not
   // borrow the reverted styling, and it must never claim nothing moved.
   const waiting = !!(trade && trade.waiting);
+  // A trade held for operator approval. Same two legs, but nothing has moved and
+  // nothing will until a threshold of operators says so -- so it holds at
+  // "settling" exactly as a counterparty wait does, and must not look settled.
+  const pending = !!(trade && trade.pending);
+  const [confirming, setConfirming] = useState(false);
+  const [confirmErr, setConfirmErr] = useState(null);
 
   useEffect(() => {
     if (!trade) return;
     const t = [];
     t.push(setTimeout(() => setPhase("settling"), 40));
-    if (waiting) return () => t.forEach(clearTimeout);   // hold at "settling"
+    if (waiting || pending) return () => t.forEach(clearTimeout);   // hold at "settling"
     t.push(setTimeout(() => setPhase(failed ? "reverted" : "sealed"), 820));
     if (!failed) t.push(setTimeout(() => setPhase("settled"), 1380));
     return () => t.forEach(clearTimeout);
@@ -4300,7 +4367,9 @@ function SettlementVault({ trade, onClose, role }) {
       React.createElement("div", { className: "vl-panel", "data-role": "panel" },
 
         React.createElement("div", { className: "vl-eyb" },
-          waiting ? "Awaiting the counterparty"
+          pending ? ("Awaiting operator approval \u00b7 "
+                     + (trade.confirmations || 0) + " of " + (trade.threshold || 2))
+          : waiting ? "Awaiting the counterparty"
                   : failed ? "Settlement refused" : "Atomic settlement \u00b7 CIP-56"),
 
         React.createElement("div", { className: "vl-legs", "data-role": "legs" },
@@ -4309,7 +4378,38 @@ function SettlementVault({ trade, onClose, role }) {
           leaf(trade.wantSym, trade.wantAmt, "bottom")),
 
         React.createElement("div", { className: "vl-say" },
-          waiting
+          pending
+            ? React.createElement(React.Fragment, null,
+                React.createElement("b", null, "Held for approval."),
+                " " + (trade.description
+                       || "This trade settles only once a threshold of operators agrees."),
+                // Confirming here speaks for THIS venue's own operator and no other.
+                // The other operators are separate organisations on their own nodes;
+                // if approving required this page, this page would be load-bearing for
+                // all of them, which is the dependency the decentralized party removes.
+                React.createElement("div", { className: "vl-rr", style: { marginTop: 10 } },
+                  React.createElement("button", {
+                    className: "btn",
+                    disabled: confirming || trade.confirmedByUs,
+                    onClick: async () => {
+                      setConfirming(true); setConfirmErr(null);
+                      try {
+                        const r = await fetch("/api/governance/confirm", {
+                          method: "POST", headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ proposalCid: trade.proposalCid }),
+                        });
+                        const j = await r.json();
+                        if (!r.ok) throw new Error(j.error || "confirm failed");
+                        if (trade.onConfirmed) trade.onConfirmed();
+                      } catch (e) { setConfirmErr(e.message); }
+                      finally { setConfirming(false); }
+                    },
+                  }, trade.confirmedByUs ? "Approved by us"
+                     : confirming ? "Approving…" : "Approve as this operator"),
+                  confirmErr
+                    ? React.createElement("span", { className: "rj", style: { marginLeft: 8 } }, confirmErr)
+                    : null))
+          : waiting
             ? React.createElement(React.Fragment, null,
                 React.createElement("b", null, "Signed."),
                 " " + (trade.reason || "Waiting for the counterparty to accept."))
@@ -5459,6 +5559,7 @@ function PartyPortal({ role, wallet, onExit }) {
       openTrade, settling, settleStep, onSettle: settleAsDealer, readFailed, fee,
       wallet, say
     }),
+    React.createElement(GovernancePanel, { onOpen: setVault }),
     React.createElement(SettlementVault, { trade: vault, role, onClose: () => setVault(null) }));
 
   const Holdings = React.createElement("section", { className: "mod" },
