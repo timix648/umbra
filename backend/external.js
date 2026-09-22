@@ -189,6 +189,7 @@ async function onboardWalletPrepare(publicKeyB64, partyHint) {
   return {
     partyId: g.partyId,
     fingerprint: g.publicKeyFingerprint,
+    publicKey: publicKeyB64,                  // kept so the party can authenticate later
     multiHash: g.multiHash,                   // the wallet signs THIS
     topologyTransactions: g.topologyTransactions,
   };
@@ -227,7 +228,11 @@ async function onboardWalletConfirm(o) {
   } catch (e) { console.log("[wallet] rights grant skipped:", e.message); }
 
   const s = loadWallets();
+  // The PUBLIC key is recorded so this party can later prove it is itself: it
+  // signs a nonce and we check it against this. The fingerprint alone is a hash
+  // and cannot verify anything. Still no private key field, and never one.
   s[o.partyId] = { partyId: o.partyId, fingerprint: o.fingerprint,
+                   publicKey: o.publicKey || null,
                    onboardedAt: new Date().toISOString() };   // note: no private key field
   saveWallets(s);
   console.log("[wallet] onboarded", o.partyId, "(no private key held)");

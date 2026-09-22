@@ -88,6 +88,35 @@ app.get("/", (req, res) => { noStore(res); res.sendFile(path.join(__dirname, "pu
 app.get("/app", (req, res) => { noStore(res); res.sendFile(path.join(__dirname, "public", "index.html")); });
 app.use(express.static(path.join(__dirname, "public"), { index: false }));
 
+// --- WHO IS ASKING -----------------------------------------------------------
+// Party-scoped reads used to take the party from the query string, so anyone who
+// could reach the port could ask for the buyer's view and receive every dealer's
+// price. A caller now proves it controls a party by signing a nonce with the same
+// ed25519 key the party was onboarded with. See auth.js.
+const auth = require("./auth");
+const isDemoRole = (name) => SIGNING_ROLES.includes(String(name || "").toLowerCase());
+
+app.post("/api/auth/challenge", (req, res) => {
+  try { res.json({ ok: true, ...auth.issueChallenge((req.body || {}).party) }); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
+app.post("/api/auth/verify", (req, res) => {
+  try { res.json({ ok: true, ...auth.verifyChallenge(req.body || {}, loadWallets()) }); }
+  catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
+// Who does this request prove it is? Useful to a client, and it makes the
+// boundary visible rather than implicit.
+app.get("/api/auth/whoami", (req, res) => {
+  const party = auth.callerParty(req);
+  res.json({ ok: true, authenticated: !!party, party, demoRolesEnabled: auth.DEMO_ROLES });
+});
+
+// The party a party-scoped read may use. Throws 401/403 rather than silently
+// falling back to someone else's view.
+const readParty = (req, requested) => auth.resolveReadParty(req, requested, isDemoRole);
+
 const PKG = process.env.PACKAGE_ID;
 const PKGN = process.env.PACKAGE_NAME;
 
@@ -792,7 +821,7 @@ app.get("/api/rfqs", async (req, res) => {
 // --- list quotes, scoped to whichever role asks (this is P1 in action) ---
 app.get("/api/quotes", async (req, res) => {
   try {
-    const role = req.query.role || "requester";
+    const role = readParty(req, req.query.role);
     const quotes = await queryActive(await partyIdFor(role), "Umbra:Quote");
     res.json({ ok: true, role, count: quotes.length, quotes });
   } catch (e) {
@@ -825,7 +854,7 @@ app.post("/api/rfqs/:cid/invite", async (req, res) => {
 // --- list a dealer's invitations (scoped to that dealer) ---
 app.get("/api/invitations", async (req, res) => {
   try {
-    const role = req.query.role || "dealer1";
+    const role = readParty(req, req.query.role);
     const invs = await queryActive(await partyIdFor(role), "Umbra:RfqInvitation");
     res.json({ ok: true, role, count: invs.length, invitations: invs });
   } catch (e) {
@@ -896,7 +925,7 @@ app.post("/api/fund/instrument", async (req, res) => {
 // --- list a party's holdings (cash + instruments) ---
 app.get("/api/holdings", async (req, res) => {
   try {
-    const role = req.query.role || "requester";
+    const role = readParty(req, req.query.role);
     const party = await partyIdFor(role);
     const cash = await queryActive(party, "Umbra:CashHolding");
     const inst = await queryActive(party, "Umbra:InstrumentHolding");
@@ -926,7 +955,7 @@ app.post("/api/quotes/:cid/accept", async (req, res) => {
 // --- list settlement instructions (scoped) ---
 app.get("/api/settlements", async (req, res) => {
   try {
-    const role = req.query.role || "requester";
+    const role = readParty(req, req.query.role);
     const si = await queryActive(await partyIdFor(role), "Umbra:SettlementInstruction");
     res.json({ ok: true, role, count: si.length, settlements: si });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1221,7 +1250,7 @@ app.post("/api/swap/registry/seed", async (req, res) => {
 
 app.get("/api/swap/registry", async (req, res) => {
   try {
-    const role = req.query.role || "requester";
+    const role = readParty(req, req.query.role);
     const regs = await queryActive(await partyIdFor(role), "UmbraSwap:AssetRegistry");
     res.json({ ok: true, role, count: regs.length,
       assets: regs[0] ? regs[0].payload.assets : [] });
@@ -1255,7 +1284,7 @@ app.post("/api/swap/fund", async (req, res) => {
 
 app.get("/api/swap/holdings", async (req, res) => {
   try {
-    const role = req.query.role || "requester";
+    const role = readParty(req, req.query.role);
     const party = await partyIdFor(role);
     const hs = await queryActive(party, "UmbraSwap:AssetHolding");
     // Only holdings this party OWNS. An asset `admin` also SEES (observer)
@@ -2176,7 +2205,7 @@ function flattenUpdates(items) {
 
 app.get("/api/swap/history", async (req, res) => {
   try {
-    const role = req.query.role || "requester";
+    const role = readParty(req, req.query.role);
     const party = await partyIdFor(role);
     const [settlements, rfqs, receipts] = await Promise.all([
       queryHistory(party, "UmbraSwap:SwapSettlement").catch(() => []),
@@ -2237,7 +2266,7 @@ app.post("/api/swap/rfqs/:cid/invite", async (req, res) => {
 // a dealer sees only its own invitations (role-scoped — privacy)
 app.get("/api/swap/invitations", async (req, res) => {
   try {
-    const role = req.query.role || "dealer1";
+    const role = readParty(req, req.query.role);
     const invs = await queryActive(await partyIdFor(role), "UmbraSwap:SwapInvitation");
     res.json({ ok: true, role, count: invs.length, invitations: invs });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -2299,7 +2328,7 @@ app.post("/api/swap/invitations/:cid/quote", async (req, res) => {
 //   ?role=public    -> sees NOTHING
 app.get("/api/swap/quotes", async (req, res) => {
   try {
-    const role = req.query.role || "requester";
+    const role = readParty(req, req.query.role);
     const quotes = await queryActive(await partyIdFor(role), "UmbraSwap:SwapQuote");
     res.json({ ok: true, role, count: quotes.length, quotes });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -2310,7 +2339,7 @@ app.get("/api/swap/quotes", async (req, res) => {
 // SwapProposal it had just created.
 app.get("/api/swap/proposals", async (req, res) => {
   try {
-    const role = req.query.role || "requester";
+    const role = readParty(req, req.query.role);
     const proposals = await queryActive(await partyIdFor(role), "UmbraSwap:SwapProposal");
     res.json({ ok: true, role, count: proposals.length, proposals });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -2321,7 +2350,7 @@ app.get("/api/swap/proposals", async (req, res) => {
 // it is waiting on a counterparty's signature.
 app.get("/api/swap/pending-real", async (req, res) => {
   try {
-    const role = req.query.role || "requester";
+    const role = readParty(req, req.query.role);
     const pending = await queryActive(await partyIdFor(role), "UmbraSwap:RealSwapPending");
     res.json({ ok: true, role, count: pending.length, pending });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -2331,7 +2360,7 @@ app.get("/api/swap/pending-real", async (req, res) => {
 // after it a caller has no handle on the trade; this is how it finds one.
 app.get("/api/swap/settlements", async (req, res) => {
   try {
-    const role = req.query.role || "requester";
+    const role = readParty(req, req.query.role);
     const settlements = await queryActive(await partyIdFor(role), "UmbraSwap:SwapSettlement");
     res.json({ ok: true, role, count: settlements.length, settlements });
   } catch (e) { res.status(500).json({ error: e.message }); }
