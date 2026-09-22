@@ -68,17 +68,53 @@ const sign = (b64hash, privDer) => crypto.sign(
   crypto.createPrivateKey({ key: Buffer.from(privDer, "base64"), format: "der", type: "pkcs8" })
 ).toString("base64");
 
-// The check that matters: is this key anywhere in the server's own party store?
+// The check that matters: is this key anywhere in the server's own stores?
+//
+// This used to be a substring search for the raw key. Once the venue keystore
+// was encrypted that check started passing VACUOUSLY -- ciphertext never
+// contains the plaintext, so it would have reported "the property holds" even
+// if the key were sitting right there. A test that cannot fail is not evidence.
+//
+// So the keystore is now OPENED rather than grepped, and the substring search is
+// kept only for the wallet registry, which is plaintext by design because it
+// holds no keys at all.
 function auditServerStore(k, partyId) {
-  console.log("\n=== CUSTODY AUDIT ===");
-  for (const [label, file] of [["operator party store", SERVER_STORE], ["wallet registry", WALLET_STORE]]) {
-    let txt = "";
-    try { txt = fs.readFileSync(file, "utf8"); } catch { console.log(`${label}: (absent)`); continue; }
-    const hasPriv = txt.includes(k.privDer);
-    const hasParty = partyId ? txt.includes(partyId) : false;
-    console.log(`${label}: containsOurPrivateKey=${hasPriv} mentionsOurParty=${hasParty}`);
-    if (hasPriv) console.log("  *** the server HAS this private key - the property does NOT hold ***");
+  console.log("");
+  console.log("=== CUSTODY AUDIT ===");
+
+  try {
+    const { getSigner } = require("./signer");
+    const signer = getSigner();
+    const roles = signer.roles();
+    const ours = roles.filter((r) => {
+      const rec = signer.recordFor(r);
+      return rec && partyId && rec.partyId === partyId;
+    });
+    console.log("operator keystore   : backend=" + signer.kind +
+      " roles=[" + roles.join(", ") + "] holdsOurParty=" + (ours.length > 0));
+    if (ours.length) {
+      console.log("  *** the venue holds a key for this party - the property does NOT hold ***");
+    }
+  } catch (e) {
+    // No passphrase is the normal case when running this as an outsider. Say so
+    // rather than printing a pass we did not earn.
+    console.log("operator keystore   : could not open (" + String(e.message).split(String.fromCharCode(10))[0] + ")");
+    console.log("  -> set UMBRA_KEYSTORE_PASSPHRASE to make this check meaningful");
+    let raw = "";
+    try { raw = fs.readFileSync(SERVER_STORE, "utf8"); } catch {}
+    if (raw && raw.includes("privDer")) {
+      console.log("  *** the keystore is UNENCRYPTED (privDer present on disk) ***");
+    }
   }
+
+  let txt = "";
+  try { txt = fs.readFileSync(WALLET_STORE, "utf8"); }
+  catch { console.log("wallet registry     : (absent)"); return; }
+  const hasPriv = txt.includes(k.privDer) || txt.includes("privDer");
+  const hasParty = partyId ? txt.includes(partyId) : false;
+  console.log("wallet registry     : containsAnyPrivateKey=" + hasPriv +
+    " mentionsOurParty=" + hasParty);
+  if (hasPriv) console.log("  *** a wallet private key is on disk - the property does NOT hold ***");
 }
 
 (async () => {

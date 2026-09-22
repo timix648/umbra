@@ -202,11 +202,9 @@ const PARTIES = {
 };
 
 // ---------------------------------------------------------------------------
-// SIGNED MODE  -- the "trust no operator" path.
-// When on, the three trading roles are EXTERNAL parties that sign their own
-// choices via prepare->sign->execute. The operator can read (display) but
-// cannot forge. `public` (Observer) stays operator-namespaced in both modes:
-// it is a read-only outsider that is never a stakeholder, so it sees nothing.
+// SIGNED MODE  -- the "trust no operator" path, and the only path.
+// Every trading role is an EXTERNAL party that signs its own choices via
+// prepare->sign->execute. The operator can read, to display, but cannot forge.
 // ---------------------------------------------------------------------------
 // Signed mode is the product: every trading role is an external party holding
 // its own key, and the operator can read but never forge. The old operator-signs-
@@ -3815,7 +3813,9 @@ app.post("/api/real/award", async (req, res) => {
     // Resolve each asset from the REAL holding the party actually owns -- the admin
     // comes straight off the on-ledger Holding, so there are no hardcoded issuer ids
     // to get wrong, and a self-issued stand-in (admin = one of our parties) is rejected.
-    const OURS = new Set(["Requester","Dealer1","Dealer2","Observer"]);
+    // The venue's own parties. A holding whose admin is one of these is a
+    // self-issued stand-in, not a registry asset, and must not settle as one.
+    const OURS = new Set(["Requester","Dealer1","Dealer2"]);
     const offCands = await realHoldingBySymbol("requester", offerSym, offerAmount);
     const offPick = offCands.length ? offCands[0] : (offCands.combo && offCands.combo[0]);
     if (!offPick) throw new Error("requester has no real " + offerSym + " totalling >= " + offerAmount);
