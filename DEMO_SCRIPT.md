@@ -1,6 +1,6 @@
 # Demo script
 
-Five minutes, recorded, in this order. The old version of this file described a
+Six beats, recorded, in this order. The old version of this file described a
 cash-versus-instrument flow against a sandbox that no longer exists; none of it
 applied to the current engine.
 
@@ -14,7 +14,7 @@ feature was worth.
 ## Before recording
 
 ```bash
-daml build && daml test          # 63 scripts; a green run is beat 0
+daml build && daml test          # 71 scripts; a green run is beat 0
 cd backend && node --test test/*.test.js   # 21 tests
 ```
 
@@ -74,7 +74,28 @@ The buyer awards one quote. Then try to award the other.
 - a dealer who had not yet priced tries to quote → **refused**, the auction closed
 - `RfqAward` names the winner, the price, and the filled amount
 
-## Beat 3 — settlement, all three legs, or none
+## Beat 3 — a block bigger than one dealer
+
+The limitation a judge will reach for: *"what if no single dealer can cover
+it?"* Answer it before they ask.
+
+- buyer requests 10; dealer A quotes but sets **max 4**
+- take 4 — the pipeline says so, and the last beat reads
+  *"6 cBTC stays open for another dealer"*
+- the remaining 6 is a live request, and both dealers are reinvited to it
+- dealer B prices the 6 and takes all of it
+- two awards, two settlements, **one block**
+
+Then show the guard: ask dealer A for 7 against its max of 4 → **refused**. A
+price for the full clip is not a promise to do half of it, so the dealer's
+limit is the dealer's own number and the ledger holds the buyer to it.
+
+And the question that always follows — *"what about the part that never
+filled?"* Nothing is reserved. Each fill is funded when it is accepted, so an
+unfilled remainder was never committed; `CancelRfq` ends it and nothing is
+stranded.
+
+## Beat 4 — settlement, all three legs, or none
 
 Award, commit both legs, execute.
 
@@ -90,7 +111,7 @@ Then break it on purpose:
 - an allocation for the wrong amount → **refused**
 - confirm **nothing moved** in either case
 
-## Beat 4 — governance, across three operators
+## Beat 5 — governance, across three operators
 
 One governed action — listing an asset is the clearest.
 
@@ -103,7 +124,7 @@ Then the honest half: order flow is **not** governed. Opening an RFQ and
 quoting need no vote, because a venue that needs a committee to accept a price
 is not a venue.
 
-## Beat 5 — what this is not
+## Beat 6 — what this is not
 
 Say all of it, in your own voice, and do not rush it:
 
@@ -114,8 +135,6 @@ Say all of it, in your own voice, and do not rush it:
   production-shaped interfaces — not mainnet value, and no cross-chain
   redemption.
 - **The contracts are not audited.** Not booked, not quoted.
-- **One dealer fills the whole block.** Partial fills across several dealers are
-  designed — `RfqAward.filledAmount` is the hook — and not built.
 - **The KMS keystore backend is not implemented.** The interface is defined and
   the file backend encrypts at rest; a remote signer is the MainNet step.
 

@@ -2471,6 +2471,9 @@ function OperatorConsole({ onExit }) {
     steps: []
   });
   const [awarding, setAwarding] = useState(false);
+  // How much of a block the buyer is taking from a given quote. Blank = all of
+  // what that dealer will do, which is the whole block unless it capped itself.
+  const [fills, setFills] = useState({});
   const [busyInvite, setBusyInvite] = useState({});
   const [log, setLog] = useState([]);
   const [settled, setSettled] = useState([]);
@@ -2602,11 +2605,16 @@ function OperatorConsole({ onExit }) {
       addlog("rfq: " + e.message, "er");
     }
   }
-  async function swapQuote(cid, dealer, price) {
+  async function swapQuote(cid, dealer, price, maxFill) {
     try {
-      await post("/api/swap/invitations/" + cid + "/quote", { dealer, price });
-      push("Swap quote submitted");
-      addlog(dealer + " quoted " + price + (mode ? " (self-signed)" : ""), "ok");
+      // Blank means "all of it": send null so the ledger sees an absent Optional
+      // rather than a zero, which would be a refusal dressed up as a quote.
+      const mf = (maxFill === "" || maxFill == null) ? null : maxFill;
+      await post("/api/swap/invitations/" + cid + "/quote",
+                 { dealer, price, maxFillAmount: mf });
+      push(mf ? ("Quote submitted · up to " + mf) : "Swap quote submitted");
+      addlog(dealer + " quoted " + price + (mf ? " for up to " + mf : " for the whole block")
+             + (mode ? " (self-signed)" : ""), "ok");
       refresh();
     } catch (e) {
       push(e.message, "er");
@@ -2680,24 +2688,36 @@ function OperatorConsole({ onExit }) {
   }
 
   // The real venue award: settle the ACTUAL quote a dealer submitted.
-  async function awardSwap(q) {
+  async function awardSwap(q, fill) {
     if (awarding) return;
     setAwarding(true);
     const p = q.payload;
     const dealerRole = cleanRole(p.dealer);
     const offerSym = p.offerAsset.symbol;
     const wantSym = p.wantAsset.symbol;
+    // Blank = take everything this dealer will do. A dealer that capped itself
+    // caps the fill too, and the ledger refuses anything above it.
+    const cap = p.maxFillAmount == null ? Number(p.offerAmount) : Number(p.maxFillAmount);
+    const take = (fill === "" || fill == null) ? cap : Number(fill);
+    const rest = Number(p.offerAmount) - take;
+    const partial = rest > 0;
     const steps = [
-      "Requester accepts quote",
+      partial
+        ? ("Requester takes " + fmtAmtStr(take) + " of " + fmtAmtStr(p.offerAmount) + " " + offerSym)
+        : "Requester accepts quote",
       "Allocate real " + offerSym + " + " + wantSym + " legs",
       "Record on-ledger settlement",
       "Atomic execute \u2014 both real legs swap"
     ];
+    // The remainder is a real outcome, so it gets its own beat rather than being
+    // something the buyer discovers after the animation has finished.
+    if (partial) steps.push(fmtAmtStr(rest) + " " + offerSym + " stays open for another dealer");
     setPipe({ active: -1, steps });
     addlog("real swap award initiated \u00b7 " + offerSym + " \u2192 " + wantSym + (mode ? " \u00b7 via party signatures" : ""), "");
     try {
       // 1) accept the dealer's quote -> SwapProposal
-      const a = await post("/api/swap/quotes/" + q.contractId + "/accept", {});
+      const a = await post("/api/swap/quotes/" + q.contractId + "/accept",
+                           partial ? { fillAmount: String(take) } : {});
       setPipe(pp => ({ ...pp, active: 0 }));
 
       // 2) settle THAT proposal with REAL tokens: allocate both real legs ->
@@ -2905,6 +2925,7 @@ function OperatorConsole({ onExit }) {
       /*#__PURE__*/React.createElement("th", null, "Pair"),
       /*#__PURE__*/React.createElement("th", null, "You give"),
       /*#__PURE__*/React.createElement("th", null, "You get"),
+      /*#__PURE__*/React.createElement("th", null, "Take"),
       /*#__PURE__*/React.createElement("th", null))),
     /*#__PURE__*/React.createElement("tbody", null,
       swapQuotesAll.slice().sort((a, b) => Number(b.payload.price) - Number(a.payload.price)).map((q, i) => {
@@ -2922,12 +2943,26 @@ function OperatorConsole({ onExit }) {
           /*#__PURE__*/React.createElement("td", null, fmtAmtStr(p.offerAmount), " ", p.offerAsset.symbol),
           /*#__PURE__*/React.createElement("td", { className: "px" },
             Number(p.price).toFixed(2), " ", p.wantAsset.symbol, isBest ? " \u25c2" : ""),
+          /*#__PURE__*/React.createElement("td", null,
+            /*#__PURE__*/React.createElement("input", {
+              style: { width: 64, padding: "4px 6px" },
+              // A dealer that capped itself shows its cap; otherwise the block.
+              placeholder: fmtAmtStr(p.maxFillAmount == null ? p.offerAmount : p.maxFillAmount),
+              title: p.maxFillAmount == null
+                ? "How much of the block to take from this dealer. Blank takes all of it."
+                : ("This dealer will take at most " + fmtAmtStr(p.maxFillAmount) + " " + p.offerAsset.symbol),
+              value: fills[q.contractId] || "",
+              onChange: e => setFills(f => ({ ...f, [q.contractId]: e.target.value }))
+            }),
+            p.maxFillAmount != null && /*#__PURE__*/React.createElement("div", {
+              style: { fontSize: 10, opacity: .65, marginTop: 2 }
+            }, "max ", fmtAmtStr(p.maxFillAmount))),
           /*#__PURE__*/React.createElement("td", { style: { textAlign: "right" } },
             /*#__PURE__*/React.createElement("button", {
               className: "btn sm",
               disabled: awarding,
               style: { borderColor: "var(--accentline)", color: "var(--accent2)", opacity: awarding ? .5 : 1, cursor: awarding ? "default" : "pointer" },
-              onClick: () => awardSwap(q),
+              onClick: () => awardSwap(q, fills[q.contractId] || ""),
               "data-tip": "Award this quote \u2014 both assets swap atomically via CIP-56, or neither moves"
             }, awarding ? "Settling\u2026" : "Award")));
       }))))), /*#__PURE__*/React.createElement("div", {
@@ -3335,6 +3370,9 @@ function DealerCard({
   onSwapQuote
 }) {
   const [prices, setPrices] = useState({});
+  // How much of the block this dealer will actually take. Blank = all of it,
+  // which is what every quote meant before partial fills existed.
+  const [sizes, setSizes] = useState({});
   const [busyQuote, setBusyQuote] = useState({});
   const accent = name === "dealer1" ? "#E0A33B" : "#6AA6FF";
   return /*#__PURE__*/React.createElement("div", {
@@ -3367,13 +3405,20 @@ function DealerCard({
     placeholder: iv.payload.wantAsset.symbol,
     value: prices[iv.contractId] || "",
     onChange: e => setPrices(p => ({ ...p, [iv.contractId]: e.target.value }))
+  }), /*#__PURE__*/React.createElement("input", {
+    style: { width: 62, padding: "5px 7px" },
+    placeholder: "max " + iv.payload.offerAsset.symbol,
+    title: "The most of this block you will take at that price. Blank means all of it.",
+    value: sizes[iv.contractId] || "",
+    onChange: e => setSizes(p => ({ ...p, [iv.contractId]: e.target.value }))
   }), /*#__PURE__*/React.createElement("button", {
     className: "btn sm tip-below tip-left",
     disabled: !!busyQuote[iv.contractId],
     onClick: async () => {
       if (busyQuote[iv.contractId]) return;
       setBusyQuote(b => ({ ...b, [iv.contractId]: true }));
-      try { await onSwapQuote(iv.contractId, name, prices[iv.contractId] || "0"); }
+      try { await onSwapQuote(iv.contractId, name, prices[iv.contractId] || "0",
+                              sizes[iv.contractId] || ""); }
       finally { setBusyQuote(b => { const nb = { ...b }; delete nb[iv.contractId]; return nb; }); }
     },
     "data-tip": "Submit your bid privately \u2014 rival dealers can never see it, enforced by the ledger"

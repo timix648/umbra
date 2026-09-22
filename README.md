@@ -412,8 +412,8 @@ ask for the buyer's view, and an authenticated dealer cannot ask for a rival's.
 ```bash
 export PATH="$HOME/.daml/bin:$PATH"
 daml build          # -> .daml/dist/umbra-v9-0.7.0.dar
-daml test           # 63 scripts: swap, governance, mandate, dealer registry,
-                    # trust boundary, settlement guards and auction proofs
+daml test           # 71 scripts: swap, governance, mandate, dealer registry,
+                    # trust boundary, settlement guards, auction and partial-fill proofs
 ```
 
 ### 3. Deploy the package
