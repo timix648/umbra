@@ -157,3 +157,30 @@ test("authentication is not authorization: a dealer cannot read a rival's view",
   assert.throws(() => auth.resolveReadParty(bearer(token), b.partyId, noDemoRoles),
     /may only read its own view/);
 });
+
+// --- operator actions ----------------------------------------------------------
+
+test("listing assets needs the operator token - a wallet session is not enough", () => {
+  process.env.UMBRA_OPERATOR_TOKEN = "op-secret-for-tests-only";
+  delete require.cache[require.resolve("../auth.js")];
+  const a = require("../auth.js");
+  const req = (h) => ({ headers: h });
+  assert.strictEqual(a.isOperator(req({})), false);
+  assert.strictEqual(a.isOperator(req({ "x-umbra-operator": "wrong" })), false);
+  // same length, one character off
+  assert.strictEqual(a.isOperator(req({ "x-umbra-operator": "op-secret-for-tests-onlX" })), false);
+  // the right secret in the WRONG header is not an operator
+  assert.strictEqual(a.isOperator(req({ authorization: "Bearer op-secret-for-tests-only" })), false);
+  assert.strictEqual(a.isOperator(req({ "x-umbra-operator": "op-secret-for-tests-only" })), true);
+  delete process.env.UMBRA_OPERATOR_TOKEN;
+  delete require.cache[require.resolve("../auth.js")];
+});
+
+test("with no operator token configured, operator actions are OFF - even for an empty header", () => {
+  delete process.env.UMBRA_OPERATOR_TOKEN;
+  delete require.cache[require.resolve("../auth.js")];
+  const a = require("../auth.js");
+  assert.strictEqual(a.isOperator({ headers: { "x-umbra-operator": "" } }), false);
+  assert.strictEqual(a.isOperator({ headers: {} }), false);
+  delete require.cache[require.resolve("../auth.js")];
+});

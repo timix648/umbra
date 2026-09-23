@@ -144,6 +144,8 @@ app.use((req, res, next) => {
   if (req.method !== "POST" || !req.path.startsWith("/api/")) return next();
   if (OPEN_POSTS.some((re) => re.test(req.path))) return next();
   if (auth.callerParty(req)) return next();
+  // Operator-only routes check this again themselves; the gate just lets them arrive.
+  if (auth.isOperator(req)) return next();
   if (auth.DEMO_ROLES) return next();
   return res.status(401).json({
     error: "this endpoint changes state. Authenticate first: POST /api/auth/challenge " +
@@ -887,13 +889,18 @@ function assetId(a) {
 // {admin, symbol} or a known symbol looked up against env-configured issuers.
 // Env (optional) lets the demo name assets without passing admin each time:
 //   ASSET_CBTC_ADMIN, ASSET_CETH_ADMIN, ASSET_CC_ADMIN
+// The symbol stored on-ledger IS the registry's instrument id ("CBTC", "cETH",
+// "Amulet"), never the ticker a person reads. ExecuteRealSwap compares it with the
+// allocation's instrumentId.id exactly, so a "cBTC" AssetId against a real "CBTC"
+// allocation refused every real trade. The page turns ids back into tickers (dispSym).
 async function resolveAsset(a) {
-  if (a && a.admin && a.symbol) return { admin: a.admin, symbol: String(a.symbol) };
+  if (a && a.admin && a.symbol) return { admin: a.admin, symbol: instrumentIdForSymbol(a.symbol) };
   const raw = String((a && a.symbol) || a || "").toUpperCase();
   const table = {
-    CBTC: { symbol: "cBTC", admin: process.env.ASSET_CBTC_ADMIN },
-    CETH: { symbol: "cETH", admin: process.env.ASSET_CETH_ADMIN },
-    CC:   { symbol: "CC",   admin: process.env.ASSET_CC_ADMIN },
+    CBTC:   { symbol: instrumentIdForSymbol("CBTC"), admin: process.env.ASSET_CBTC_ADMIN },
+    CETH:   { symbol: instrumentIdForSymbol("CETH"), admin: process.env.ASSET_CETH_ADMIN },
+    CC:     { symbol: instrumentIdForSymbol("CC"),   admin: process.env.ASSET_CC_ADMIN },
+    AMULET: { symbol: instrumentIdForSymbol("CC"),   admin: process.env.ASSET_CC_ADMIN },
   };
   const hit = table[raw];
   if (!hit || !hit.admin) throw new Error(`unknown asset '${JSON.stringify(a)}' — pass {admin,symbol} or set ASSET_${raw}_ADMIN`);
@@ -913,9 +920,15 @@ const idSetSwap = async (party, tmpl) =>
 
 // ---- registry: seed / read -------------------------------------------------
 
-// Create (or re-list into) the on-ledger AssetRegistry. Operator-authorised.
+// Create (or re-list into) the on-ledger AssetRegistry. OPERATOR ONLY: the caller must
+// present UMBRA_OPERATOR_TOKEN. A wallet session is not enough - any signed-in user
+// could otherwise list {admin: themselves, symbol: "CBTC"} and the menu would show two
+// cBTCs, one of them theirs.
 app.post("/api/swap/registry/seed", async (req, res) => {
   try {
+    if (!auth.isOperator(req)) {
+      return res.status(403).json({ error: "listing assets is an operator action" });
+    }
     const operator = await partyIdFor("requester"); // venue/operator-namespaced
     const participants = await Promise.all([
       partyIdFor("requester"),
@@ -950,11 +963,13 @@ app.post("/api/swap/registry/seed", async (req, res) => {
   } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
+// The listed set is the venue's public menu, not any party's private view, so it is
+// read as the operator for every caller. Party-scoping it left every wallet user with
+// an empty asset picker: the page asks as `requester`, which a wallet session may not.
 app.get("/api/swap/registry", async (req, res) => {
   try {
-    const role = readParty(req, req.query.role);
-    const regs = await queryActive(await partyIdFor(role), "UmbraSwap:AssetRegistry");
-    res.json({ ok: true, role, count: regs.length,
+    const regs = await queryActive(await partyIdFor("requester"), "UmbraSwap:AssetRegistry");
+    res.json({ ok: true, role: "operator", count: regs.length,
       assets: regs[0] ? regs[0].payload.assets : [] });
   } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });

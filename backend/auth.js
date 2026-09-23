@@ -171,7 +171,17 @@ function resolveReadParty(req, requested, isDemoRole) {
     { status: 401 });
 }
 
+// Operator actions (listing an asset on the venue's menu) are not a wallet's to take,
+// however well it has authenticated. They need a secret only someone with shell access
+// to the box holds, sent as X-Umbra-Operator. Unset means operator actions are OFF.
+const OPERATOR_TOKEN = process.env.UMBRA_OPERATOR_TOKEN || "";
+function isOperator(req) {
+  const got = String((req.headers && req.headers["x-umbra-operator"]) || "");
+  if (!OPERATOR_TOKEN || got.length !== OPERATOR_TOKEN.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(got), Buffer.from(OPERATOR_TOKEN));
+}
+
 module.exports = {
   issueChallenge, verifyChallenge, callerParty, resolveReadParty,
-  verifyRawEd25519, DEMO_ROLES,
+  verifyRawEd25519, isOperator, DEMO_ROLES,
 };

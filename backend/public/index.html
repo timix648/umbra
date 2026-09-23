@@ -2877,8 +2877,8 @@ function OperatorConsole({ onExit }) {
     setAwarding(true);
     const p = q.payload;
     const dealerRole = cleanRole(p.dealer);
-    const offerSym = p.offerAsset.symbol;
-    const wantSym = p.wantAsset.symbol;
+    const offerSym = dispSym(p.offerAsset.symbol);   // display only in this flow
+    const wantSym = dispSym(p.wantAsset.symbol);
     // Blank = take everything this dealer will do. A dealer that capped itself
     // caps the fill too, and the ledger refuses anything above it.
     const cap = p.maxFillAmount == null ? Number(p.offerAmount) : Number(p.maxFillAmount);
@@ -3285,7 +3285,7 @@ function AssetIcon({
 }) {
   const SRC = { cBTC: "/assets/cbtc.png", cETH: "/assets/ceth.png", CC: "/assets/cc.png" };
   const cls = "tic" + (size === "sm" ? " sm" : size === "lg" ? " lg" : "");
-  const src = SRC[symbol];
+  const src = SRC[dispSym(symbol)];
   const [bad, setBad] = useState(false);
   if (!src || bad) {
     const px = size === "lg" ? 40 : size === "sm" ? 14 : 18;
@@ -3358,7 +3358,11 @@ function SwapRfqForm({
     (async () => {
       try {
         const r = await api("/api/swap/registry?role=requester");
-        if (live && r && r.assets && r.assets.length) setAssets(r.assets);
+        // The registry holds the ledger's instrument ids (CBTC, Amulet); the form works
+        // in tickers. The admin stays, so a create still names the exact issuer, and the
+        // server turns the ticker back into the id (resolveAsset).
+        if (live && r && r.assets && r.assets.length)
+          setAssets(r.assets.map(a => Object.assign({}, a, { symbol: dispSym(a.symbol) })));
       } catch (e) { /* registry not seeded / ledger down: keep FALLBACK */ }
     })();
     return () => { live = false; };
@@ -3878,7 +3882,7 @@ function Login({ onPick, onWallet }) {
         ]);
         if (!live) return;
         if (le) setOffset(le.offset);
-        const a = (rg && rg.assets && rg.assets.length) ? rg.assets.map(x => x.symbol) : ["cBTC", "cETH", "CC"];
+        const a = (rg && rg.assets && rg.assets.length) ? rg.assets.map(x => dispSym(x.symbol)) : ["cBTC", "cETH", "CC"];
         setAssets(a);
       } catch (e) { setAssets(["cBTC", "cETH", "CC"]); }
     })();
@@ -4082,10 +4086,10 @@ const ASSET_LONGS = { cBTC: "Bitcoin", cETH: "Ethereum", CC: "Canton Coin" };
 // Who actually ISSUES each real token on DevNet. These are the registries whose assets
 // Umbra settles atomically -- name them, don't just name the underlying.
 const ASSET_ISSUERS = { cBTC: "BitSafe", cETH: "onRails", CC: "Canton Foundation" };
-const ASSET_ISSUER = sym => ASSET_ISSUERS[sym] || "";
+const ASSET_ISSUER = sym => ASSET_ISSUERS[dispSym(sym)] || "";
 const ASSET_LONG = sym => {
-  const long = ASSET_LONGS[sym] || sym;
-  const iss = ASSET_ISSUERS[sym];
+  const long = ASSET_LONGS[dispSym(sym)] || dispSym(sym);
+  const iss = ASSET_ISSUERS[dispSym(sym)];
   return iss ? long + " \u00b7 " + iss : long;
 };
 
