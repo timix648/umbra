@@ -619,7 +619,7 @@ app.get("/api/package", async (req, res) => {
            "its package. Umbra cannot vet on your behalf, and does not need to: you keep " +
            "custody of the key and hosting of the party.",
     });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // ---- DEALER DIRECTORY -------------------------------------------------------
@@ -759,7 +759,7 @@ app.post("/api/dealers/register", async (req, res) => {
       }
       throw e;
     }
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 app.get("/api/dealers", async (req, res) => {
@@ -796,7 +796,7 @@ app.get("/api/dealers", async (req, res) => {
     }
     res.json({ ok: true, source: dir.source, note: dir.note,
       dealers: out.filter(x => x.partyId !== me) });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // Pre-onboard the signing roles so the first trade isn't slow. This used to
@@ -806,7 +806,7 @@ app.post("/api/mode", async (req, res) => {
     for (const r of SIGNING_ROLES) await recFor(r);
     res.json({ ok: true, signedMode: SIGNED_MODE, parties: await activePartyMap() });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(e.status || 500).json({ error: e.message });
   }
 });
 
@@ -814,7 +814,7 @@ app.post("/api/mode", async (req, res) => {
 app.get("/api/parties", async (req, res) => {
   try {
     res.json({ ok: true, signedMode: SIGNED_MODE, parties: await activePartyMap() });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 
@@ -824,7 +824,7 @@ app.get("/api/rfqs", async (req, res) => {
     const rfqs = await queryActive(await partyIdFor("requester"), "Umbra:Rfq");
     res.json({ ok: true, count: rfqs.length, rfqs });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(e.status || 500).json({ error: e.message });
   }
 });
 
@@ -843,7 +843,7 @@ app.get("/api/ledger-end", async (req, res) => {
   try {
     const r = await ledgerFetch("/v2/state/ledger-end");
     res.json(await r.json());
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 
@@ -947,7 +947,7 @@ app.post("/api/swap/registry/seed", async (req, res) => {
       regCid = await pollNewCid(operator, "UmbraSwap:AssetRegistry", before);
     }
     res.json({ ok: true, regCid, listed: assets });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 app.get("/api/swap/registry", async (req, res) => {
@@ -956,7 +956,7 @@ app.get("/api/swap/registry", async (req, res) => {
     const regs = await queryActive(await partyIdFor(role), "UmbraSwap:AssetRegistry");
     res.json({ ok: true, role, count: regs.length,
       assets: regs[0] ? regs[0].payload.assets : [] });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // ---- funding helper (dev): mint an AssetHolding for a role+asset ------------
@@ -981,7 +981,7 @@ app.post("/api/swap/fund", async (req, res) => {
         createArguments: { owner, asset, amount } } }]);
     const cid = await pollNewCid(owner, "UmbraSwap:AssetHolding", before);
     res.json({ ok: true, holdingCid: cid, owner: role, asset, amount });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 app.get("/api/swap/holdings", async (req, res) => {
@@ -995,7 +995,7 @@ app.get("/api/swap/holdings", async (req, res) => {
     // "allocation sender is not the holding owner".
     const owned = hs.filter(h => h.payload && h.payload.owner === party);
     res.json({ ok: true, role, count: owned.length, holdings: owned });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // ---- READ-ONLY: real CIP-56 token holdings (Amulet/CC, CBTC, cETH, ...) -----
@@ -1051,7 +1051,7 @@ app.get("/api/real/holdings", async (req, res) => {
       byInst[k].utxos += 1;
     }
     res.json({ ok: true, party, instruments: Object.values(byInst), raw: hs });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // ---- READ-ONLY: pending incoming CIP-56 transfer offers --------------------
@@ -1126,7 +1126,7 @@ app.get("/api/real/raw", async (req, res) => {
     }
     const only = req.query.cid ? out.filter(o => o.contractId === req.query.cid) : out;
     res.json({ ok: true, party, count: out.length, holdings: only });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 app.get("/api/real/pending", async (req, res) => {
@@ -1134,7 +1134,7 @@ app.get("/api/real/pending", async (req, res) => {
     const party = req.query.party || await partyIdFor(req.query.role || "requester");
     const offers = await queryPendingTransfers(party);
     res.json({ ok: true, party, count: offers.length, offers });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // ---- ACCEPT a pending CIP-56 transfer (lands real cBTC/cETH) ----------------
@@ -1207,7 +1207,7 @@ app.post("/api/real/pending/:cid/accept", async (req, res) => {
     }
     await realSubmit(body, "raccept");
     res.json({ ok: true, accepted: cid, instrument: offer.instrument, amount: offer.amount, disclosed: disclosed.length });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // ---- ALLOCATE a real Holding via the registry AllocationFactory --------------
@@ -1343,7 +1343,7 @@ app.post("/api/real/allocate", async (req, res) => {
     res.json({ ok: true, allocated: { id, amount, sender: senderRole, receiver, executor },
       factoryId: fc.factoryId, disclosed: disclosed.length,
       commandId: (subRes && subRes.commandId) || null, senderParty: sender, offBefore });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // ---- SEND a real CIP-56 token via the registry TransferFactory --------------
@@ -1425,7 +1425,7 @@ app.post("/api/real/send", async (req, res) => {
     await realSubmit(cmd, "rsend");
     res.json({ ok: true, sent: { id, amount, from: senderRole, to: receiver },
       note: "receiver must accept via /api/real/pending/:cid/accept", disclosed: disclosed.length });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // ---- READ-ONLY: registry Allocations (locked legs awaiting execution) --------
@@ -1483,7 +1483,7 @@ app.get("/api/real/allocations", async (req, res) => {
     const party = req.query.party || await partyIdFor(req.query.role || "requester");
     const allocs = await queryAllocations(party);
     res.json({ ok: true, party, count: allocs.length, allocations: allocs });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // ---- WITHDRAW a registry Allocation (unlock the Holding) --------------------
@@ -1555,7 +1555,7 @@ app.post("/api/real/withdraw/:cid", async (req, res) => {
         hint_context_keys: Object.keys((cdata.values) || {}) });
     }
     res.json({ ok: true, withdrawn: cid, instrument: al.instrument, amount: al.amount, unlocked: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // ---- EXECUTE a registry Allocation (settle the locked token) ----------------
@@ -1610,7 +1610,7 @@ app.post("/api/real/execute/:cid", async (req, res) => {
     await realSubmit(cmd, "rexecute");
     res.json({ ok: true, executed: cid, instrument: al.instrument, amount: al.amount,
       from: al.sender, to: al.receiver, disclosed: disclosed.length });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // ---- EXECUTE a registry Allocation (settle the locked token) ----------------
@@ -1766,7 +1766,7 @@ app.post("/api/real/settle", async (req, res) => {
     };
     await realSubmit(cmd, "rsettle");
     res.json({ ok: true, atomic: true, legs: summary, actAs: cmd.actAs, disclosed: disclosed.length });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // ---- GRANULAR VENUE FLOW ---------------------------------------------------
@@ -1843,7 +1843,7 @@ app.post("/api/swap/rfq", async (req, res) => {
       invitations.push({ dealer: roles[i], invitationCid });
     }
     res.json({ ok: true, signed: SIGNED_MODE, rfqCid, expiresAt, invitations });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // ---- history: settled + expired swaps for a party (queries the update stream) ----
@@ -1935,14 +1935,14 @@ app.get("/api/swap/history", async (req, res) => {
       settlementsNotExecuted: _aborted,
       receipts: _receipts,
       rfqs: flattenUpdates(rfqs) });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 app.get("/api/swap/rfqs", async (req, res) => {
   try {
     const rfqs = await queryActive(await partyIdFor("requester"), "UmbraSwap:SwapRfq");
     res.json({ ok: true, count: rfqs.length, rfqs });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // requester invites a dealer to an RFQ
@@ -1962,7 +1962,7 @@ app.post("/api/swap/rfqs/:cid/invite", async (req, res) => {
     }
     const result = await act("requester", "swap-invite", cmds);
     res.json({ ok: true, signed: SIGNED_MODE, result });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // a dealer sees only its own invitations (role-scoped — privacy)
@@ -1971,7 +1971,7 @@ app.get("/api/swap/invitations", async (req, res) => {
     const role = readParty(req, req.query.role);
     const invs = await queryActive(await partyIdFor(role), "UmbraSwap:SwapInvitation");
     res.json({ ok: true, role, count: invs.length, invitations: invs });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // a dealer submits a private quote (price denominated in the want asset)
@@ -2025,7 +2025,7 @@ app.post("/api/swap/invitations/:cid/quote", async (req, res) => {
     }
     const result = await act(dealerRole, "swap-quote", cmds);
     res.json({ ok: true, signed: SIGNED_MODE, validUntil, result });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // role-scoped quote view — THE PRIVACY PROOF.
@@ -2037,7 +2037,7 @@ app.get("/api/swap/quotes", async (req, res) => {
     const role = readParty(req, req.query.role);
     const quotes = await queryActive(await partyIdFor(role), "UmbraSwap:SwapQuote");
     res.json({ ok: true, role, count: quotes.length, quotes });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // Awarded-but-unsettled proposals. There was no way to list these, so anything
@@ -2048,7 +2048,7 @@ app.get("/api/swap/proposals", async (req, res) => {
     const role = readParty(req, req.query.role);
     const proposals = await queryActive(await partyIdFor(role), "UmbraSwap:SwapProposal");
     res.json({ ok: true, role, count: proposals.length, proposals });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // Proposed-but-unaccepted real swaps, the state between ProposeRealSwap and
@@ -2059,7 +2059,7 @@ app.get("/api/swap/pending-real", async (req, res) => {
     const role = readParty(req, req.query.role);
     const pending = await queryActive(await partyIdFor(role), "UmbraSwap:RealSwapPending");
     res.json({ ok: true, role, count: pending.length, pending });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // Recorded-but-unexecuted settlements. AcceptRealSwap CONSUMES the SwapProposal, so
@@ -2069,7 +2069,7 @@ app.get("/api/swap/settlements", async (req, res) => {
     const role = readParty(req, req.query.role);
     const settlements = await queryActive(await partyIdFor(role), "UmbraSwap:SwapSettlement");
     res.json({ ok: true, role, count: settlements.length, settlements });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // ---- STANDING MANDATE ------------------------------------------------------
@@ -2113,7 +2113,7 @@ app.post("/api/mandate", async (req, res) => {
     }
     await act(req.body.role || "requester", "mandate", cmds);
     res.json({ ok: true, expiresAt });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 app.get("/api/mandate", async (req, res) => {
@@ -2122,7 +2122,7 @@ app.get("/api/mandate", async (req, res) => {
     const m = await findMandate(party);
     res.json({ ok: true, mandate: m
       ? { contractId: m.contractId, expiresAt: m.payload.expiresAt } : null });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // requester accepts a quote -> SwapProposal
@@ -2173,7 +2173,7 @@ app.post("/api/swap/quotes/:cid/accept", async (req, res) => {
     await act("requester", "swap-accept", cmds);
     const proposalCid = await pollNewCid(requester, "UmbraSwap:SwapProposal", before);
     res.json({ ok: true, signed: SIGNED_MODE, proposalCid });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // requester commits its offer leg (supplies a backing AssetHolding cid)
@@ -2302,7 +2302,7 @@ app.get("/api/swap/alerts", async (req, res) => {
     let out = liveSwapAlerts(role);
     if (since) out = out.filter(a => a.at > since);
     res.json({ ok: true, role: role || null, alerts: out.slice(-10).reverse() });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // Dealer acknowledges an alert (or all of theirs). Without this the only way to
@@ -2319,7 +2319,7 @@ app.post("/api/swap/alerts/ack", async (req, res) => {
       if (!a.dismissed) { a.dismissed = true; n++; }
     }
     res.json({ ok: true, dismissed: n, remaining: liveSwapAlerts(role).length });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // ---------------------------------------------------------------------------
@@ -2362,7 +2362,7 @@ app.post("/api/ext/onboard/confirm", async (req, res) => {
     }
     const rec = await onboardWalletConfirm(b);
     res.json({ ok: true, party: rec, privateKeyHeldByServer: false });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // Parties onboarded this way, and the point of the exercise: none of them has a key here.
@@ -2433,7 +2433,7 @@ app.post("/api/dev/wallet/submit", async (req, res) => {
     const v = await awaitCompletion(party, prep.commandId, offBefore);
     if (v.found && !v.ok) return res.status(400).json({ error: v.message || ("code " + v.code) });
     res.json({ ok: true, commandId: prep.commandId, committed: !!v.found });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // Dev-wallet ledger proxy. A real CIP-0103 wallet sends ledgerApi() to the USER's
@@ -2456,7 +2456,7 @@ app.post("/api/dev/wallet/ledger", async (req, res) => {
     if (!r.ok) return res.status(r.status).json({ error: text.slice(0, 300) });
     try { return res.json(JSON.parse(text)); }
     catch { return res.json(text.trim().split("\n").filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean)); }
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 app.get("/api/ext/wallets", async (req, res) => {
@@ -2465,7 +2465,7 @@ app.get("/api/ext/wallets", async (req, res) => {
     res.json({ ok: true, count: Object.keys(s).length,
       wallets: Object.values(s).map(w => ({ partyId: w.partyId, fingerprint: w.fingerprint,
         onboardedAt: w.onboardedAt, privateKeyHeldByServer: false })) });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 app.post("/api/ext/prepare", async (req, res) => {
@@ -2482,7 +2482,7 @@ app.post("/api/ext/prepare", async (req, res) => {
       note: "sign preparedTransactionHash (base64, ed25519) with the party's own key, " +
             "then POST the signature to /api/ext/execute",
     }));
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 app.post("/api/ext/execute", async (req, res) => {
@@ -2511,7 +2511,7 @@ app.post("/api/ext/execute", async (req, res) => {
     res.json({ ok: true, commandId: b.commandId || null, committed: !!verdict.found,
       note: verdict.found ? "committed on-ledger"
         : "admitted; no verdict read (set UMBRA_COMPLETIONS=1 to confirm commits)" });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // The atomic registry execute, as ONE on-ledger choice.
@@ -2634,7 +2634,7 @@ app.post("/api/swap/pending/:cid/accept-real", async (req, res) => {
       committed ? POLL_TRIES_COMMITTED : POLL_TRIES);
     res.json({ ok: true, settlementCid,
       note: "now POST /api/swap/settlements/" + settlementCid + "/execute-real" });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // Execute a settlement that already exists on-ledger. This is the step that actually
@@ -2690,7 +2690,7 @@ app.post("/api/swap/settlements/:cid/execute-real", async (req, res) => {
     res.json({ ok: true, executed: req.params.cid,
       offer: p.offerAmount + " " + (p.offerAsset && p.offerAsset.symbol),
       want: p.price + " " + (p.wantAsset && p.wantAsset.symbol) });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
@@ -3001,7 +3001,7 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
   } catch (e) {
     console.error("[settle-real][OUTER] FAILED:", e && (e.stack || e.message || e));
     console.error("[settle-real][OUTER] steps so far:", JSON.stringify(steps));
-    res.status(500).json({ error: e.message, steps });
+    res.status(e.status || 500).json({ error: e.message, steps });
   }
 });
 
@@ -3015,7 +3015,7 @@ app.post("/api/swap/proposals/:cid/commit-offer", async (req, res) => {
         choiceArgument: { requesterHoldingCid: req.body.holdingCid } } }]);
     const pendingCid = await pollNewCid(requester, "UmbraSwap:SwapDealerPending", before);
     res.json({ ok: true, signed: SIGNED_MODE, pendingCid });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // dealer commits its want leg
@@ -3037,7 +3037,7 @@ app.post("/api/swap/pending/:cid/commit-want", async (req, res) => {
         choiceArgument: { dealerHoldingCid: req.body.holdingCid, refMid } } }]);
     const settlementCid = await pollNewCid(dealer, "UmbraSwap:SwapSettlement", before);
     res.json({ ok: true, signed: SIGNED_MODE, settlementCid });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // operator fires the atomic swap. Same authority model as ExecuteDvP:
@@ -3064,7 +3064,7 @@ app.post("/api/swap/settlements/:cid/execute", async (req, res) => {
     const t = await r.text();
     if (!r.ok) throw new Error(`ExecuteSwap failed: ${r.status} ${t}`);
     res.json({ ok: true, signed: SIGNED_MODE });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // ---- close a settled/expired RFQ (archive it + its invitations) -----------
@@ -3100,7 +3100,7 @@ app.post("/api/swap/rfqs/:cid/close", async (req, res) => {
   try {
     const closed = await cleanupSwapRfq(req.params.cid);
     res.json({ ok: true, closed });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // ---- ONE-CALL DEMO PATH: /api/swap/award ----------------------------------
@@ -3228,7 +3228,7 @@ app.post("/api/swap/award", async (req, res) => {
     try { await cleanupSwapRfq(rfqCid); steps.push("closed RFQ"); } catch (e) {}
 
     res.json({ ok: true, signed: SIGNED_MODE, steps });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 
@@ -3573,7 +3573,7 @@ app.post("/api/real/award", async (req, res) => {
 
     res.json({ ok: true, real: true, settlementCid, atomic: sj.atomic,
       disclosed: sj.disclosed, legs: sj.legs, steps });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 
@@ -3774,7 +3774,7 @@ app.get("/api/governance/pending", async (req, res) => {
 
     res.json({ ok: true, party: DEC_PARTY,
       proposals: out.map((p) => Object.assign(p, tally[p.contractId] || {})) });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // Confirm on THIS operator's node. `action` is required by the manager's schema
@@ -3798,7 +3798,7 @@ app.post("/api/governance/confirm", async (req, res) => {
     const text = await r.text();
     if (!r.ok) return res.status(r.status).json({ error: text.slice(0, 300) });
     res.json({ ok: true, confirmed: proposalCid, result: text.slice(0, 200) });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 // Diagnostic only, and only when UMBRA_PROBE=1: does this wallet sign raw bytes?
