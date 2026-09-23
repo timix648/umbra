@@ -7,6 +7,7 @@
    ══════════════════════════════════════════════════════════════════════════ */
 
 :root{
+  --u-sans: "Figtree", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --u-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   --u-shadow: 0 24px 56px -20px color-mix(in srgb, var(--bg) 88%, transparent),
               0 0 0 1px var(--line2);
@@ -18,8 +19,8 @@
 
 /* ── primitives ───────────────────────────────────────────────────────── */
 .u-lab{
-  font: 600 10px/1 var(--u-mono);
-  letter-spacing:.16em; text-transform:uppercase; color:var(--dim);
+  font: 600 10px/1 var(--u-sans);
+  letter-spacing:0.08em; text-transform:uppercase; color:var(--dim);
 }
 .u-lab-b{ color:var(--mute) }
 .u-mono{ font-family:var(--u-mono); letter-spacing:.02em }
@@ -33,7 +34,7 @@
 
 /* numbers — 7dp legibility. never abbreviate away significance. */
 .u-num{
-  font-family:var(--u-mono); font-variant-numeric:tabular-nums;
+  font-family:var(--u-sans); font-variant-numeric:tabular-nums;
   letter-spacing:-.005em; color:var(--text); white-space:nowrap;
 }
 .u-num sub{ font-size:.72em; color:var(--dim); vertical-align:-.18em; padding:0 .5px }
@@ -45,7 +46,7 @@
 
 /* ── buttons ──────────────────────────────────────────────────────────── */
 .u-btn{
-  font: 600 11px/1 var(--u-mono); letter-spacing:.12em; text-transform:uppercase;
+  font: 600 11px/1 var(--u-sans); letter-spacing:0.06em; text-transform:uppercase;
   color:var(--mute); background:var(--bg2); border:1px solid var(--line);
   border-radius:var(--rad); padding:8px 12px; cursor:pointer;
   transition:background .12s, border-color .12s, color .12s;
@@ -72,11 +73,11 @@
 .u-field:focus-within{ border-color:var(--accentline); box-shadow:var(--glow) }
 .u-field input{
   flex:1 1 auto; min-width:0; background:transparent; border:0; outline:none;
-  color:var(--text); font-family:var(--u-mono); font-variant-numeric:tabular-nums;
+  color:var(--text); font-family:var(--u-sans); font-variant-numeric:tabular-nums;
   font-size:13px; padding:10px 0;
 }
 .u-field input::placeholder{ color:var(--dim) }
-.u-field-aff{ font:600 10px/1 var(--u-mono); letter-spacing:.12em; color:var(--dim); text-transform:uppercase }
+.u-field-aff{ font:600 10px/1 var(--u-sans); letter-spacing:0.06em; color:var(--dim); text-transform:uppercase }
 
 /* search */
 .u-search{ position:relative }
@@ -95,7 +96,7 @@
 .u-asset-txt{ display:flex; flex-direction:column; gap:2px; min-width:0 }
 .u-asset-sym{ font-size:13px; font-weight:600; color:var(--text); line-height:1.1 }
 .u-asset-iss{
-  font: 400 10px/1.1 var(--u-mono); letter-spacing:.04em; color:var(--dim);
+  font: 400 10px/1.1 var(--u-sans); letter-spacing:.04em; color:var(--dim);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
 .u-asset-inline{ display:inline-flex; align-items:center; gap:6px; vertical-align:-3px }
@@ -104,7 +105,7 @@
 /* fallback glyph — used only when AssetIcon is unavailable */
 .u-glyph{
   border-radius:50%; display:grid; place-items:center; flex:0 0 auto;
-  font: 700 9px/1 var(--u-mono); color:var(--bg); background:var(--mute);
+  font: 700 9px/1 var(--u-sans); color:var(--bg); background:var(--mute);
   border:1px solid var(--line2);
 }
 
@@ -123,8 +124,8 @@
 .u-sel-main{ flex:1 1 auto; min-width:0 }
 .u-sel-ph{ color:var(--dim); font-size:13px }
 .u-sel-side{ display:flex; flex-direction:column; align-items:flex-end; gap:2px; flex:0 0 auto }
-.u-sel-side-v{ font:600 12px/1.1 var(--u-mono); font-variant-numeric:tabular-nums; color:var(--text) }
-.u-sel-side-l{ font:400 9px/1.1 var(--u-mono); letter-spacing:.12em; text-transform:uppercase; color:var(--dim) }
+.u-sel-side-v{ font:600 12px/1.1 var(--u-sans); font-variant-numeric:tabular-nums; color:var(--text) }
+.u-sel-side-l{ font:400 9px/1.1 var(--u-sans); letter-spacing:0.06em; text-transform:uppercase; color:var(--dim) }
 .u-car{
   flex:0 0 auto; width:0; height:0; margin-left:2px;
   border-left:4px solid transparent; border-right:4px solid transparent;
@@ -153,7 +154,7 @@
 /* ── party id ─────────────────────────────────────────────────────────── */
 .u-party{
   display:inline-flex; align-items:center; gap:8px;
-  font-family:var(--u-mono); font-size:12px; color:var(--mute); letter-spacing:.02em;
+  font-family:var(--u-sans); font-size:12px; color:var(--mute); letter-spacing:.02em;
 }
 .u-party b{ color:var(--text); font-weight:600 }
 .u-party-box{
@@ -170,7 +171,7 @@
 .u-dot-a{ background:var(--amber) } .u-dot-r{ background:var(--red) }
 .u-dot-m{ background:var(--dim) }
 .u-tag{
-  font:600 9px/1 var(--u-mono); letter-spacing:.11em; text-transform:uppercase;
+  font:600 9px/1 var(--u-sans); letter-spacing:0.06em; text-transform:uppercase;
   color:var(--mute); background:var(--bg2); border:1px solid var(--line);
   border-radius:3px; padding:4px 6px; white-space:nowrap;
 }
@@ -193,7 +194,7 @@
 }
 .u-dd-head{ padding:10px; display:flex; flex-direction:column; gap:9px; border-bottom:1px solid var(--line) }
 .u-dd-bar{ display:flex; align-items:center; gap:8px; justify-content:space-between }
-.u-dd-list{ overflow:auto; max-height:266px; padding:5px }
+.u-dd-list{ overflow:auto; max-height:266px; padding:5px; flex:1 1 auto; min-height:56px }
 .u-dd-foot{
   padding:9px 11px; border-top:1px solid var(--line); background:var(--bg2);
   display:flex; align-items:center; justify-content:space-between; gap:10px;
@@ -211,12 +212,12 @@
 .u-box{
   width:14px; height:14px; border-radius:3px; border:1px solid var(--line2);
   background:var(--bg); display:grid; place-items:center; flex:0 0 auto;
-  color:var(--bg); font:700 9px/1 var(--u-mono);
+  color:var(--bg); font:700 9px/1 var(--u-sans);
 }
 .u-dd-row[data-on="1"] .u-box{ background:var(--accent); border-color:var(--accent); color:var(--bg) }
 .u-av{
   width:30px; height:30px; border-radius:50%; display:grid; place-items:center;
-  font:700 10px/1 var(--u-mono); letter-spacing:.04em;
+  font:700 10px/1 var(--u-sans); letter-spacing:.04em;
   background:var(--bg2); color:var(--mute); border:1px solid var(--line2); flex:0 0 auto;
 }
 .u-dd-row[data-on="1"] .u-av{ color:var(--accent); border-color:var(--accentline) }
@@ -228,7 +229,7 @@
 }
 .u-chip-x{
   background:transparent; border:0; color:var(--mute); cursor:pointer; padding:0 2px;
-  font:600 12px/1 var(--u-mono);
+  font:600 12px/1 var(--u-sans);
 }
 .u-chip-x:hover{ color:var(--red) }
 .u-chip-ph{
@@ -287,7 +288,7 @@
 .u-slider input[type=range]:focus-visible::-webkit-slider-thumb{ box-shadow:var(--glow) }
 .u-ticks{ display:flex; align-items:center; gap:6px }
 .u-tick{
-  flex:1 1 0; font:600 9px/1 var(--u-mono); letter-spacing:.1em; color:var(--dim);
+  flex:1 1 0; font:600 9px/1 var(--u-sans); letter-spacing:.1em; color:var(--dim);
   background:transparent; border:1px solid var(--line); border-radius:3px;
   padding:4px 0; cursor:pointer;
 }
@@ -356,7 +357,7 @@
 /* ── deposit / withdraw switch ────────────────────────────────────────── */
 .u-seg{ display:grid; grid-template-columns:1fr 1fr; gap:0; padding:3px;
   background:var(--bg2); border:1px solid var(--line); border-radius:var(--rad) }
-.u-seg-b{ font: 600 10.5px/1 var(--u-mono); letter-spacing:.14em; text-transform:uppercase;
+.u-seg-b{ font: 600 10.5px/1 var(--u-sans); letter-spacing:0.07em; text-transform:uppercase;
   color:var(--mute); background:transparent; border:0; border-radius:var(--rad);
   padding:9px 10px; cursor:pointer; transition:background .12s, color .12s }
 .u-seg-b:hover{ color:var(--text) }

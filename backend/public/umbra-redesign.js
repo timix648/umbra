@@ -165,12 +165,54 @@
      One dropdown for the whole venue. Replaces every native <select>.
      options: [{ value, label, sub, right, rightLabel, sym, disabled }]
      Row anatomy: icon · label + secondary line · right-aligned value.     */
+  /* ── floating layer ───────────────────────────────────────────────────
+     Menus render into <body> with fixed positioning. Inside a card they were
+     clipped by the card's overflow:hidden and the scrolling column, so a list
+     showed its first rows and nothing below, with no way to scroll to them.
+     Placed beside the trigger, opening upward when there is more room above,
+     and never taller than the space on screen (the menu scrolls instead).     */
+  function floatPos(anchor, want) {
+    var r = anchor.getBoundingClientRect();
+    var gap = 5, edge = 12, vh = window.innerHeight;
+    var below = vh - r.bottom - gap - edge, above = r.top - gap - edge;
+    var up = below < Math.min(want, 240) && above > below;
+    var s = {
+      position: "fixed", left: Math.round(r.left), right: "auto",
+      width: Math.round(r.width), zIndex: 1000,
+      maxHeight: Math.round(Math.max(150, Math.min(want, up ? above : below)))
+    };
+    if (up) { s.top = "auto"; s.bottom = Math.round(vh - r.top + gap); }
+    else { s.top = Math.round(r.bottom + gap); s.bottom = "auto"; }
+    return s;
+  }
+  function useFloat(anchorRef, isOpen, want) {
+    var Rx = R();
+    var st = Rx.useState(null), pos = st[0], setPos = st[1];
+    Rx.useLayoutEffect(function () {
+      if (!isOpen) { setPos(null); return; }
+      function upd() { if (anchorRef.current) setPos(floatPos(anchorRef.current, want)); }
+      upd();
+      window.addEventListener("resize", upd);
+      window.addEventListener("scroll", upd, true);   // any scrolling ancestor
+      return function () {
+        window.removeEventListener("resize", upd);
+        window.removeEventListener("scroll", upd, true);
+      };
+    }, [isOpen]);
+    return pos;
+  }
+  function floating(node) {
+    var D = window.ReactDOM;
+    return D && D.createPortal ? D.createPortal(node, document.body) : node;
+  }
+
   function USelect(props) {
     var Rx = R();
     var open = Rx.useState(false), isOpen = open[0], setOpen = open[1];
     var cur = Rx.useState(-1), curIdx = cur[0], setCur = cur[1];
-    var up = Rx.useState(false), flip = up[0], setFlip = up[1];
     var wrap = Rx.useRef(null);
+    var pop = Rx.useRef(null);
+    var pos = useFloat(wrap, isOpen, 360);
     var opts = props.options || [];
     var idx = -1;
     for (var i = 0; i < opts.length; i++) if (opts[i].value === props.value) idx = i;
@@ -178,12 +220,15 @@
 
     Rx.useEffect(function () {
       if (!isOpen) return;
-      function away(e) { if (wrap.current && !wrap.current.contains(e.target)) setOpen(false); }
+      // The menu lives in <body> now, so "inside" means the trigger OR the menu.
+      function away(e) {
+        if (wrap.current && wrap.current.contains(e.target)) return;
+        if (pop.current && pop.current.contains(e.target)) return;
+        setOpen(false);
+      }
       function key(e) { if (e.key === "Escape") { setOpen(false); } }
       document.addEventListener("mousedown", away);
       document.addEventListener("keydown", key);
-      var r = wrap.current && wrap.current.getBoundingClientRect();
-      setFlip(!!r && window.innerHeight - r.bottom < 260 && r.top > 260);
       setCur(idx);
       return function () {
         document.removeEventListener("mousedown", away);
@@ -266,12 +311,12 @@
               sel.rightLabel ? h("span", { className: "u-sel-side-l" }, sel.rightLabel) : null)
           : null,
         h("span", { className: "u-car" })),
-      isOpen
-        ? h("div", { className: "u-sel-pop", role: "listbox", "data-up": flip ? "1" : "0" },
+      isOpen && pos
+        ? floating(h("div", { className: "u-sel-pop", role: "listbox", ref: pop, style: pos },
             props.groupLabel ? h("div", { className: "u-sel-grp u-lab" }, props.groupLabel) : null,
             opts.length
               ? opts.map(row)
-              : h("div", { className: "u-sel-empty u-lab" }, "No options"))
+              : h("div", { className: "u-sel-empty u-lab" }, "No options")))
         : null);
   }
 
@@ -348,7 +393,8 @@
           h("span", { className: "u-lab" },
             hits.length + (needle ? " matching" : " listed") + " · " + sel.length + " invited"),
           h("div", { className: "u-row", style: { gap: 6 } },
-            needle && hits.length
+            // Everyone listed, or everyone the search matched, in one press.
+            hits.length && hits.some(function (d) { return !isOn(d.id); })
               ? h("button", {
                   type: "button", className: "u-btn u-btn-xs",
                   onClick: function () {
@@ -357,7 +403,7 @@
                     ids.forEach(function (i) { if (next.indexOf(i) < 0) next.push(i); });
                     props.onChange && props.onChange(next);
                   }
-                }, "Invite " + hits.length)
+                }, needle ? "Invite " + hits.length + " matching" : "Invite all " + hits.length)
               : null,
             sel.length
               ? h("button", {
@@ -415,6 +461,8 @@
     var Rx = R();
     var o = Rx.useState(false), isOpen = o[0], setOpen = o[1];
     var wrap = Rx.useRef(null);
+    var pop = Rx.useRef(null);
+    var pos = useFloat(wrap, isOpen, 470);
     var dealers = props.dealers || [];
     var sel = props.selected || [];
     var byId = {};
@@ -422,7 +470,11 @@
 
     Rx.useEffect(function () {
       if (!isOpen) return;
-      function away(e) { if (wrap.current && !wrap.current.contains(e.target)) setOpen(false); }
+      function away(e) {
+        if (wrap.current && wrap.current.contains(e.target)) return;
+        if (pop.current && pop.current.contains(e.target)) return;
+        setOpen(false);
+      }
       function key(e) { if (e.key === "Escape") setOpen(false); }
       document.addEventListener("mousedown", away);
       document.addEventListener("keydown", key);
@@ -462,12 +514,13 @@
           h("span", { className: "u-sel-side-v" }, String(sel.length)),
           h("span", { className: "u-sel-side-l" }, "invited")),
         h("span", { className: "u-car" })),
-      isOpen
-        ? h("div", { className: "u-dd-panel", role: "dialog", "aria-label": "Dealer directory" },
+      isOpen && pos
+        ? floating(h("div", { className: "u-dd-panel", role: "dialog", "aria-label": "Dealer directory",
+                              ref: pop, style: pos },
             h(DealerList, {
               dealers: dealers, selected: sel, onChange: props.onChange,
               onDone: function () { setOpen(false); }
-            }))
+            })))
         : null);
   }
 
@@ -598,7 +651,7 @@
           h("p", { className: "u-note", style: { margin: 0 } },
             "Send from your wallet",
             homeParty ? [" party ", h("span", { key: "hp", className: "u-party" }, abbrevParty(homeParty, 9, 4))] : "",
-            " to this one. The transfer then appears below for you to accept."));
+            " to this one. It then shows under Incoming for you to accept."));
 
     /* withdraw ----------------------------------------------------- */
     var withdrawSect = h("div", { className: "u-sect" },
@@ -665,10 +718,12 @@
           }))
         : h("div", { className: "u-empty u-lab" }, "No incoming transfers"));
 
+    // Incoming first: a transfer waiting to be accepted is the one thing here that
+    // needs the user now, and it is where a deposit lands.
     return h("div", { className: "u-fund" },
+      incomingSect,
       h("div", { className: "u-sect" }, seg),
-      dep ? depositSect : withdrawSect,
-      incomingSect);
+      dep ? depositSect : withdrawSect);
   }
 
   /* ══ Sign-in / landing ════════════════════════════════════════════════

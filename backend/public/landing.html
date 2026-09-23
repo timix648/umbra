@@ -178,9 +178,10 @@
   .curtain.go .core{opacity:1;transform:none}
   .curtain .core .mk{width:60px;height:60px;filter:drop-shadow(0 0 22px rgba(157,116,255,.5))}
   .curtain .core .wm{font:600 15px/1 var(--mono);letter-spacing:.5em;text-indent:.5em;color:var(--accent2)}
-  .curtain .core .st{font:600 9px/1 var(--mono);letter-spacing:.3em;text-transform:uppercase;color:var(--dim);overflow:hidden;white-space:nowrap;width:0}
-  .curtain.go .core .st{animation:type 1s steps(22) .55s forwards}
-  @keyframes type{to{width:15em}}
+  /* typed on by clipping, so the whole line always shows - a fixed width cut it off at "ENTERING DARK V" */
+  .curtain .core .st{font:600 9px/1 var(--mono);letter-spacing:.3em;text-indent:.3em;text-transform:uppercase;color:var(--dim);white-space:nowrap;clip-path:inset(0 100% 0 0)}
+  .curtain.go .core .st{animation:type 1s steps(19) .55s forwards}
+  @keyframes type{to{clip-path:inset(0 0 0 0)}}
   .curtain .core .bar{width:160px;height:2px;background:var(--bg3);border-radius:2px;overflow:hidden;margin-top:4px}
   .curtain .core .bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2))}
   .curtain.go .core .bar i{animation:load 1.1s ease .5s forwards}
@@ -189,7 +190,7 @@
   @media(prefers-reduced-motion:reduce){
     .reveal{opacity:1;transform:none;transition:none}
     .book{transform:none}.rd i{animation:none}
-    .curtain .panel{transition:none}.curtain .core,.curtain .core *{animation:none;opacity:1;width:auto}
+    .curtain .panel{transition:none}.curtain .core,.curtain .core *{animation:none;opacity:1;width:auto;clip-path:none}
   }
   @media(max-width:920px){.hero{grid-template-columns:1fr;gap:48px}.hero .right{order:2}.book{transform:none}}
 </style>

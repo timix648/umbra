@@ -608,6 +608,9 @@ app.get("/api/mode", async (req, res) => {
   // it is a surprise.
   res.json({
     signedMode: SIGNED_MODE,
+    // Whether the sample desks can be used at all. Off, they only lead to refusals,
+    // so the sign-in page does not offer them.
+    demoRoles: !!auth.DEMO_ROLES,
     parties: await activePartyMap(),
     fee: FEE_PARTY ? { bps: FEE_BPS, floors: FEE_FLOORS, party: FEE_PARTY } : null,
   });
