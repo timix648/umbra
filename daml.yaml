@@ -54,7 +54,11 @@ source: daml
 # locked its leg (SettleDeal) or, past the lock deadline, sends every lock home
 # (CancelDeal). FeeReceiver lets a fee land in a wallet the venue has no key for.
 # Additive only: no existing template or choice changed.
-version: 0.10.0
+# 0.11.0: split awards. SwapRfq.AwardSplit awards one request across several quotes
+# in ONE signature -- the best dealer up to its cap, the rest at the next best price --
+# then closes or reopens the remainder. SwapQuote.AwardPart is one such part.
+# Additive only.
+version: 0.11.0
 dependencies:
   - daml-prim
   - daml-stdlib

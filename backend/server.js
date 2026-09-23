@@ -2373,6 +2373,47 @@ app.post("/api/swap/quotes/:cid/accept", async (req, res) => {
 // EXISTING proposal the UI awarded (settles the actual quote, no internal re-auction).
 // Best-effort: release an allocation back to free holdings (used to roll back a
 // failed settlement so funds are never stranded/locked).
+// Award one request ACROSS several quotes in one signature (umbra-v9 0.11.0): the best
+// dealer up to its cap, the rest at the next best price(s). Each part becomes its own
+// SwapDeal at that dealer's price, pro-rata, with its own fee. keepRest reopens any
+// unfilled remainder to the same dealers; otherwise it is simply closed -- nothing
+// unfilled was ever locked.
+app.post("/api/swap/rfqs/:cid/award-split", async (req, res) => {
+  try {
+    const b = req.body || {};
+    const operator = await partyIdFor("requester");
+    const requester = await partyIdFor(readPartyOrOp(req, b.requester));
+    const parts = Array.isArray(b.parts) ? b.parts : [];
+    if (!parts.length) return res.status(400).json({ error: "pick at least one quote" });
+    const quotes = await queryActive(requester, "UmbraSwap:SwapQuote");
+    const specs = [];
+    for (const x of parts) {
+      const q = quotes.find(c => c.contractId === x.quoteCid);
+      if (!q) return res.status(404).json({ error: "that quote is no longer live: " + String(x.quoteCid).slice(0, 16) });
+      if (q.payload.rfqCid !== req.params.cid) return res.status(400).json({ error: "a quote in the split does not answer this request" });
+      const fill = Number(x.fill);
+      const total = Number(q.payload.offerAmount);
+      const partPrice = fill >= total ? Number(q.payload.price) : Number(q.payload.price) * fill / total;
+      const fee = feeFor(q.payload.wantAsset.symbol, partPrice);
+      specs.push({ quoteCid: q.contractId, fill: String(x.fill),
+        feeParty: fee ? FEE_PARTY : null, feeAmount: fee });
+    }
+    if (specs.some(sp => sp.feeAmount) && FEE_PARTY !== operator && !(await findFeeReceiver(FEE_PARTY))) {
+      return res.status(409).json({ error: "the venue's fee wallet has not enabled fee collection yet, " +
+        "so a trade could not settle. The venue owner runs `node fee-wallet.js enable-fees` once." });
+    }
+    const cmds = [{ ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapRfq`,
+      contractId: req.params.cid, choice: "AwardSplit",
+      choiceArgument: { parts: specs, keepRest: !!b.keepRest } } }];
+    if (isWalletParty(requester) || req.query.build === "1" || b.build) {
+      return res.json({ ok: true, build: true, party: requester, commands: cmds, deal: true,
+        parts: specs.length, note: "one signature awards every part" });
+    }
+    await act("requester", "swap-award-split", cmds);
+    res.json({ ok: true, parts: specs.length });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
 async function withdrawLeg(leg, adminHint) {
   try {
     if (!leg || !leg.cid) return;

@@ -260,6 +260,47 @@ template SwapRfq
       controller requester
       do pure ()
 
+    -- Award a request ACROSS several quotes in ONE signature (0.11.0).
+    --
+    -- When the best dealer caps how much it will take (maxFillAmount), the rest used
+    -- to need a fresh request -- because awarding part of a request archived it, and
+    -- every other dealer's quote points at that request, so they all died with it.
+    -- Here the request stays alive until every part is awarded: each part is a
+    -- SwapDeal at that dealer's own price (pro-rata to the fill), and only then is
+    -- the request archived. What is left over is either reopened as a smaller request
+    -- to the same dealers (keepRest) or simply closed. Nothing unfilled is ever
+    -- locked, so closing it returns nothing because nothing left the wallet.
+    --
+    -- Nonconsuming + archive at the end, on purpose: each part re-checks that this
+    -- request is still open, which a consuming choice would already have archived.
+    nonconsuming choice AwardSplit : [ContractId SwapDeal]
+      with
+        parts    : [AwardPartSpec]
+        keepRest : Bool
+      controller requester
+      do
+        assertMsg "pick at least one quote" (not (null parts))
+        let total = sum (map (\x -> x.fill) parts)
+        assertMsg "the parts add up to more than the request" (total <= offerAmount)
+        deals <- forA parts (\x -> do
+          q <- fetch x.quoteCid
+          assertMsg "that quote does not answer this request" (q.rfqCid == self)
+          exercise x.quoteCid AwardPart with
+            fill = x.fill; venueFeeParty = x.feeParty; venueFeeAmount = x.feeAmount)
+        let remaining = offerAmount - total
+        if keepRest && remaining > 0.0
+          then do
+            rest <- create this with offerAmount = remaining
+            _ <- forA invited (\d ->
+              create SwapInvitation with
+                requester; operator; dealer = d
+                offerAsset; offerAmount = remaining; wantAsset; expiresAt
+                rfqCid = rest)
+            pure ()
+          else pure ()
+        archive self
+        pure deals
+
 
 -- A requester's own desk: opens a request AND invites every dealer on it in ONE
 -- signature.
@@ -387,6 +428,16 @@ template RfqAward
 
 -- A dealer's private quote. Signed by the dealer, visible only to the
 -- requester -- the ledger itself withholds it from rival dealers (P1).
+-- One part of a split award: which quote, how much of the request it fills, and the
+-- venue fee on that part (fees are per deal, so per part).
+data AwardPartSpec = AwardPartSpec
+  with
+    quoteCid  : ContractId SwapQuote
+    fill      : Decimal
+    feeParty  : Optional Party
+    feeAmount : Optional Decimal
+  deriving (Eq, Show)
+
 template SwapQuote
   with
     requester   : Party
@@ -526,6 +577,49 @@ template SwapQuote
     -- back: each locks its own leg, and the venue settles the deal (or, past its
     -- deadline, cancels it and every lock goes home). With a SwapProposal the
     -- requester had to return to propose, and the dealer to accept.
+    -- One part of SwapRfq.AwardSplit: this dealer fills `fill` of the request at its
+    -- own price, pro-rata. Unlike AwardRealSwap it leaves the request alone -- the split
+    -- archives it once every part is awarded. The trade id carries the dealer, since
+    -- every part of one split is awarded at the same instant.
+    choice AwardPart : ContractId SwapDeal
+      with
+        fill           : Decimal
+        venueFeeParty  : Optional Party
+        venueFeeAmount : Optional Decimal
+      controller requester
+      do
+        now <- getTime
+        _ <- fetch rfqCid
+        assertMsg "this quote is no longer firm" (now < validUntil)
+        assertMsg "a fill must be positive" (fill > 0.0)
+        assertMsg "a fill cannot exceed the request" (fill <= offerAmount)
+        case maxFillAmount of
+          Some m -> assertMsg
+            "this dealer will not take that much of the request at this price"
+            (fill <= m)
+          None -> pure ()
+        let fillPrice = if fill == offerAmount then price
+                        else (price * fill) / offerAmount
+        _ <- create RfqAward with
+          requester; operator; dealer
+          offerAsset; offerAmount
+          filledAmount = fill
+          wantAsset
+          price = fillPrice
+          awardedAt = now
+        create SwapDeal with
+          requester; operator; dealer
+          offerAsset
+          offerAmount = fill
+          wantAsset
+          price = fillPrice
+          tradeId = offerAsset.symbol <> "/" <> wantAsset.symbol <> "@" <> show now
+                      <> "#" <> partyToText dealer
+          allocateBefore = addRelTime now (minutes 15)
+          settleBefore = addRelTime now (minutes 30)
+          feeParty = venueFeeParty
+          feeAmount = venueFeeAmount
+
     choice AwardRealSwap : ContractId SwapDeal
       with
         venueFeeParty  : Optional Party

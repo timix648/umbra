@@ -388,6 +388,14 @@
   .prt-ico.on{color:var(--ok);border-color:var(--okline);background:var(--okbg)}
   .prt-ico.on:hover{filter:brightness(1.1)}
   .prt-ico[disabled]{opacity:.5;cursor:progress}
+  /* split award plan */
+  .spl{max-width:520px}
+  .spl-row{display:grid;grid-template-columns:1.2fr 1fr 1.3fr;gap:10px;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:7px;margin-top:8px;font-size:13px}
+  .spl-d{font-weight:600;color:var(--text)}
+  .spl-r{color:var(--mute);text-align:right}
+  .spl-b{display:flex;flex-direction:column;gap:8px;margin-top:16px}
+  .ask-cap{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12.5px;color:var(--mute);flex-wrap:wrap}
+  .ask-cap input{width:120px;padding:7px 9px;background:var(--bg);border:1px solid var(--line2);border-radius:var(--rad);color:var(--text);font:500 13px/1 var(--sans);font-variant-numeric:tabular-nums}
   /* settings drawer: slides in from the right */
   .drw{position:fixed;inset:0;z-index:900;pointer-events:none}
   .drw.on{pointer-events:auto}
@@ -3994,6 +4002,49 @@ function LoopMark({ size }) {
   });
 }
 
+// The best quote takes only part of the request. Show exactly who would fill what, at
+// which price, and let the requester choose; nothing is locked until they do.
+function SplitPlan({ plan, onPick }) {
+  const p = plan.q.payload;
+  const off = dispSym(p.offerAsset.symbol), wnt = dispSym(p.wantAsset.symbol);
+  const total = plan.total;
+  const recv = (x) => Number(x.q.payload.price) * x.fill / total;   // pro-rata, the dealer's own price
+  const row = (x, i) => React.createElement("div", { key: i, className: "spl-row" },
+    React.createElement("span", { className: "spl-d" }, DEALER_NAME(x.q.payload.dealer)),
+    React.createElement("span", null, fmtAmtStr(x.fill) + " " + off),
+    React.createElement("span", { className: "spl-r" }, "you get " + fmtNum(recv(x)) + " " + wnt));
+  const allFill = plan.first.fill + plan.extra.reduce((s, x) => s + x.fill, 0);
+  const restAfterAll = total - allFill;
+  useEffect(() => {
+    const k = e => { if (e.key === "Escape") onPick(null); };
+    document.addEventListener("keydown", k);
+    return () => document.removeEventListener("keydown", k);
+  }, []);
+  return React.createElement("div", { className: "ovl", onClick: () => onPick(null) },
+    React.createElement("div", { className: "ovlcard spl", role: "dialog", "aria-modal": "true",
+      "aria-label": "Fill the rest of your request", onClick: e => e.stopPropagation() },
+      React.createElement("div", { className: "eyb" }, "Best price covers part of your request"),
+      React.createElement("h3", { className: "wpk-h" },
+        DEALER_NAME(p.dealer) + " takes " + fmtAmtStr(plan.first.fill) + " of your " + fmtAmtStr(total) + " " + off + "."),
+      row(plan.first, "first"),
+      plan.extra.length
+        ? React.createElement(React.Fragment, null,
+            React.createElement("div", { className: "wpk-lab" }, "The rest, at the next best prices"),
+            plan.extra.map(row))
+        : React.createElement("p", { className: "drw-d" }, "No other live quote can take the remaining " +
+            fmtAmtStr(total - plan.first.fill) + " " + off + "."),
+      React.createElement("div", { className: "spl-b" },
+        plan.extra.length ? React.createElement("button", { className: "drw-b", onClick: () => onPick("all") },
+          "Fill it this way" + (restAfterAll > 1e-12 ? " (" + fmtAmtStr(restAfterAll) + " " + off + " left unfilled)" : "")) : null,
+        React.createElement("button", { className: "drw-b ghost", onClick: () => onPick("keep") },
+          "Only " + DEALER_NAME(p.dealer) + " — keep the rest open for new quotes"),
+        React.createElement("button", { className: "drw-b ghost", onClick: () => onPick("close") },
+          "Only " + DEALER_NAME(p.dealer) + " — close the rest"),
+        React.createElement("button", { className: "wpk-x", onClick: () => onPick(null) }, "Cancel")),
+      React.createElement("p", { className: "drw-d", style: { marginTop: 10 } },
+        "One signature accepts every part you choose, then one lock per dealer. Nothing is locked until you choose, and the unfilled part never leaves your wallet.")));
+}
+
 function WalletPicker({ busy, onPick, onClose }) {
   const [others, setOthers] = useState(null);
   useEffect(() => {
@@ -5236,7 +5287,9 @@ function DealerDesk(P) {
                 const o = dispSym(active.payload.offerAsset.symbol), w = dispSym(active.payload.wantAsset.symbol);
                 const amt = Number(active.payload.offerAmount);
                 const _wMax = holdings.filter(h => sameSym(h.payload.asset.symbol, w)).reduce((s, h) => s + Number(h.payload.amount), 0);
-                const _unbacked = quoteCost(P.fee, price[active.contractId], w) > _wMax + 1e-12;
+                const _capN = Number(((P.maxFill || {})[active.contractId]) || 0);
+                const _share = _capN > 0 && _capN < amt ? _capN / amt : 1;   // capped: pays pro-rata
+                const _unbacked = quoteCost(P.fee, Number(price[active.contractId] || 0) * _share, w) > _wMax + 1e-12;
                 return React.createElement(React.Fragment, null,
                   React.createElement("div", { className: "ask-pair" },
                     React.createElement("div", { className: "ask-side" },
@@ -5265,6 +5318,18 @@ function DealerDesk(P) {
                       onClick: () => sendQuote(active.contractId, w)
                     }, busy[active.contractId] ? React.createElement("span", { className: "spinr" })
                        : (_unbacked ? ("Insufficient " + w) : "Seal quote to the ledger"))),
+                  // Optional cap: price the whole block, but take at most this much of it.
+                  // The buyer can then fill the rest at the next best price.
+                  P.setMaxFill ? React.createElement("div", { className: "ask-cap" },
+                    React.createElement("span", null, "Take at most"),
+                    React.createElement("input", {
+                      inputMode: "decimal", placeholder: fmtAmtStr(amt),
+                      value: (P.maxFill || {})[active.contractId] || "",
+                      "aria-label": "Most of this request you will take",
+                      onChange: e => { const v = e.target.value.replace(/[^\d.]/g, "");
+                        P.setMaxFill(x => ({ ...x, [active.contractId]: v })); }
+                    }),
+                    React.createElement("span", null, o + " of " + fmtAmtStr(amt) + " (optional)")) : null,
                   // What this quote actually costs the dealer. The venue fee is borne by
                   // the winning dealer, so it has to be visible BEFORE the price is sealed
                   // -- otherwise the first time a dealer meets the charge is the settle
@@ -5790,6 +5855,8 @@ function PartyPortal({ role, wallet, onExit }) {
   const [offset, setOffset] = useState(null);
   const [signed, setSigned] = useState(false);
   const [price, setPrice] = useState({});
+  // Optional cap per invitation: the most of the request this dealer will take.
+  const [maxFill, setMaxFill] = useState({});
   const [busy, setBusy] = useState({});
   const [note, setNote] = useState(null);
   const [fresh, setFresh] = useState(false);
@@ -5808,6 +5875,7 @@ function PartyPortal({ role, wallet, onExit }) {
   // no key for the dealer -- so if this is not surfaced the trade stalls silently
   // with the buyer's funds allocated and neither side told why.
   const [openTrade, setOpenTrade] = useState(null);
+  const [split, setSplit] = useState(null);   // a capped best quote: the requester's choice
   const [settling, setSettling] = useState(false);
   const [settleStep, setSettleStep] = useState(null);
   // Distinguish "read failed" from "holds nothing". Rendering both as an empty wallet
@@ -6273,7 +6341,11 @@ function PartyPortal({ role, wallet, onExit }) {
     if (_cost > _wMax + 1e-12) { say("You cannot back that: with the venue fee it costs " + fmtAmtStr(_cost) + " " + dispSym(wantSym) + " and you hold " + fmtAmtStr(_wMax) + ". Quote lower, or fund your party first.", true); return; }
     setBusy(b => ({ ...b, [cid]: true }));
     try {
-      const r = await post("/api/swap/invitations/" + cid + "/quote", { dealer: role, price: p });
+      const iv0 = (inv || []).find(x => x.contractId === cid);
+      const whole = iv0 ? Number(iv0.payload.offerAmount) : 0;
+      const capN = Number(maxFill[cid] || 0);
+      const cap = capN > 0 && (!whole || capN < whole) ? String(capN) : null;
+      const r = await post("/api/swap/invitations/" + cid + "/quote", { dealer: role, price: p, maxFillAmount: cap });
       if (r.build) { say("Sign your quote in your wallet…"); await signBuilt(r); }
       say("Quote sent. Only the buyer can see it.");
       setPrice(x => { const n = { ...x }; delete n[cid]; return n; });
@@ -6283,8 +6355,82 @@ function PartyPortal({ role, wallet, onExit }) {
   }
 
   // Award a dealer's ACTUAL quote: accept -> commit both legs -> atomic execute.
+  // The best dealer capped how much it takes: plan the rest across the next best live
+  // quotes on the same request (each within its own cap), and let the requester choose.
+  function planSplit(q) {
+    const p = q.payload, total = Number(p.offerAmount);
+    const capOf = x => x.payload.maxFillAmount != null ? Number(x.payload.maxFillAmount) : total;
+    const first = { q, fill: Math.min(capOf(q), total) };
+    let rest = total - first.fill;
+    const extra = [];
+    const others = myQuotes
+      .filter(x => x.contractId !== q.contractId && x.payload.rfqCid === p.rfqCid &&
+                   new Date(x.payload.validUntil).getTime() > Date.now())
+      .sort((a, b) => Number(b.payload.price) - Number(a.payload.price));   // most for the offer first
+    for (const o of others) {
+      if (rest <= 1e-12) break;
+      const f = Math.min(capOf(o), rest);
+      if (f > 1e-12) { extra.push({ q: o, fill: f }); rest -= f; }
+    }
+    return { q, total, first, extra, rest: Math.max(0, rest) };
+  }
+
+  async function doAwardSplit(plan, mode) {
+    setSplit(null);
+    if (!mode || awarding) return;
+    const p = plan.q.payload;
+    const parts = [{ quoteCid: plan.first.q.contractId, fill: plan.first.fill }];
+    if (mode === "all") plan.extra.forEach(x => parts.push({ quoteCid: x.q.contractId, fill: x.fill }));
+    const keepRest = mode === "keep";
+    const filled = parts.reduce((s2, x) => s2 + Number(x.fill), 0);
+    // what the requester receives across every chosen part, each at its dealer's price
+    const chosen = [plan.first].concat(mode === "all" ? plan.extra : []);
+    const received = chosen.reduce((s2, x) => s2 + Number(x.q.payload.price) * x.fill / plan.total, 0);
+    setAwarding(true);
+    try {
+      setAwardStep("Sign once to accept " + (parts.length > 1 ? "all " + parts.length + " parts" : "this part") + "…");
+      const enc = encodeURIComponent;
+      const before = new Set((((await api("/api/swap/deals?role=" + enc(role)).catch(() => ({}))).deals) || []).map(d => d.contractId));
+      const a = await post("/api/swap/rfqs/" + p.rfqCid + "/award-split", { requester: role, parts, keepRest });
+      await signBuilt(a);
+      let fresh = [];
+      for (let i = 0; i < 15; i++) {
+        fresh = (((await api("/api/swap/deals?role=" + enc(role)).catch(() => ({}))).deals) || [])
+          .filter(d => !before.has(d.contractId));
+        if (fresh.length >= parts.length) break;
+        await new Promise(r => setTimeout(r, 1500));
+      }
+      if (!fresh.length) throw new Error("the award was signed, but the deals did not appear -- refresh in a moment");
+      // One lock per dealer filled: each part is its own deal, settled on its own.
+      for (const d of fresh) await lockDealLegs(d.contractId, setAwardStep);
+      const by = new Date(fresh[0].payload.allocateBefore).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      setVault({
+        waiting: true, failed: false,
+        reason: "Your " + dispSym(p.offerAsset.symbol) + " is locked for " + fresh.length + (fresh.length > 1 ? " deals" : " deal") +
+          ". Each settles on its own as soon as its dealer locks — nothing more to sign. Anything a dealer has not locked by " +
+          by + " comes back to you." + (plan.total - filled > 1e-12
+            ? " The unfilled " + fmtAmtStr(plan.total - filled) + " " + dispSym(p.offerAsset.symbol) +
+              (keepRest ? " is open again for new quotes." : " was closed — it never left your wallet.") : ""),
+        offerSym: dispSym(p.offerAsset.symbol), offerAmt: filled,
+        wantSym: dispSym(p.wantAsset.symbol), wantAmt: received,
+        dealerName: fresh.length > 1 ? fresh.length + " dealers" : DEALER_NAME(fresh[0].payload.dealer), signed
+      });
+      load();
+    } catch (e) {
+      setVault({ failed: !e.waiting, waiting: !!e.waiting, reason: e.message,
+        offerSym: dispSym(p.offerAsset.symbol), offerAmt: filled, wantSym: dispSym(p.wantAsset.symbol),
+        wantAmt: received, dealerName: DEALER_NAME(p.dealer), signed });
+    } finally { setAwarding(false); setAwardStep(null); }
+  }
+
   async function awardQuote(q) {
     if (awarding) return;
+    // The quote takes less than the whole request: ask what to do with the rest.
+    const _cap = q.payload.maxFillAmount != null ? Number(q.payload.maxFillAmount) : null;
+    if (wallet && _cap != null && _cap < Number(q.payload.offerAmount) - 1e-12) {
+      setSplit(planSplit(q));
+      return;
+    }
     setAwarding(true);
     const p = q.payload;
     const dealerRole = cleanRole(p.dealer);
@@ -6463,6 +6609,7 @@ function PartyPortal({ role, wallet, onExit }) {
     meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, ratePair, usd,
     price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid, role, deskSwitch,
     openTrade, settling, settleStep, onSettle: settleAsDealer, readFailed, fee,
+    maxFill, setMaxFill,
     listed, onToggleListing: toggleListing, wallet, say,
     onSettings: wallet ? () => setSettingsOpen(true) : null
   }));
@@ -6478,6 +6625,7 @@ function PartyPortal({ role, wallet, onExit }) {
       wallet, say, listed, onToggleListing: toggleListing,
       onSettings: wallet ? () => setSettingsOpen(true) : null
     }),
+    split ? React.createElement(SplitPlan, { plan: split, onPick: (mode) => doAwardSplit(split, mode) }) : null,
     React.createElement(GovernancePanel, { onOpen: setVault }),
     React.createElement(SettlementVault, { trade: vault, role, onClose: () => setVault(null) }));
 

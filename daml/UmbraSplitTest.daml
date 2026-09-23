@@ -1,0 +1,149 @@
+module UmbraSplitTest where
+
+import UmbraSwap
+import Daml.Script
+import DA.Time (addRelTime, minutes)
+import DA.Assert ((===))
+import DA.List (sort, dedup)
+
+-- ============================================================================
+-- Proofs for SwapRfq.AwardSplit + SwapQuote.AwardPart (0.11.0).
+--
+-- The best dealer caps how much it will take; the rest goes to the next best
+-- price, in ONE signature -- or is closed, or reopened -- and nothing breaks:
+--
+--   two capped/uncapped quotes fill the whole request, each at its own price
+--   "only the best, keep the rest open" reopens the remainder to the same dealers
+--   "only the best, close the rest" leaves nothing open
+--   a dealer's cap is enforced
+--   the parts cannot add up to more than the request
+--   a quote answering a DIFFERENT request cannot be used
+--   only the requester can split its request
+-- ============================================================================
+
+data S = S
+  with
+    operator  : Party
+    requester : Party
+    dealerA   : Party
+    dealerB   : Party
+    cbtc      : AssetId
+    cc        : AssetId
+
+setupS : Script S
+setupS = do
+  operator  <- allocateParty "operator"
+  requester <- allocateParty "requester"
+  dealerA   <- allocateParty "dealerA"
+  dealerB   <- allocateParty "dealerB"
+  issuer    <- allocateParty "BitSafe"
+  ccAdmin   <- allocateParty "CantonCoin"
+  pure S with
+    operator; requester; dealerA; dealerB
+    cbtc = AssetId with admin = issuer,  symbol = "CBTC"
+    cc   = AssetId with admin = ccAdmin, symbol = "Amulet"
+
+-- A 2 CBTC request to both dealers. A pays 1000 CC for the whole 2 but takes at
+-- most 1; B pays 990 for the whole 2, no cap.
+twoQuotes : S -> Script (ContractId SwapRfq, ContractId SwapQuote, ContractId SwapQuote)
+twoQuotes s = do
+  now <- getTime
+  rfq <- submit s.requester do
+    createCmd SwapRfq with
+      requester = s.requester; operator = s.operator
+      offerAsset = s.cbtc; offerAmount = 2.0; wantAsset = s.cc
+      invited = [s.dealerA, s.dealerB]; expiresAt = addRelTime now (minutes 30)
+  _ <- submit s.requester do exerciseCmd rfq InviteAll
+  [(ia, _)] <- query @SwapInvitation s.dealerA
+  [(ib, _)] <- query @SwapInvitation s.dealerB
+  qa <- submit s.dealerA do
+    exerciseCmd ia SubmitSwapQuote with
+      price = 1000.0; validUntil = addRelTime now (minutes 20); maxFillAmount = Some 1.0
+  qb <- submit s.dealerB do
+    exerciseCmd ib SubmitSwapQuote with
+      price = 990.0; validUntil = addRelTime now (minutes 20); maxFillAmount = None
+  pure (rfq, qa, qb)
+
+part : ContractId SwapQuote -> Decimal -> AwardPartSpec
+part q f = AwardPartSpec with quoteCid = q; fill = f; feeParty = None; feeAmount = None
+
+dealTerms : Party -> Script [(Party, Decimal, Decimal)]
+dealTerms p = do
+  ds <- query @SwapDeal p
+  pure (sort (map (\(_, d) -> (d.dealer, d.offerAmount, d.price)) ds))
+
+bestTakesItsCapNextBestTakesTheRest : Script ()
+bestTakesItsCapNextBestTakesTheRest = do
+  s <- setupS
+  (rfq, qa, qb) <- twoQuotes s
+  deals <- submit s.requester do
+    exerciseCmd rfq AwardSplit with parts = [part qa 1.0, part qb 1.0]; keepRest = False
+  length deals === 2
+  -- each at its OWN price, pro-rata: A 1000 for 2 -> 500 for 1; B 990 for 2 -> 495 for 1
+  terms <- dealTerms s.requester
+  terms === sort [(s.dealerA, 1.0, 500.0), (s.dealerB, 1.0, 495.0)]
+  -- the request is closed and nothing is left open
+  gone <- queryContractId s.requester rfq
+  gone === None
+  open <- query @SwapRfq s.requester
+  length open === 0
+  -- distinct trade ids, so each part settles on its own
+  ds <- query @SwapDeal s.requester
+  let ids = map (\(_, d) -> d.tradeId) ds
+  length (dedup ids) === length ids
+
+onlyTheBestKeepTheRestOpen : Script ()
+onlyTheBestKeepTheRestOpen = do
+  s <- setupS
+  (rfq, qa, _) <- twoQuotes s
+  _ <- submit s.requester do
+    exerciseCmd rfq AwardSplit with parts = [part qa 1.0]; keepRest = True
+  open <- query @SwapRfq s.requester
+  map (\(_, r) -> r.offerAmount) open === [1.0]
+  -- both dealers are invited to price the remainder
+  ia <- query @SwapInvitation s.dealerA
+  ib <- query @SwapInvitation s.dealerB
+  map (\(_, i) -> i.offerAmount) ia === [1.0]
+  map (\(_, i) -> i.offerAmount) ib === [1.0]
+
+onlyTheBestCloseTheRest : Script ()
+onlyTheBestCloseTheRest = do
+  s <- setupS
+  (rfq, qa, _) <- twoQuotes s
+  _ <- submit s.requester do
+    exerciseCmd rfq AwardSplit with parts = [part qa 1.0]; keepRest = False
+  open <- query @SwapRfq s.requester
+  length open === 0
+  terms <- dealTerms s.requester
+  terms === [(s.dealerA, 1.0, 500.0)]
+
+aDealersCapIsEnforced : Script ()
+aDealersCapIsEnforced = do
+  s <- setupS
+  (rfq, qa, qb) <- twoQuotes s
+  submitMustFail s.requester do
+    exerciseCmd rfq AwardSplit with parts = [part qa 1.5, part qb 0.5]; keepRest = False
+
+partsCannotExceedTheRequest : Script ()
+partsCannotExceedTheRequest = do
+  s <- setupS
+  (rfq, qa, qb) <- twoQuotes s
+  submitMustFail s.requester do
+    exerciseCmd rfq AwardSplit with parts = [part qa 1.0, part qb 1.5]; keepRest = False
+
+aQuoteForAnotherRequestIsRefused : Script ()
+aQuoteForAnotherRequestIsRefused = do
+  s <- setupS
+  (_, qa, _) <- twoQuotes s
+  (rfq2, _, _) <- twoQuotes s
+  submitMustFail s.requester do
+    exerciseCmd rfq2 AwardSplit with parts = [part qa 1.0]; keepRest = False
+
+onlyTheRequesterSplits : Script ()
+onlyTheRequesterSplits = do
+  s <- setupS
+  (rfq, qa, qb) <- twoQuotes s
+  submitMustFail s.dealerA do
+    exerciseCmd rfq AwardSplit with parts = [part qa 1.0, part qb 1.0]; keepRest = False
+  submitMustFail s.operator do
+    exerciseCmd rfq AwardSplit with parts = [part qa 1.0, part qb 1.0]; keepRest = False
