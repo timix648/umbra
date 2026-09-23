@@ -2066,7 +2066,12 @@ app.post("/api/swap/rfqs/:cid/invite", async (req, res) => {
 app.get("/api/swap/invitations", async (req, res) => {
   try {
     const role = readParty(req, req.query.role);
-    const invs = await queryActive(await partyIdFor(role), "UmbraSwap:SwapInvitation");
+    const me = await partyIdFor(role);
+    // Only invitations TO this party. The requester signs every invitation it sends,
+    // so it sees them too -- and a wallet is one party that both asks and prices, so
+    // its own outgoing invitations showed up on its dealer desk as blocks to price.
+    const invs = (await queryActive(me, "UmbraSwap:SwapInvitation"))
+      .filter(c => c.payload && c.payload.dealer === me);
     res.json({ ok: true, role, count: invs.length, invitations: invs });
   } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });

@@ -1085,6 +1085,19 @@
   .wpk-alt:hover:not(:disabled){border-color:var(--line2);background:var(--bg3)}
   .wpk-a-n{font-size:13px;font-weight:600;color:var(--mute)}
   .wpk-a-s{font-size:11.5px;line-height:1.5;color:var(--dim)}
+  .wpk-lab{margin:14px 2px 6px;font:600 10px/1 var(--sans);letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
+  .wpk-row{display:flex;align-items:center;justify-content:space-between;gap:10px;
+    padding:10px 14px;border:1px solid var(--line);border-radius:7px;margin-bottom:6px}
+  .wpk-go{font:600 11px/1 var(--sans);padding:7px 12px;border-radius:5px;cursor:pointer;
+    background:var(--accentbg);color:var(--text);border:1px solid var(--accentline)}
+  .wpk-go:hover:not(:disabled){filter:brightness(1.15)}
+  .wpk-go:focus-visible,.wpk-more:focus-visible{outline:none;box-shadow:var(--glow)}
+  .wpk-miss{font-size:11.5px;color:var(--dim);display:inline-flex;gap:10px;align-items:center}
+  .wpk-get{color:var(--accent2);text-decoration:none;font-weight:600}
+  .wpk-get:hover{text-decoration:underline}
+  .wpk-more{display:block;width:100%;margin-top:4px;padding:8px;background:none;border:0;
+    color:var(--dim);font:inherit;font-size:12px;cursor:pointer;text-align:left}
+  .wpk-more:hover:not(:disabled){color:var(--text)}
 
   .wpk-x{display:block;margin:16px auto 0;background:none;border:0;color:var(--dim);
     font:inherit;font-size:12px;cursor:pointer;padding:4px}
@@ -1846,7 +1859,9 @@ const WalletLink = (() => {
       // ?wallet=loop pins a specific one; otherwise prefer whatever is installed.
       // Pinning matters for testing: without it PartyLayer picks the first adapter and
       // fails on an extension nobody has, which says nothing about the wallet you meant.
-      const want = new URLSearchParams(location.search).get("wallet");
+      let want = new URLSearchParams(location.search).get("wallet");
+      // The wallet picked in Umbra's own list, so PartyLayer never has to guess.
+      if (!want) { try { want = localStorage.getItem("umbra.pl.wallet"); } catch (e) {} }
       const sess = await s.connect(want
         ? { walletId: want, timeoutMs: 120000 }
         : { preferInstalled: true, timeoutMs: 120000 });
@@ -2312,6 +2327,11 @@ const WalletLink = (() => {
   // Prefer whichever provider is actually present.
   const pick = () => {
     if (picked && picked.get()) return picked;
+    // The user's choice first. Without this, "another wallet" meant whichever adapter
+    // answered first -- PartyLayer then guessed Console, which was not even installed.
+    let want = null;
+    try { want = localStorage.getItem("umbra.wallet"); } catch (e) {}
+    if (want && adapters[want] && adapters[want].get()) { picked = adapters[want]; return picked; }
     for (const id of ORDER) { const a = adapters[id]; if (a && a.get()) { picked = a; return a; } }
     return null;
   };
@@ -2368,13 +2388,39 @@ const WalletLink = (() => {
     // adapter that answered first, so choosing after the page has already settled on
     // one has to clear that memo or the choice is silently ignored. Passing null goes
     // back to "whatever is present", which is what the discovery adapters want.
-    choose(id) {
+    // `sub` names the wallet inside PartyLayer (console, nightly, send).
+    choose(id, sub) {
       try {
         if (id) localStorage.setItem("umbra.wallet", id);
         else localStorage.removeItem("umbra.wallet");
+        if (sub) localStorage.setItem("umbra.pl.wallet", sub);
+        else localStorage.removeItem("umbra.pl.wallet");
       } catch (e) {}
       picked = null;
       initing = null;
+    },
+
+    // The other wallets Umbra can offer, and whether each is installed. Only ones that
+    // can sign a message qualify: every wallet signs raw bytes here (see ONE PATH).
+    // Loop is left out -- Umbra's own Loop route is the verified one.
+    async otherWallets() {
+      const c = partylayer();
+      if (!c) return [];
+      const ws = await c.listWallets().catch(() => []);
+      const out = [];
+      for (const w of ws) {
+        if (w.walletId === "loop") continue;
+        if (!(w.capabilities || []).includes("signMessage")) continue;
+        let det = null;
+        try {
+          const a = c.getAdapter(w.walletId);
+          det = (a && typeof a.detectInstalled === "function") ? await a.detectInstalled() : null;
+        } catch (e) {}
+        const hint = det && det.reason ? (String(det.reason).match(/https?:\/\/[^\s)]+/) || [])[0] : null;
+        const url = (hint || w.website || "").replace(/[.,]+$/, "") || null;
+        out.push({ id: w.walletId, name: w.name, installed: !!(det && det.installed), url });
+      }
+      return out;
     },
 
     // The party the WALLET hosts, as opposed to the one it signs for here. Only
@@ -3914,6 +3960,12 @@ function LoopMark({ size }) {
 }
 
 function WalletPicker({ busy, onPick, onClose }) {
+  const [others, setOthers] = useState(null);
+  useEffect(() => {
+    let live = true;
+    WalletLink.otherWallets().then(l => { if (live) setOthers(l || []); }).catch(() => { if (live) setOthers([]); });
+    return () => { live = false; };
+  }, []);
   return React.createElement("div", { className: "ovl", onClick: onClose },
     React.createElement("div", { className: "ovlcard wpk", onClick: e => e.stopPropagation() },
 
@@ -3945,12 +3997,24 @@ function WalletPicker({ busy, onPick, onClose }) {
             "Settled a live trade on this venue")),
         React.createElement("span", { className: "wpk-tag" }, "Verified")),
 
+      // Other wallets, named. "Use another Canton wallet" used to connect whichever one
+      // answered first, and PartyLayer guessed Console on a machine without it.
+      React.createElement("div", { className: "wpk-lab" }, "Other Canton wallets · not yet verified with Umbra"),
+      others === null
+        ? React.createElement("div", { className: "wpk-a-s", style: { padding: "6px 2px" } }, "Checking which wallets are installed…")
+        : others.map(w => React.createElement("div", { key: w.id, className: "wpk-row" },
+            React.createElement("span", { className: "wpk-a-n" }, w.name),
+            w.installed
+              ? React.createElement("button", {
+                  className: "wpk-go", disabled: busy, onClick: () => onPick("partylayer", w.id)
+                }, "Connect")
+              : React.createElement("span", { className: "wpk-miss" }, "Not installed",
+                  w.url ? React.createElement("a", {
+                    href: w.url, target: "_blank", rel: "noopener noreferrer", className: "wpk-get"
+                  }, "Get it") : null))),
       React.createElement("button", {
-        className: "wpk-alt", disabled: busy, onClick: () => onPick(null)
-      },
-        React.createElement("span", { className: "wpk-a-n" }, "Use another Canton wallet"),
-        React.createElement("span", { className: "wpk-a-s" },
-          "Not yet verified with Umbra. Works if the wallet shows its key and signs raw bytes.")),
+        className: "wpk-more", disabled: busy, onClick: () => onPick("canton")
+      }, "Another CIP-0103 wallet…"),
 
       React.createElement("button", { className: "wpk-x", onClick: onClose }, "Cancel")));
 }
@@ -4015,7 +4079,7 @@ function WalletConnect({ onEnter }) {
       onClose: () => setPicking(false),
       // Commit the choice BEFORE connecting: the loop adapter answers only when it has
       // been chosen, and both pick() and ensure() memoise whoever answered first.
-      onPick: (id) => { WalletLink.choose(id); setPicking(false); connect(); },
+      onPick: (id, sub) => { WalletLink.choose(id, sub); setPicking(false); connect(); },
     }) : null);
 }
 
@@ -4113,7 +4177,7 @@ function Login({ onPick, onWallet }) {
     picking ? React.createElement(WalletPicker, {
       busy: w.busy,
       onClose: () => setPicking(false),
-      onPick: (id) => { WalletLink.choose(id); setPicking(false); w.connect(); }
+      onPick: (id, sub) => { WalletLink.choose(id, sub); setPicking(false); w.connect(); }
     }) : null);
 }
 
@@ -4186,6 +4250,12 @@ const ledgerSym = s => { const d = dispSym(s); return d === "CC" ? "Amulet" : d;
 // Compare two asset names whatever their spelling. Holdings arrive under display
 // names, requests and quotes under ledger ids, so `===` between them misses.
 const sameSym = (a, b) => dispSym(a) === dispSym(b);
+// Distance from the market mid. Basis points read well near the market; far from it
+// ("+38923154.2 bps") they are unreadable, so switch to a percentage past 10%.
+const fmtVsMkt = b => b == null || !isFinite(b) ? "—"
+  : Math.abs(b) >= 1000
+    ? (b >= 0 ? "+" : "−") + Math.round(Math.abs(b) / 100).toLocaleString() + "%"
+    : (b >= 0 ? "+" : "") + b.toFixed(1) + " bps";
 // What a quote costs the dealer: the price plus the venue fee, both in the want asset.
 // The fee is max(bps of the price, the asset's floor) -- the same rule as feeFor() on
 // the server. A quote the dealer can pay but whose fee it cannot fails at settlement.
@@ -4478,7 +4548,7 @@ function RequesterDesk(P) {
                 React.createElement("div", { className: "rq-stat" },
                   React.createElement("div", { className: "rq-lab" }, "Best vs mkt"),
                   React.createElement("div", { className: "rq-sv m " + (bestBps == null ? "" : bestBps >= 0 ? "up" : "dn") },
-                    bestBps == null ? "\u2014" : (bestBps >= 0 ? "+" : "") + bestBps.toFixed(1) + " bps")))),
+                    fmtVsMkt(bestBps))))),
             React.createElement("div", { className: "rq-blind" },
               "Dealers are cryptographically blind to one another \u2014 no dealer can see a rival\u2019s quote."))) : null,
 
@@ -4520,7 +4590,7 @@ function RequesterDesk(P) {
                           React.createElement("div", { className: "m" }, offerAmt ? (Number(p.price) / offerAmt).toFixed(4) : "\u2014"),
                           React.createElement("div", { className: "rq-pu" }, dispSym(p.wantAsset.symbol), " / ", dispSym(p.offerAsset.symbol))),
                         React.createElement("td", { className: "m " + (b == null ? "" : b >= 0 ? "up" : "dn") },
-                          b == null ? "\u2014" : (b >= 0 ? "+" : "") + b.toFixed(1) + " bps"),
+                          fmtVsMkt(b)),
                         React.createElement("td", { className: "m " + (e.warn ? "warn" : "") }, e.txt),
                         React.createElement("td", { style: { textAlign: "right" } },
                           React.createElement("button", {
@@ -5638,7 +5708,9 @@ function PartyPortal({ role, wallet, onExit }) {
       const si = pr3.si || {}, sq = pr3.sq || {}, sh = pr3.sh || {};
       const nx = (si && si.invitations) || [];
       setInv(prev => { if (nx.length > prev.length) { setFresh(true); setTimeout(() => setFresh(false), 900); } return nx; });
-      setMyQuotes((sq && sq.quotes) || []);
+      // Quotes on MY requests. A wallet party also sees the quotes it sent as a dealer on
+      // other people's requests; those are not incoming offers.
+      setMyQuotes(((sq && sq.quotes) || []).filter(q => !wallet || !q.payload || q.payload.requester === role));
       setReadFailed(!!pr3.readFailed);
       setHoldings(mapRealHoldings(sh, role));
 
@@ -5717,7 +5789,12 @@ function PartyPortal({ role, wallet, onExit }) {
   // ONCE on entry and thereafter only when something happens that should change what it
   // sees -- which is also the honest design, not merely the polite one.
   useEffect(() => {
-    const viaWallet = !!(wallet && wallet.partyId === role);
+    // Poll unless reads really go through the wallet. Every wallet party now lives on our
+    // node (serverReads), so polling costs the wallet nothing -- and without it a
+    // wallet desk never refreshed: a sealed quote stayed "open", new requests and quotes
+    // only appeared after a click, and the price lagged a pair behind.
+    const pv = WalletLink.provider();
+    const viaWallet = !!(wallet && wallet.partyId === role) && !(pv && pv.serverReads);
     load();
     if (viaWallet) return;              // one read, then on demand
     const t = setInterval(load, 2500);
