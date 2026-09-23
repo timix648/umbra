@@ -2066,6 +2066,26 @@ app.post("/api/swap/rfqs/:cid/invite", async (req, res) => {
   } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
+// Invite EVERY dealer on the RFQ's allowlist in one action. InviteAll (umbra-v9 0.8.0,
+// nonconsuming, controller requester) creates all the invitations inside a single
+// exercise -- one root node -- so interactive submission accepts it. Opening a request
+// is then two signatures (the create, then this) for any number of dealers, instead of
+// one per dealer. (The create and InviteAll cannot share a transaction: that is two
+// roots, which external signing refuses.)
+app.post("/api/swap/rfqs/:cid/invite-all", async (req, res) => {
+  try {
+    const cmds = [{ ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapRfq`,
+      contractId: req.params.cid, choice: "InviteAll", choiceArgument: {} } }];
+    const asParty = req.body.requester || req.query.requester;
+    if (req.query.build === "1" || req.body.build || isWalletParty(asParty)) {
+      return res.json({ ok: true, build: true, party: asParty || await partyIdFor("requester"),
+        commands: cmds, note: "one signature invites every dealer on the request" });
+    }
+    const result = await act("requester", "swap-invite-all", cmds);
+    res.json({ ok: true, signed: SIGNED_MODE, result });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
 // a dealer sees only its own invitations (role-scoped — privacy)
 app.get("/api/swap/invitations", async (req, res) => {
   try {
