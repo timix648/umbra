@@ -5956,7 +5956,11 @@ function PartyPortal({ role, wallet, onExit }) {
           api("/api/swap/proposals?role=" + enc2(role)).catch(() => ({})),
           api("/api/swap/pending-real?role=" + enc2(role)).catch(() => ({}))
         ]);
-        const prop = ((pp && pp.proposals) || []).filter(ours).pop();
+        // Past its settlement deadline an old-flow proposal can never settle -- and it
+        // holds nothing -- so it is not a trade awaiting anyone. It stayed on screen as
+        // "Trade awaiting you" because that flow never archives itself.
+        const live = x => !(x.payload && x.payload.settleBefore) || Date.parse(x.payload.settleBefore) > Date.now();
+        const prop = ((pp && pp.proposals) || []).filter(ours).filter(live).pop();
         const pend = ((pn && pn.pending) || []).filter(ours).pop();
         // A deal needs this wallet only while it still owes a lock. Once its legs are
         // in, the venue finishes it, so nothing is shown and nothing is asked.
