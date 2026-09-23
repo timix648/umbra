@@ -2332,9 +2332,20 @@ app.post("/api/swap/quotes/:cid/accept", async (req, res) => {
     const feeWantSym = (qp.wantAsset && qp.wantAsset.symbol) || (req.body && req.body.wantSymbol);
     const venueFeeAmount = (feePrice != null && feeWantSym) ? feeFor(feeWantSym, feePrice) : null;
 
+    // A wallet requester awards as a SwapDeal (0.10.0): signed by both principals, so
+    // after each locks its leg the venue settles it -- nobody comes back to propose or
+    // accept. UMBRA_DEALS=0 falls back to the propose/accept flow.
+    const useDeal = isWalletParty(requester) && !/^(0|false|no)$/i.test(String(process.env.UMBRA_DEALS || "1"));
+    // A fee paid into a wallet the venue has no key for can only execute through that
+    // wallet's FeeReceiver. Refuse the award now rather than strand both sides' locks.
+    if (useDeal && venueFeeAmount && FEE_PARTY !== operator && !(await findFeeReceiver(FEE_PARTY))) {
+      return res.status(409).json({ error: "the venue's fee wallet has not enabled fee collection yet, " +
+        "so a trade could not settle. The venue owner runs `node fee-wallet.js enable-fees` once." });
+    }
+
     const cmds = [{
       ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapQuote`,
-        contractId: req.params.cid, choice: "AcceptSwapQuote",
+        contractId: req.params.cid, choice: useDeal ? "AwardRealSwap" : "AcceptSwapQuote",
         choiceArgument: {
           venueFeeParty: venueFeeAmount ? FEE_PARTY : null,
           venueFeeAmount: venueFeeAmount,
@@ -2344,7 +2355,7 @@ app.post("/api/swap/quotes/:cid/accept", async (req, res) => {
             ? String(req.body.fillAmount) : null,
         } } }];
     if (req.query.build === "1" || (req.body && req.body.build) || isWalletParty(requester)) {
-      return res.json({ ok: true, build: true, party: requester, commands: cmds,
+      return res.json({ ok: true, build: true, party: requester, commands: cmds, deal: useDeal,
         fee: venueFeeAmount ? { party: FEE_PARTY, amount: venueFeeAmount, bps: FEE_BPS,
                                 symbol: feeWantSym } : null,
         note: "sign via /api/ext/prepare + /api/ext/execute" });
@@ -2794,6 +2805,232 @@ async function executeRealSettlement(o) {
 // SwapProposal and leaves a RealSwapPending, so once the requester has proposed there
 // is no proposal left for settle-real to resume from. This is the rung between them.
 // AcceptRealSwap is `controller dealer`, so a wallet dealer gets the command to sign.
+
+// ---- SWAP DEALS (umbra-v9 0.10.0) ---------------------------------------------
+//
+// A wallet requester awards a quote as a SwapDeal (AwardRealSwap), signed by BOTH
+// principals. From there each side only locks its own leg -- the one step that needs
+// its own key -- and the venue finishes the trade without calling either back:
+//
+//   all legs locked, before settleBefore  -> SettleDeal   (every transfer, atomically)
+//   lock deadline passed, legs missing    -> CancelDeal   (every lock back to its owner)
+//
+// dealWorker() below does both on a timer. Neither gives the venue a new power: the
+// contract checks every leg against the terms both signed, and cancelling can only
+// return coins to the party that locked them.
+//
+// Fees paid to a party other than the venue (the owner's fee vault, whose key the
+// venue never holds) need that receiver's standing FeeReceiver, signed once.
+
+async function cancelContext(registryUrl, registrar, allocationCid) {
+  const url = regPath(registryUrl, registrar, "allocations/v1/" + allocationCid + "/choice-contexts/cancel");
+  const r = await regFetch(registryUrl, url, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ meta: {} }),
+  });
+  const text = await r.text();
+  if (!r.ok) throw new Error("registry " + r.status + ": " + text.slice(0, 300));
+  return JSON.parse(text);
+}
+
+async function findFeeReceiver(receiver) {
+  if (!receiver) return null;
+  try {
+    const operator = await partyIdFor("requester");
+    return (await queryActive(operator, "UmbraSwap:FeeReceiver"))
+      .find(c => c.payload && c.payload.receiver === receiver && c.payload.operator === operator) || null;
+  } catch (e) { return null; }
+}
+
+// The legs of a deal that already exist, and what is still missing. Only legs that
+// name the venue as executor count (findExistingAllocation checks that).
+async function dealLegs(deal) {
+  const p = deal.payload;
+  const feeDue = !!(p.feeParty && p.feeAmount && Number(p.feeAmount) > 0);
+  const offerLeg = await findExistingAllocation(p.requester, p.tradeId, "offer", p.offerAsset.symbol, p.offerAmount);
+  const wantLeg  = await findExistingAllocation(p.dealer, p.tradeId, "want", p.wantAsset.symbol, p.price);
+  const feeLeg   = feeDue ? await findExistingAllocation(p.dealer, p.tradeId, "fee", p.wantAsset.symbol, p.feeAmount) : null;
+  return { p, feeDue, offerLeg, wantLeg, feeLeg,
+           complete: !!(offerLeg && wantLeg && (!feeDue || feeLeg)) };
+}
+
+async function findDeal(cid) {
+  const operator = await partyIdFor("requester");
+  return (await queryActive(operator, "UmbraSwap:SwapDeal")).find(c => c.contractId === cid) || null;
+}
+
+// A party's own deals (as requester or dealer).
+app.get("/api/swap/deals", async (req, res) => {
+  try {
+    const me = await partyIdFor(readPartyOrOp(req, req.query.role));
+    const operator = await partyIdFor("requester");
+    const deals = (await queryActive(operator, "UmbraSwap:SwapDeal").catch(() => []))
+      .filter(c => c.payload && (c.payload.requester === me || c.payload.dealer === me));
+    res.json({ ok: true, count: deals.length, deals });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
+// What THIS party still has to do on a deal: lock a leg, or nothing.
+app.post("/api/swap/deals/:cid/next", async (req, res) => {
+  try {
+    const me = await partyIdFor(readPartyOrOp(req, (req.body || {}).party));
+    const deal = await findDeal(req.params.cid);
+    if (!deal) {
+      return res.json({ ok: true, status: "done",
+        note: "this deal is no longer open -- it settled, or it was cancelled and every lock returned" });
+    }
+    const L = await dealLegs(deal);
+    const p = L.p;
+    if (me !== p.requester && me !== p.dealer) {
+      return res.status(403).json({ error: "only the two principals of a deal can act on it" });
+    }
+    const past = Date.now() >= Date.parse(p.allocateBefore);
+    const lockOf = (sender, receiver, asset, amount, legId) => ({
+      ok: false, status: "awaiting-allocation",
+      awaiting: allocationInstruction(sender, receiver, asset.admin, asset.symbol, amount, p.tradeId, legId),
+      deadline: p.allocateBefore });
+    if (!past) {
+      if (me === p.requester && !L.offerLeg) return res.json(lockOf(p.requester, p.dealer, p.offerAsset, p.offerAmount, "offer"));
+      if (me === p.dealer && !L.wantLeg)     return res.json(lockOf(p.dealer, p.requester, p.wantAsset, p.price, "want"));
+      if (me === p.dealer && L.feeDue && !L.feeLeg) return res.json(lockOf(p.dealer, p.feeParty, p.wantAsset, p.feeAmount, "fee"));
+    }
+    res.json({ ok: true, status: L.complete ? "settling" : (past ? "expiring" : "waiting"),
+      deadline: p.allocateBefore,
+      missing: [!L.offerLeg && "requester", !L.wantLeg && "dealer",
+                L.feeDue && !L.feeLeg && "fee"].filter(Boolean) });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
+// Disclosures for a set of legs plus one Umbra contract, de-duplicated.
+async function dealDisclosures(ctxs, legs, templateSuffix, cid, operator) {
+  const seen = {}, out = [];
+  const add = (d) => { if (d && !seen[d.contractId]) { seen[d.contractId] = true; out.push(d); } };
+  for (const ctx of ctxs.filter(Boolean)) {
+    for (const d of (ctx.disclosedContracts || [])) {
+      add({ templateId: d.templateId, contractId: d.contractId,
+            createdEventBlob: d.createdEventBlob, synchronizerId: d.synchronizerId || "" });
+    }
+  }
+  for (const l of legs.filter(Boolean)) {
+    try { for (const d of await allocDisclosure([l.contractId], l.sender)) add(d); }
+    catch (e) { console.error("[deal] allocation disclosure failed (continuing):", e.message); }
+  }
+  try { add(await templateDisclosure(templateSuffix, cid, operator)); }
+  catch (e) { console.error("[deal] deal disclosure failed (continuing):", e.message); }
+  return out;
+}
+const xargs = (ctx) => ({ context: (ctx && ctx.choiceContextData) || { values: {} }, meta: { values: {} } });
+
+async function settleDeal(deal, L) {
+  const operator = await partyIdFor("requester");
+  const p = L.p;
+  const reg = (a) => registryForAdmin(a.admin);
+  const oc = await execTransferContext(reg(L.offerLeg), L.offerLeg.admin, L.offerLeg.contractId);
+  const wc = await execTransferContext(reg(L.wantLeg), L.wantLeg.admin, L.wantLeg.contractId);
+  const fc = L.feeLeg ? await execTransferContext(reg(L.feeLeg), L.feeLeg.admin, L.feeLeg.contractId) : null;
+  let feeReceiver = null;
+  if (L.feeLeg && p.feeParty !== operator) {
+    const fr = await findFeeReceiver(p.feeParty);
+    if (!fr) throw new Error("the fee receiver " + String(p.feeParty).slice(0, 24) +
+      "... has not enabled fee collection (no FeeReceiver) -- run the fee wallet's enable-fees");
+    feeReceiver = fr.contractId;
+  }
+  const disclosed = await dealDisclosures([oc, wc, fc], [L.offerLeg, L.wantLeg, L.feeLeg],
+    "UmbraSwap:SwapDeal", deal.contractId, operator);
+  await realSubmit({
+    commandId: "settledeal-" + Date.now(), actAs: [operator],
+    commands: [{ ExerciseCommand: {
+      templateId: `#${PKGN}:UmbraSwap:SwapDeal`, contractId: deal.contractId,
+      choice: "SettleDeal",
+      choiceArgument: {
+        offerAllocCid: L.offerLeg.contractId, wantAllocCid: L.wantLeg.contractId,
+        offerArgs: xargs(oc), wantArgs: xargs(wc),
+        feeAllocCid: L.feeLeg ? L.feeLeg.contractId : null,
+        feeArgs: fc ? xargs(fc) : null,
+        feeReceiver,
+      } } }],
+    disclosedContracts: disclosed,
+  }, "settle-deal", { duty: true });
+}
+
+async function cancelDeal(deal, L) {
+  const operator = await partyIdFor("requester");
+  const p = L.p;
+  const legs = [];
+  for (const l of [L.offerLeg, L.wantLeg].filter(Boolean)) {
+    legs.push({ l, ctx: await cancelContext(registryForAdmin(l.admin), l.admin, l.contractId) });
+  }
+  const feeCtx = L.feeLeg ? await cancelContext(registryForAdmin(L.feeLeg.admin), L.feeLeg.admin, L.feeLeg.contractId) : null;
+  let feeReceiver = null;
+  if (L.feeLeg && p.feeParty !== operator) {
+    const fr = await findFeeReceiver(p.feeParty);
+    feeReceiver = fr ? fr.contractId : null;
+  }
+  const disclosed = await dealDisclosures([...legs.map(x => x.ctx), feeCtx],
+    [L.offerLeg, L.wantLeg, L.feeLeg], "UmbraSwap:SwapDeal", deal.contractId, operator);
+  await realSubmit({
+    commandId: "canceldeal-" + Date.now(), actAs: [operator],
+    commands: [{ ExerciseCommand: {
+      templateId: `#${PKGN}:UmbraSwap:SwapDeal`, contractId: deal.contractId,
+      choice: "CancelDeal",
+      choiceArgument: {
+        legs: legs.map(x => ({ _1: x.l.contractId, _2: xargs(x.ctx) })),
+        // a fee leg only goes back through a FeeReceiver (or directly, if the venue
+        // itself was the receiver); without one it is left for the dealer to withdraw
+        feeLeg: (L.feeLeg && (feeReceiver || p.feeParty === operator))
+          ? { _1: L.feeLeg.contractId, _2: xargs(feeCtx) } : null,
+        feeReceiver,
+      } } }],
+    disclosedContracts: disclosed,
+  }, "cancel-deal", { duty: true });
+}
+
+// The venue's half of every deal, on a timer. One attempt per deal at a time; a
+// failure is logged and retried on the next tick.
+const dealBusy = new Set();
+const dealFails = {};
+async function dealWorker() {
+  let deals = [];
+  try {
+    const operator = await partyIdFor("requester");
+    deals = await queryActive(operator, "UmbraSwap:SwapDeal");
+  } catch (e) { return; }   // a node without 0.10.0 has no SwapDeal: nothing to do
+  for (const deal of deals) {
+    if (dealBusy.has(deal.contractId)) continue;
+    dealBusy.add(deal.contractId);
+    try {
+      const L = await dealLegs(deal);
+      const now = Date.now();
+      if (L.complete && now < Date.parse(L.p.settleBefore) - 30000) {
+        await settleDeal(deal, L);
+        console.log("[deal] settled", L.p.tradeId);
+      } else if (now >= Date.parse(L.p.allocateBefore)) {
+        await cancelDeal(deal, L);
+        console.log("[deal] cancelled past the lock deadline, locks returned:", L.p.tradeId);
+      }
+      delete dealFails[deal.contractId];
+    } catch (e) {
+      const n = (dealFails[deal.contractId] = (dealFails[deal.contractId] || 0) + 1);
+      if (n <= 3 || n % 20 === 0) console.error("[deal] " + deal.contractId.slice(0, 16) + " attempt " + n + ": " + e.message);
+    } finally { dealBusy.delete(deal.contractId); }
+  }
+}
+if (SIGNED_MODE) setInterval(() => { dealWorker().catch(() => {}); }, 15000);
+
+// A fee receiver's one-time consent to collect fees into its own wallet.
+app.post("/api/fee/receiver", async (req, res) => {
+  try {
+    const party = await partyIdFor(readPartyOrOp(req, (req.body || {}).party));
+    const operator = await partyIdFor("requester");
+    const existing = await findFeeReceiver(party);
+    if (existing) return res.json({ ok: true, existing: true, contractId: existing.contractId });
+    res.json({ ok: true, build: true, party, commands: [{ CreateCommand: {
+      templateId: `#${PKGN}:UmbraSwap:FeeReceiver`,
+      createArguments: { receiver: party, operator } } }],
+      note: "one signature; lets fees land in this wallet. It can only ever receive." });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
 app.post("/api/swap/pending/:cid/accept-real", async (req, res) => {
   try {
     const operator = await partyIdFor("requester");   // observer on RealSwapPending

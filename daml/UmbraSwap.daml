@@ -517,6 +517,277 @@ template SwapQuote
           feeParty = venueFeeParty
           feeAmount = venueFeeAmount
 
+    -- Award the quote as a SwapDeal (0.10.0): the same checks and bookkeeping as
+    -- AcceptSwapQuote, but the result is signed by BOTH principals. This choice runs on
+    -- the dealer's own quote (signatory dealer) and is exercised by the requester, so
+    -- both authorities are present here -- exactly once, at the moment they agree.
+    --
+    -- That is what lets the rest of the trade finish without either of them coming
+    -- back: each locks its own leg, and the venue settles the deal (or, past its
+    -- deadline, cancels it and every lock goes home). With a SwapProposal the
+    -- requester had to return to propose, and the dealer to accept.
+    choice AwardRealSwap : ContractId SwapDeal
+      with
+        venueFeeParty  : Optional Party
+        venueFeeAmount : Optional Decimal
+        fillAmount     : Optional Decimal
+      controller requester
+      do
+        now <- getTime
+        rfq <- fetch rfqCid
+        assertMsg "this quote is no longer firm" (now < validUntil)
+        let fill = fromOptional offerAmount fillAmount
+        assertMsg "a fill must be positive" (fill > 0.0)
+        assertMsg "a fill cannot exceed the request" (fill <= offerAmount)
+        case maxFillAmount of
+          Some m -> assertMsg
+            "this dealer will not take that much of the request at this price"
+            (fill <= m)
+          None -> pure ()
+        let fillPrice = if fill == offerAmount then price
+                        else (price * fill) / offerAmount
+            remaining = offerAmount - fill
+        archive rfqCid
+        _ <- create RfqAward with
+          requester; operator; dealer
+          offerAsset; offerAmount
+          filledAmount = fill
+          wantAsset
+          price = fillPrice
+          awardedAt = now
+        if remaining > 0.0
+          then do
+            newRfq <- create SwapRfq with
+              requester; operator
+              offerAsset
+              offerAmount = remaining
+              wantAsset
+              invited = rfq.invited
+              expiresAt = rfq.expiresAt
+            _ <- forA rfq.invited (\d ->
+              create SwapInvitation with
+                requester; operator
+                dealer = d
+                offerAsset
+                offerAmount = remaining
+                wantAsset
+                expiresAt = rfq.expiresAt
+                rfqCid = newRfq)
+            pure ()
+          else pure ()
+        create SwapDeal with
+          requester; operator; dealer
+          offerAsset
+          offerAmount = fill
+          wantAsset
+          price = fillPrice
+          tradeId = offerAsset.symbol <> "/" <> wantAsset.symbol <> "@" <> show now
+          allocateBefore = addRelTime now (minutes 15)
+          settleBefore = addRelTime now (minutes 30)
+          feeParty = venueFeeParty
+          feeAmount = venueFeeAmount
+
+
+-- ----------------------------------------------------------------------------
+-- SwapDeal (0.10.0): an awarded trade, signed by both principals
+-- ----------------------------------------------------------------------------
+-- Everything the old propose/accept round-trip existed to gather is already here:
+-- the requester's and the dealer's authority, the terms, the deadlines. So once each
+-- side has locked its own leg (a registry allocation naming the VENUE as executor --
+-- the only thing that still needs their own keys), the venue does the rest:
+--
+--   SettleDeal  -- all legs match the terms  -> every transfer happens, atomically.
+--   CancelDeal  -- past the lock deadline     -> every lock returns to its owner.
+--
+-- Neither gives the venue anything new. SettleDeal executes only the transfers both
+-- principals agreed, checked leg by leg, exactly like ExecuteRealSwap. CancelDeal can
+-- only send coins back to the party that locked them. Custody never changes hands.
+template SwapDeal
+  with
+    requester      : Party
+    operator       : Party
+    dealer         : Party
+    offerAsset     : AssetId
+    offerAmount    : Decimal
+    wantAsset      : AssetId
+    price          : Decimal      -- TOTAL want amount for the whole offer
+    tradeId        : Text         -- the settlementRef id every leg carries
+    allocateBefore : Time
+    settleBefore   : Time
+    feeParty       : Optional Party
+    feeAmount      : Optional Decimal
+  where
+    signatory requester, dealer
+    observer operator
+
+    choice SettleDeal : ContractId SettlementReceipt
+      with
+        offerAllocCid : ContractId Allocation
+        wantAllocCid  : ContractId Allocation
+        offerArgs     : ExtraArgs
+        wantArgs      : ExtraArgs
+        -- the fee leg, its registry context, and -- when the fee is paid to anyone
+        -- other than the venue itself -- that receiver's standing FeeReceiver
+        feeAllocCid   : Optional (ContractId Allocation)
+        feeArgs       : Optional ExtraArgs
+        feeReceiver   : Optional (ContractId FeeReceiver)
+      controller operator
+      do
+        now <- getTime
+        assertMsg "this deal is past its settlement deadline" (now < settleBefore)
+        let feeAgreed = case feeAmount of
+              Some a -> a > 0.0
+              None -> False
+            feeReady = case (feeAllocCid, feeArgs) of
+              (Some _, Some _) -> True
+              _ -> False
+        assertMsg "a fee was agreed but the fee leg is incomplete: both the allocation and its choice-context are required"
+          (not feeAgreed || feeReady)
+        assertMsg "a fee leg was supplied but this deal agreed no fee"
+          (feeAgreed || not feeReady)
+
+        offerAlloc <- fetch offerAllocCid
+        wantAlloc  <- fetch wantAllocCid
+        let ov = (view offerAlloc).allocation
+            wv = (view wantAlloc).allocation
+            ol = ov.transferLeg
+            wl = wv.transferLeg
+        assertMsg "the offer allocation is not this deal's offer leg"
+          (ol.sender == requester && ol.receiver == dealer
+            && ol.amount == offerAmount
+            && ol.instrumentId.id == offerAsset.symbol
+            && ol.instrumentId.admin == offerAsset.admin
+            && ov.settlement.executor == operator)
+        assertMsg "the want allocation is not this deal's want leg"
+          (wl.sender == dealer && wl.receiver == requester
+            && wl.amount == price
+            && wl.instrumentId.id == wantAsset.symbol
+            && wl.instrumentId.admin == wantAsset.admin
+            && wv.settlement.executor == operator)
+
+        _ <- exercise offerAllocCid Allocation_ExecuteTransfer with extraArgs = offerArgs
+        _ <- exercise wantAllocCid Allocation_ExecuteTransfer with extraArgs = wantArgs
+        case (feeAllocCid, feeArgs) of
+          (Some fc, Some fa) -> do
+            feeAlloc <- fetch fc
+            let fv = (view feeAlloc).allocation
+                fl = fv.transferLeg
+            assertMsg "the fee allocation is not this deal's fee leg"
+              (Some fl.receiver == feeParty
+                && fl.sender == dealer
+                && Some fl.amount == feeAmount
+                && fl.instrumentId.id == wantAsset.symbol
+                && fl.instrumentId.admin == wantAsset.admin
+                && fv.settlement.executor == operator)
+            -- Executing a leg needs the RECEIVER's authority too. The venue's own is
+            -- present here; any other fee receiver lends it through its FeeReceiver.
+            case feeReceiver of
+              None -> do
+                assertMsg "a fee paid to anyone but the venue needs that receiver's FeeReceiver"
+                  (feeParty == Some operator)
+                _ <- exercise fc Allocation_ExecuteTransfer with extraArgs = fa
+                pure ()
+              Some r -> do
+                _ <- exercise r CollectFee with dealer; allocCid = fc; extraArgs = fa
+                pure ()
+          _ -> pure ()
+
+        create SettlementReceipt with
+          requester; operator; dealer
+          offerAsset; offerAmount; wantAsset; price
+          feeParty; feeAmount
+          settledVia = "deal"
+          executedAt = now
+
+    -- Past the lock deadline, send every lock home. Only legs of THIS deal, only
+    -- back to their senders (Allocation_Cancel returns the holdings to the sender).
+    choice CancelDeal : ()
+      with
+        legs        : [(ContractId Allocation, ExtraArgs)]
+        feeLeg      : Optional (ContractId Allocation, ExtraArgs)
+        feeReceiver : Optional (ContractId FeeReceiver)
+      controller operator
+      do
+        now <- getTime
+        assertMsg "a deal can only be cancelled once its lock deadline has passed"
+          (now >= allocateBefore)
+        _ <- forA legs (\(c, a) -> do
+          al <- fetch c
+          let l = (view al).allocation.transferLeg
+          assertMsg "that allocation is not a leg of this deal"
+            ((l.sender == requester && l.receiver == dealer)
+              || (l.sender == dealer && l.receiver == requester))
+          _ <- exercise c Allocation_Cancel with extraArgs = a
+          pure ())
+        case feeLeg of
+          Some (fc, fa) -> do
+            fal <- fetch fc
+            let fl = (view fal).allocation.transferLeg
+            assertMsg "that allocation is not this deal's fee leg"
+              (fl.sender == dealer && Some fl.receiver == feeParty)
+            case feeReceiver of
+              None -> do
+                assertMsg "a fee paid to anyone but the venue needs that receiver's FeeReceiver"
+                  (feeParty == Some operator)
+                _ <- exercise fc Allocation_Cancel with extraArgs = fa
+                pure ()
+              Some r -> do
+                _ <- exercise r ReturnFee with dealer; allocCid = fc; extraArgs = fa
+                pure ()
+          None -> pure ()
+
+
+-- ----------------------------------------------------------------------------
+-- FeeReceiver (0.10.0): lets a fee land in a wallet whose key the venue never holds
+-- ----------------------------------------------------------------------------
+-- Executing (or cancelling) a token-standard allocation needs executor, sender AND
+-- receiver authority. Inside a settlement the venue (executor) and the dealer (the
+-- fee's sender) are present, but a fee receiver with its own key is not -- so a fee
+-- paid straight to the owner's own wallet could never execute.
+--
+-- The receiver signs this ONCE. It lends its authority for exactly two things, and
+-- only together with the venue AND the paying dealer: to RECEIVE a fee leg addressed
+-- to it, or to send an unpaid one back to the dealer. It cannot spend, move or lock
+-- anything the receiver owns. The receiver can retire it at any time.
+template FeeReceiver
+  with
+    receiver : Party
+    operator : Party
+  where
+    signatory receiver
+    observer operator
+
+    nonconsuming choice CollectFee : Allocation_ExecuteTransferResult
+      with
+        dealer    : Party
+        allocCid  : ContractId Allocation
+        extraArgs : ExtraArgs
+      controller operator, dealer
+      do
+        a <- fetch allocCid
+        let v = (view a).allocation
+        assertMsg "this allocation does not pay this receiver" (v.transferLeg.receiver == receiver)
+        assertMsg "the paying dealer must be the allocation's sender" (v.transferLeg.sender == dealer)
+        assertMsg "the venue must be the allocation's executor" (v.settlement.executor == operator)
+        exercise allocCid Allocation_ExecuteTransfer with extraArgs
+
+    nonconsuming choice ReturnFee : Allocation_CancelResult
+      with
+        dealer    : Party
+        allocCid  : ContractId Allocation
+        extraArgs : ExtraArgs
+      controller operator, dealer
+      do
+        a <- fetch allocCid
+        let v = (view a).allocation
+        assertMsg "this allocation does not pay this receiver" (v.transferLeg.receiver == receiver)
+        assertMsg "the paying dealer must be the allocation's sender" (v.transferLeg.sender == dealer)
+        exercise allocCid Allocation_Cancel with extraArgs
+
+    choice RetireFeeReceiver : ()
+      controller receiver
+      do pure ()
+
 
 -- ----------------------------------------------------------------------------
 -- Two-leg atomic swap choreography

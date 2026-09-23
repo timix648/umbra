@@ -1,0 +1,200 @@
+module UmbraDealTest where
+
+import UmbraSwap
+import Splice.Api.Token.AllocationV1
+import Splice.Api.Token.MetadataV1
+import Daml.Script
+import DA.Time (addRelTime, minutes)
+import DA.Assert ((===))
+
+-- ============================================================================
+-- Proofs for SwapDeal + FeeReceiver (0.10.0).
+--
+-- The award is signed by BOTH principals, so after each locks its own leg the
+-- venue can finish the trade -- and nothing else:
+--
+--   the award creates a deal both principals sign
+--   the venue settles it when every leg matches           (fee to the venue)
+--   ...or when the fee goes to a wallet the venue has no key for, via FeeReceiver
+--   that fee cannot be collected without the receiver's FeeReceiver
+--   a leg that is not the agreed one is refused
+--   only the venue settles; principals and outsiders cannot
+--   locks are sent home only after the lock deadline, and then they are
+--   a FeeReceiver cannot be driven by the venue alone, or by the dealer alone
+-- ============================================================================
+
+data T = T
+  with
+    operator  : Party
+    requester : Party
+    dealer    : Party
+    vault     : Party     -- the owner's fee wallet: its key is never the venue's
+    outsider  : Party
+    cbtc      : AssetId
+    cc        : AssetId
+
+setupT : Script T
+setupT = do
+  operator  <- allocateParty "operator"
+  requester <- allocateParty "requester"
+  dealer    <- allocateParty "dealer"
+  vault     <- allocateParty "vault"
+  outsider  <- allocateParty "outsider"
+  btcIssuer <- allocateParty "BitSafe"
+  ccAdmin   <- allocateParty "CantonCoin"
+  pure T with
+    operator; requester; dealer; vault; outsider
+    cbtc = AssetId with admin = btcIssuer, symbol = "CBTC"
+    cc   = AssetId with admin = ccAdmin,   symbol = "Amulet"
+
+mint : Party -> AssetId -> Decimal -> Script (ContractId AssetHolding)
+mint owner asset amount =
+  submitMulti [owner, asset.admin] [] do
+    createCmd AssetHolding with owner; asset; amount
+
+-- A leg locked by its own sender, naming the VENUE as executor.
+lock : T -> Party -> Party -> AssetId -> Decimal -> Text -> Script (ContractId Allocation)
+lock t sender receiver asset amount legId = do
+  h <- mint sender asset amount
+  c <- submit sender do
+    createCmd AssetAllocation with
+      sender; receiver; executor = t.operator
+      asset; amount; holdingCid = h; legId
+  pure (toInterfaceContractId @Allocation c)
+
+ea : ExtraArgs
+ea = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+
+-- request -> invitation -> quote -> award as a deal. 2 CBTC for 1000 CC.
+awardDeal : T -> Optional Party -> Optional Decimal -> Script (ContractId SwapDeal)
+awardDeal t feeParty feeAmount = do
+  now <- getTime
+  rfq <- submit t.requester do
+    createCmd SwapRfq with
+      requester = t.requester; operator = t.operator
+      offerAsset = t.cbtc; offerAmount = 2.0; wantAsset = t.cc
+      invited = [t.dealer]; expiresAt = addRelTime now (minutes 30)
+  inv <- submit t.requester do exerciseCmd rfq InviteDealer with dealer = t.dealer
+  q <- submit t.dealer do
+    exerciseCmd inv SubmitSwapQuote with
+      price = 1000.0; validUntil = addRelTime now (minutes 20); maxFillAmount = None
+  submit t.requester do
+    exerciseCmd q AwardRealSwap with
+      venueFeeParty = feeParty; venueFeeAmount = feeAmount; fillAmount = None
+
+holdings : Party -> Script [(ContractId AssetHolding, AssetHolding)]
+holdings p = do
+  hs <- query @AssetHolding p
+  pure (filter (\(_, h) -> h.owner == p) hs)
+
+theAwardIsSignedByBoth : Script ()
+theAwardIsSignedByBoth = do
+  t <- setupT
+  d <- awardDeal t None None
+  Some deal <- queryContractId t.dealer d
+  deal.requester === t.requester
+  deal.dealer === t.dealer
+  -- both principals see it: they are its signatories
+  Some _ <- queryContractId t.requester d
+  pure ()
+
+venueSettlesWhenLegsMatch : Script ()
+venueSettlesWhenLegsMatch = do
+  t <- setupT
+  d <- awardDeal t (Some t.operator) (Some 5.0)
+  o <- lock t t.requester t.dealer t.cbtc 2.0 "offer"
+  w <- lock t t.dealer t.requester t.cc 1000.0 "want"
+  f <- lock t t.dealer t.operator t.cc 5.0 "fee"
+  -- readAs the principals: the stand-in allocation reads the backing holding, which
+  -- only its owner sees (on the network the registry discloses it in the command)
+  _ <- submitMulti [t.operator] [t.requester, t.dealer] do
+    exerciseCmd d SettleDeal with
+      offerAllocCid = o; wantAllocCid = w; offerArgs = ea; wantArgs = ea
+      feeAllocCid = Some f; feeArgs = Some ea; feeReceiver = None
+  rq <- holdings t.requester
+  map (\(_, h) -> (h.asset.symbol, h.amount)) rq === [("Amulet", 1000.0)]
+  dl <- holdings t.dealer
+  map (\(_, h) -> (h.asset.symbol, h.amount)) dl === [("CBTC", 2.0)]
+  gone <- queryContractId t.requester d
+  gone === None
+
+feeLandsInAWalletTheVenueHasNoKeyFor : Script ()
+feeLandsInAWalletTheVenueHasNoKeyFor = do
+  t <- setupT
+  fr <- submit t.vault do createCmd FeeReceiver with receiver = t.vault; operator = t.operator
+  d <- awardDeal t (Some t.vault) (Some 5.0)
+  o <- lock t t.requester t.dealer t.cbtc 2.0 "offer"
+  w <- lock t t.dealer t.requester t.cc 1000.0 "want"
+  f <- lock t t.dealer t.vault t.cc 5.0 "fee"
+  -- readAs the principals: the stand-in allocation reads the backing holding, which
+  -- only its owner sees (on the network the registry discloses it in the command)
+  _ <- submitMulti [t.operator] [t.requester, t.dealer] do
+    exerciseCmd d SettleDeal with
+      offerAllocCid = o; wantAllocCid = w; offerArgs = ea; wantArgs = ea
+      feeAllocCid = Some f; feeArgs = Some ea; feeReceiver = Some fr
+  v <- holdings t.vault
+  map (\(_, h) -> (h.asset.symbol, h.amount)) v === [("Amulet", 5.0)]
+
+aWalletFeeNeedsItsFeeReceiver : Script ()
+aWalletFeeNeedsItsFeeReceiver = do
+  t <- setupT
+  d <- awardDeal t (Some t.vault) (Some 5.0)
+  o <- lock t t.requester t.dealer t.cbtc 2.0 "offer"
+  w <- lock t t.dealer t.requester t.cc 1000.0 "want"
+  f <- lock t t.dealer t.vault t.cc 5.0 "fee"
+  -- same read access as a real settle, so the refusal is the guard, not visibility
+  submitMultiMustFail [t.operator] [t.requester, t.dealer] do
+    exerciseCmd d SettleDeal with
+      offerAllocCid = o; wantAllocCid = w; offerArgs = ea; wantArgs = ea
+      feeAllocCid = Some f; feeArgs = Some ea; feeReceiver = None
+
+aLegThatIsNotTheDealIsRefused : Script ()
+aLegThatIsNotTheDealIsRefused = do
+  t <- setupT
+  d <- awardDeal t None None
+  o <- lock t t.requester t.dealer t.cbtc 2.0 "offer"
+  short <- lock t t.dealer t.requester t.cc 999.0 "want"     -- one short
+  -- same read access as a real settle, so the refusal is the guard, not visibility
+  submitMultiMustFail [t.operator] [t.requester, t.dealer] do
+    exerciseCmd d SettleDeal with
+      offerAllocCid = o; wantAllocCid = short; offerArgs = ea; wantArgs = ea
+      feeAllocCid = None; feeArgs = None; feeReceiver = None
+
+onlyTheVenueSettles : Script ()
+onlyTheVenueSettles = do
+  t <- setupT
+  d <- awardDeal t None None
+  o <- lock t t.requester t.dealer t.cbtc 2.0 "offer"
+  w <- lock t t.dealer t.requester t.cc 1000.0 "want"
+  let settle = exerciseCmd d SettleDeal with
+        offerAllocCid = o; wantAllocCid = w; offerArgs = ea; wantArgs = ea
+        feeAllocCid = None; feeArgs = None; feeReceiver = None
+  submitMustFail t.requester settle
+  submitMustFail t.dealer settle
+  submitMustFail t.outsider settle
+
+locksGoHomeOnlyAfterTheDeadline : Script ()
+locksGoHomeOnlyAfterTheDeadline = do
+  t <- setupT
+  d <- awardDeal t None None
+  o <- lock t t.requester t.dealer t.cbtc 2.0 "offer"      -- the dealer never locks
+  let cancel = exerciseCmd d CancelDeal with
+        legs = [(o, ea)]; feeLeg = None; feeReceiver = None
+  submitMustFail t.operator cancel                         -- too early
+  passTime (minutes 16)
+  _ <- submit t.operator cancel
+  -- the allocation is gone and the requester's coin is its own again
+  left <- query @AssetAllocation t.requester
+  length left === 0
+  rq <- holdings t.requester
+  map (\(_, h) -> (h.asset.symbol, h.amount)) rq === [("CBTC", 2.0)]
+
+aFeeReceiverNeedsTheVenueAndTheDealer : Script ()
+aFeeReceiverNeedsTheVenueAndTheDealer = do
+  t <- setupT
+  fr <- submit t.vault do createCmd FeeReceiver with receiver = t.vault; operator = t.operator
+  f <- lock t t.dealer t.vault t.cc 5.0 "fee"
+  let collect = exerciseCmd fr CollectFee with dealer = t.dealer; allocCid = f; extraArgs = ea
+  submitMustFail t.operator collect
+  submitMustFail t.dealer collect
+  submitMustFail t.outsider collect

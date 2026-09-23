@@ -388,15 +388,6 @@
   .prt-ico.on{color:var(--ok);border-color:var(--okline);background:var(--okbg)}
   .prt-ico.on:hover{filter:brightness(1.1)}
   .prt-ico[disabled]{opacity:.5;cursor:progress}
-  /* coins locked in trade legs, with a way out */
-  .lk-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
-  .lk-row:last-child{border-bottom:0}
-  .lk-l{display:flex;flex-direction:column;gap:2px;font-size:12px;color:var(--mute);min-width:0}
-  .lk-l b{color:var(--text);font-size:13px}
-  .lk-bad{color:var(--amber)}
-  .lk-b{font:600 11px/1 var(--sans);padding:7px 11px;border-radius:5px;cursor:pointer;background:transparent;color:var(--mute);border:1px solid var(--line2)}
-  .lk-b.go{color:var(--text);border-color:var(--amberline);background:var(--amberbg)}
-  .lk-b:disabled{cursor:progress;opacity:.6}
   /* settings drawer: slides in from the right */
   .drw{position:fixed;inset:0;z-index:900;pointer-events:none}
   .drw.on{pointer-events:auto}
@@ -4294,6 +4285,11 @@ const ledgerSym = s => { const d = dispSym(s); return d === "CC" ? "Amulet" : d;
 // Compare two asset names whatever their spelling. Holdings arrive under display
 // names, requests and quotes under ledger ids, so `===` between them misses.
 const sameSym = (a, b) => dispSym(a) === dispSym(b);
+// The button for a deal leg this wallet still owes: says exactly what gets locked.
+const dealLockLabel = (t) => {
+  const al = t && t.kind === "deal" && t.next && t.next.awaiting && t.next.awaiting.allocate;
+  return al ? "Lock my " + fmtAmtStr(al.amount) + " " + dispSym(al.instrument) : null;
+};
 // Distance from the market mid. Basis points read well near the market; far from it
 // ("+38923154.2 bps") they are unreadable, so switch to a percentage past 10%.
 const fmtVsMkt = b => b == null || !isFinite(b) ? "—"
@@ -4698,6 +4694,10 @@ function RequesterDesk(P) {
                   ? React.createElement(React.Fragment, null,
                       React.createElement("b", null, "Your side is done."),
                       " Your leg is allocated and the dealer has to accept. Nothing has moved yet, and nothing is lost.")
+                  : P.openTrade.kind === "deal"
+                  ? React.createElement(React.Fragment, null,
+                      React.createElement("b", null, "One step left for you:"),
+                      " lock your ", off, ". The venue settles the moment the dealer locks theirs — nothing more to sign.")
                   : React.createElement(React.Fragment, null,
                       React.createElement("b", null, "Signed in your wallet."),
                       " Settlement alternates between you and the dealer — pick it up whenever it is your turn.")),
@@ -4708,7 +4708,7 @@ function RequesterDesk(P) {
                   "for ", pl.price != null ? fmtNum(pl.price) : "—", " " + wnt)),
               theirs ? null : React.createElement("button", {
                 className: "sgn-btn", disabled: !!P.settling, onClick: P.onSettle
-              }, P.settling ? (P.settleStep || "Settling…") : "Continue settlement")));
+              }, P.settling ? (P.settleStep || "Settling…") : (dealLockLabel(P.openTrade) || "Continue settlement"))));
         })() : null,
 
         React.createElement("section", { className: "mod" },
@@ -5325,8 +5325,13 @@ function DealerDesk(P) {
               React.createElement("h2", null, "You won this block")),
             React.createElement("div", { className: "mod-b" },
               React.createElement("p", { className: "whg-sub" },
-                React.createElement("b", null, "Your move."), " The buyer cannot settle for you — ",
-                "your leg is allocated and accepted with ", React.createElement("b", null, "your key"), "."),
+                P.openTrade.kind === "deal"
+                  ? React.createElement(React.Fragment, null,
+                      React.createElement("b", null, "One step left for you:"),
+                      " lock the ", wnt, " you pay, and the venue fee. The venue settles straight after — nothing more to sign.")
+                  : React.createElement(React.Fragment, null,
+                      React.createElement("b", null, "Your move."), " The buyer cannot settle for you — ",
+                      "your leg is allocated and accepted with ", React.createElement("b", null, "your key"), ".")),
               React.createElement("div", { className: "ask-empty" },
                 React.createElement("div", { className: "ask-mark" },
                   pl.offerAmount != null ? fmtNum(pl.offerAmount) : "—", " " + off),
@@ -5334,7 +5339,7 @@ function DealerDesk(P) {
                   "you pay ", pl.price != null ? fmtNum(pl.price) : "—", " " + wnt)),
               React.createElement("button", {
                 className: "sgn-btn", disabled: !!P.settling, onClick: P.onSettle
-              }, P.settling ? (P.settleStep || "Settling…") : "Complete settlement")));
+              }, P.settling ? (P.settleStep || "Settling…") : (dealLockLabel(P.openTrade) || "Complete settlement"))));
         })() : null,
         P.listed === null ? null : React.createElement("section", { className: "mod" },
           React.createElement("div", { className: "mod-h" },
@@ -5458,35 +5463,14 @@ function Funding({ party, say, onChanged }) {
     return () => clearInterval(t);
   }, [loadWallet]);
 
-  const [allocs, setAllocs] = useState([]);
   const load = useCallback(async () => {
-    const [p, h, al] = await Promise.all([
+    const [p, h] = await Promise.all([
       api("/api/real/pending?role=" + encodeURIComponent(party)).catch(() => ({})),
-      api("/api/real/holdings?role=" + encodeURIComponent(party)).catch(() => ({})),
-      api("/api/real/allocations?role=" + encodeURIComponent(party)).catch(() => ({}))
+      api("/api/real/holdings?role=" + encodeURIComponent(party)).catch(() => ({}))
     ]);
     setPending((p && (p.offers || p.pending)) || []);
     setRaw((h && h.raw) || []);
-    setAllocs(((al && al.allocations) || []).filter(a => a.sender === party));
   }, [party]);
-
-  // Coins locked into a trade leg. A trade that died part-way (or a leg that can never
-  // settle) left them locked with no way out on this page; the owner releases them here,
-  // with its own signature -- Allocation_Withdraw is the sender's choice, not the venue's.
-  const release = async (a) => {
-    if (busy) return;
-    const dead = a.executor === party || (a.settleBefore && Date.parse(a.settleBefore) < Date.now());
-    if (!dead && !window.confirm("This leg belongs to a trade that may still settle. Releasing it cancels your side of that trade. Release anyway?")) return;
-    setBusy("rel:" + a.contractId);
-    try {
-      const b = await post("/api/real/withdraw/" + a.contractId + "?build=1", { role: party, build: true });
-      say("Approve releasing " + fmtAmtStr(a.amount) + " " + dispSym(a.instrument) + " in your wallet…");
-      await WalletLink.submit({ commands: b.commands, disclosedContracts: b.disclosedContracts });
-      say("Released " + fmtAmtStr(a.amount) + " " + dispSym(a.instrument) + ". It is free to use again.");
-      await load(); onChanged && onChanged();
-    } catch (e) { say((e && e.message) || "could not release it", true); }
-    setBusy("");
-  };
   useEffect(() => {
     load();
     // An incoming transfer arrives without any action on this page, so it has to be
@@ -5623,28 +5607,7 @@ function Funding({ party, say, onChanged }) {
             fmtAmtStr(o.amount) + " " + dispSym(o.instrument)),
           "sent — waiting for ",
           U.abbrevParty ? U.abbrevParty(o.receiver, 9, 6) : "the recipient",
-          " to accept. Locked until they do.")))) : null,
-    allocs.length ? React.createElement("section", { className: "mod" },
-      React.createElement("div", { className: "mod-h" },
-        React.createElement("h2", null, "Locked in trades"),
-        React.createElement("span", { className: "mod-c m" }, allocs.length)),
-      React.createElement("div", { className: "mod-b" },
-        allocs.map(a => {
-          const expired = a.settleBefore && Date.parse(a.settleBefore) < Date.now();
-          const stuck = a.executor === party;   // names itself as executor: can never settle
-          return React.createElement("div", { key: a.contractId, className: "lk-row" },
-            React.createElement("div", { className: "lk-l" },
-              React.createElement("b", null, fmtAmtStr(a.amount) + " " + dispSym(a.instrument)),
-              React.createElement("span", null, "to " + (U.abbrevParty ? U.abbrevParty(a.receiver, 9, 6) : a.receiver)),
-              React.createElement("span", { className: stuck || expired ? "lk-bad" : "" },
-                stuck ? "cannot settle — release it"
-                  : expired ? "trade expired — release it"
-                  : "until " + new Date(a.settleBefore).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))),
-            React.createElement("button", {
-              className: "lk-b" + (stuck || expired ? " go" : ""), disabled: !!busy,
-              onClick: () => release(a)
-            }, busy === "rel:" + a.contractId ? "Waiting…" : "Release"));
-        }))) : null);
+          " to accept. Locked until they do.")))) : null);
 }
 
 // ---- SETTINGS DRAWER ----
@@ -5927,7 +5890,16 @@ function PartyPortal({ role, wallet, onExit }) {
         ]);
         const prop = ((pp && pp.proposals) || []).filter(ours).pop();
         const pend = ((pn && pn.pending) || []).filter(ours).pop();
-        setOpenTrade(pend ? { kind: "pending", c: pend } : (prop ? { kind: "proposal", c: prop } : null));
+        // A deal needs this wallet only while it still owes a lock. Once its legs are
+        // in, the venue finishes it, so nothing is shown and nothing is asked.
+        let dealTrade = null;
+        const dl = await api("/api/swap/deals?role=" + enc2(role)).catch(() => ({}));
+        const dnew = ((dl && dl.deals) || []).slice().sort((x, y) => (x.payload.tradeId < y.payload.tradeId ? 1 : -1))[0];
+        if (dnew) {
+          const nx2 = await post("/api/swap/deals/" + dnew.contractId + "/next", { party: role }).catch(() => null);
+          if (nx2 && nx2.status === "awaiting-allocation") dealTrade = { kind: "deal", c: dnew, next: nx2 };
+        }
+        setOpenTrade(dealTrade || (pend ? { kind: "pending", c: pend } : (prop ? { kind: "proposal", c: prop } : null)));
       }
       if (md && md.parties) setParties(md.parties);
       if (md) setSigned(!!md.signedMode);
@@ -6110,6 +6082,52 @@ function PartyPortal({ role, wallet, onExit }) {
     throw new Error("the proposal is gone, but no pending swap or settlement was found for it");
   }, [role]);
 
+  // ---- SWAP DEALS (0.10.0) ----
+  // Lock ONE leg with this wallet's key: fresh unlocked coins, the allocation built by
+  // the server (naming the venue as executor), signed here, then held until the coins
+  // are spent into it so the next step sees the leg as done.
+  const lockOneLeg = useCallback(async (ins, onStep) => {
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const al = ins.allocate || {};
+    const sym = dispSym(al.instrument);
+    const hr = await api("/api/real/holdings?role=" + encodeURIComponent(role)).catch(() => ({}));
+    const mine = ((hr && hr.raw) || []).filter(x => !x.lock && sameSym(x.id, sym))
+      .sort((a2, b2) => Number(b2.amount) - Number(a2.amount));
+    const cids = []; let got = 0;
+    for (const h of mine) { if (got >= Number(al.amount)) break; cids.push(h.contractId); got += Number(h.amount); }
+    if (!cids.length || got < Number(al.amount)) {
+      throw new Error("You need " + fmtAmtStr(al.amount) + " " + sym + " free to lock for this trade, and have " + fmtAmtStr(got) + ".");
+    }
+    onStep((ins.legId === "fee" ? "Lock the venue fee (" : "Lock your ") + fmtAmtStr(al.amount) + " " + sym +
+           (ins.legId === "fee" ? ")" : "") + " in your wallet…");
+    const built = await post("/api/real/allocate?build=1", {
+      build: true, senderRole: ins.party, receiver: al.receiver,
+      admin: al.admin, id: al.instrument, amount: al.amount,
+      holdingCids: cids, settleId: al.settlementRef, legId: ins.legId, registry: al.registry });
+    await WalletLink.submit({ commands: built.commands, disclosedContracts: built.disclosedContracts });
+    for (let i = 0; i < 20; i++) {
+      const now = await api("/api/real/holdings?role=" + encodeURIComponent(role)).catch(() => null);
+      if (now && !((now.raw) || []).some(x => !x.lock && cids.includes(x.contractId))) break;
+      await sleep(1500);
+    }
+  }, [role]);
+
+  // Lock whatever this wallet still owes a deal, then stop: the venue settles it (or,
+  // past the lock deadline, returns every lock). Resolves to the deal's status.
+  const lockDealLegs = useCallback(async (dealCid, onStep) => {
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    let justDid = null;
+    for (let round = 0; round < 12; round++) {
+      const n = await post("/api/swap/deals/" + dealCid + "/next", { party: role });
+      if (n.status !== "awaiting-allocation") return n;
+      const key = (n.awaiting && n.awaiting.legId) || "leg";
+      if (justDid === key) { onStep("Waiting for the ledger to record your lock…"); await sleep(3000); continue; }
+      await lockOneLeg(n.awaiting || {}, onStep);
+      justDid = key;
+    }
+    return { status: "waiting" };
+  }, [role, lockOneLeg]);
+
   const settleWithWallet = useCallback(async (proposalCid, rfqCid, onStep) => {
     const sleep = ms => new Promise(r => setTimeout(r, ms));
     // What this browser signed last round. The ledger records a signature a moment
@@ -6219,6 +6237,13 @@ function PartyPortal({ role, wallet, onExit }) {
     if (!openTrade || settling) return;
     setSettling(true); setSettleStep("Checking the trade…");
     try {
+      if (openTrade.kind === "deal") {
+        const st = await lockDealLegs(openTrade.c.contractId, setSettleStep);
+        setOpenTrade(null);
+        say(st.status === "done" ? "Settled. The swap executed atomically."
+          : "Locked. The venue settles this trade on its own — nothing more to sign.");
+        return;
+      }
       const rr = openTrade.kind === "proposal"
         ? await settleWithWallet(openTrade.c.contractId, null, setSettleStep)
         : await afterProposalGone(setSettleStep);
@@ -6234,7 +6259,7 @@ function PartyPortal({ role, wallet, onExit }) {
       setSettling(false);
       setTimeout(() => setSettleStep(null), 1500);
     }
-  }, [openTrade, settling, settleWithWallet, afterProposalGone]);
+  }, [openTrade, settling, settleWithWallet, afterProposalGone, lockDealLegs]);
 
   async function sendQuote(cid, wantSym) {
     if (busy[cid]) return;
@@ -6277,6 +6302,29 @@ function PartyPortal({ role, wallet, onExit }) {
       const askedAt = Date.now();
       const a = await post("/api/swap/quotes/" + q.contractId + "/accept", { requester: role });
       let proposalCid = a.proposalCid;
+      if (a.build && a.deal) {
+        // 0.10.0: award as a deal both sides have signed, lock our leg, and that is
+        // the requester's part done -- the venue settles when the dealer locks.
+        setAwardStep("Sign the award in your wallet\u2026");
+        await signBuilt(a);
+        let deal = null;
+        for (let i = 0; i < 15 && !deal; i++) {
+          const ds = (await api("/api/swap/deals?role=" + encodeURIComponent(role)).catch(() => ({}))).deals || [];
+          deal = ds.filter(d => d.payload.dealer === p.dealer && Number(d.payload.price) === Number(p.price))
+                   .sort((x, y) => (x.payload.tradeId < y.payload.tradeId ? 1 : -1))[0] || null;
+          if (!deal) await new Promise(r => setTimeout(r, 1500));
+        }
+        if (!deal) throw new Error("the award was signed, but the deal did not appear -- refresh in a moment");
+        const st = await lockDealLegs(deal.contractId, setAwardStep);
+        const by = new Date(deal.payload.allocateBefore).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        const e = new Error(st.status === "done" ? "Settled." :
+          "Your " + dispSym(offerSym) + " is locked for this trade. It settles automatically as soon as " +
+          DEALER_NAME(p.dealer) + " locks theirs \u2014 nothing more to sign. If they have not by " + by +
+          ", your " + dispSym(offerSym) + " comes back to you on its own.");
+        e.waiting = st.status !== "done";
+        if (!e.waiting) { load(); return; }
+        throw e;
+      }
       if (a.build) {
         setAwardStep("Sign the acceptance in your wallet\u2026");
         await signBuilt(a);

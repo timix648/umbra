@@ -49,7 +49,12 @@ source: daml
 # every dealer in one exercise (one root node), so an external party opens a request
 # to any number of dealers with ONE signature. Additive only: no existing template
 # changed, so contracts created under 0.8.0 keep working.
-version: 0.9.0
+# 0.10.0: SwapDeal + FeeReceiver. AwardRealSwap (new choice on SwapQuote) awards a
+# quote as a deal signed by BOTH principals; the venue then settles it once each has
+# locked its leg (SettleDeal) or, past the lock deadline, sends every lock home
+# (CancelDeal). FeeReceiver lets a fee land in a wallet the venue has no key for.
+# Additive only: no existing template or choice changed.
+version: 0.10.0
 dependencies:
   - daml-prim
   - daml-stdlib
