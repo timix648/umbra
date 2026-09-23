@@ -1416,6 +1416,61 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
      call that makes Loop usable here. One layer fewer, and nothing in between to
      mistranslate what the wallet actually supports. -->
 <script src="/loop-sdk.js"></script>
+<script>
+// ---- BLOCKED WALLET WINDOWS --------------------------------------------------
+// Chrome lets a page open a window only for a few seconds after a click. Loop's SDK
+// opens its window AFTER a network round trip (the connect ticket, a sign-in, a
+// transaction to sign), so a slow reply loses the click and the window is silently
+// blocked - the page sits on "Waiting for wallet..." for ever. Asking every user to
+// allow popups is not a fix. When a Loop window is blocked, keep its address and put
+// one button on screen: pressing it IS a click, so it always opens. The SDK waits for
+// the approval on Loop's server, not on the window, so the flow completes either way.
+(function () {
+  if (typeof window === "undefined" || window.__umbraPopupGuard) return;
+  window.__umbraPopupGuard = true;
+  var open = window.open.bind(window);
+  var pending = null;
+  var isLoop = function (u) { return /(^|\.)cantonloop\.com/i.test(String(u || "").replace(/^https?:\/\//, "").split("/")[0]); };
+  function show() {
+    if (!pending || document.getElementById("umbra-popup-blocked")) return;
+    var el = document.createElement("div");
+    el.id = "umbra-popup-blocked";
+    el.setAttribute("role", "alert");
+    el.style.cssText = "position:fixed;left:50%;bottom:24px;transform:translateX(-50%);" +
+      "z-index:2147483647;display:flex;gap:14px;align-items:center;max-width:calc(100vw - 32px);" +
+      "padding:12px 14px 12px 18px;border-radius:12px;border:1px solid var(--accent,#8b5cf6);" +
+      "background:#15161f;color:#f3f3f7;font:14px/1.4 Inter,system-ui,sans-serif;" +
+      "box-shadow:0 10px 32px rgba(0,0,0,.45)";
+    var msg = document.createElement("span");
+    msg.textContent = "Your browser blocked Loop\u2019s window.";
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "Open Loop";
+    btn.style.cssText = "cursor:pointer;border:0;border-radius:8px;padding:8px 14px;" +
+      "background:var(--accent,#8b5cf6);color:#fff;font:600 13px Inter,system-ui,sans-serif";
+    btn.onclick = function () {
+      var p = pending; pending = null; el.remove();
+      // Through the wrapper: if even this is refused, the banner comes straight back.
+      if (p) window.open(p.url, "loop-wallet", p.features);
+    };
+    el.appendChild(msg); el.appendChild(btn);
+    document.body.appendChild(el);
+  }
+  window.open = function (url, name, features) {
+    var w = open(url, name, features);
+    if (!w && isLoop(url)) {
+      // The SDK tries a named popup, then a plain tab. Keep the first, with its size.
+      if (!pending) pending = { url: String(url), features: features };
+      show();
+    } else if (w && isLoop(url)) {
+      pending = null;
+      var old = document.getElementById("umbra-popup-blocked");
+      if (old) old.remove();
+    }
+    return w;
+  };
+})();
+</script>
 <!-- Test double for a CIP-0103 wallet. Inert unless the page is opened with
      ?devwallet=1 AND the server was started with UMBRA_DEV_WALLET=1. It replaces
      window.CantonDapp wholesale, so it must load AFTER the real SDK. -->
