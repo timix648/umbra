@@ -388,6 +388,38 @@
   .prt-ico.on{color:var(--ok);border-color:var(--okline);background:var(--okbg)}
   .prt-ico.on:hover{filter:brightness(1.1)}
   .prt-ico[disabled]{opacity:.5;cursor:progress}
+  /* settings drawer: slides in from the right */
+  .drw{position:fixed;inset:0;z-index:900;pointer-events:none}
+  .drw.on{pointer-events:auto}
+  .drw-bg{position:absolute;inset:0;background:rgba(5,7,12,.5);opacity:0;transition:opacity .25s ease}
+  .drw.on .drw-bg{opacity:1}
+  .drw-p{position:absolute;top:0;right:0;bottom:0;width:min(420px,100vw);background:var(--bg2);
+    border-left:1px solid var(--line2);box-shadow:-24px 0 48px -24px rgba(0,0,0,.5);
+    transform:translateX(100%);transition:transform .28s cubic-bezier(.16,1,.3,1);
+    display:flex;flex-direction:column;overflow-y:auto;outline:none}
+  .drw.on .drw-p{transform:none}
+  .drw-h{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--line)}
+  .drw-h h2{margin:0;font-size:16px;font-weight:600}
+  .drw-s{padding:18px 20px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:10px}
+  .drw-t{display:flex;align-items:center;justify-content:space-between}
+  .drw-t h3{margin:0;font-size:14px;font-weight:600}
+  .drw-st{font:600 10px/1 var(--sans);letter-spacing:.06em;text-transform:uppercase;padding:4px 8px;border-radius:3px;
+    color:var(--mute);border:1px solid var(--line2)}
+  .drw-st.on{color:var(--ok);border-color:var(--okline);background:var(--okbg)}
+  .drw-d{margin:0;font-size:13px;line-height:1.55;color:var(--mute)}
+  .drw-d b{color:var(--text);font-weight:600}
+  .drw-on{font-size:13px;color:var(--mute)}
+  .drw-on b{color:var(--text)}
+  .drw-seg{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+  .drw-seg button{font:500 12.5px/1 var(--sans);padding:9px 6px;border-radius:5px;cursor:pointer;
+    background:var(--bg);color:var(--mute);border:1px solid var(--line)}
+  .drw-seg button[data-on="1"]{color:var(--text);border-color:var(--accentline);background:var(--accentbg)}
+  .drw-b{font:600 13px/1 var(--sans);padding:12px;border-radius:6px;cursor:pointer;border:0;
+    background:var(--accent);color:#fff}
+  .drw-b.ghost{background:transparent;color:var(--text);border:1px solid var(--line2)}
+  .drw-b:disabled{background:var(--bg3);color:var(--mute);cursor:progress}
+  .drw-seg button:focus-visible,.drw-b:focus-visible{outline:none;box-shadow:var(--glow)}
+  @media(prefers-reduced-motion:reduce){.drw-p,.drw-bg{transition:none}}
   .prt-ico:focus-visible,.prt-out:focus-visible{outline:none;border-color:var(--accentline);box-shadow:var(--glow)}
   .prt-note{padding:9px 20px;font:500 11.5px/1.4 var(--sans);border-bottom:1px solid var(--line)}
   .prt-note.ok{color:var(--accent);background:var(--accentbg)}
@@ -772,7 +804,10 @@
     .rqk,.dsk{padding:12px 12px;gap:12px}
     .r2{grid-template-columns:1fr}
     .qm{display:block;overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch}
-    .prt-bar{padding-left:12px;padding-right:12px}
+    /* the header wraps instead of stacking its buttons on top of the wordmark */
+    .prt-bar{padding:8px 12px;height:auto;min-height:50px;flex-wrap:wrap;row-gap:8px}
+    .prt-right{flex-wrap:wrap;gap:8px;margin-left:auto}
+    .dsk-ref,.dsk-close{font-size:10px}
   }
   .dsk-col{display:flex;flex-direction:column;gap:16px;min-width:0;min-height:0;
     overflow-y:auto;overflow-x:hidden;scrollbar-width:thin}
@@ -4474,6 +4509,13 @@ function RequesterDesk(P) {
           React.createElement("path", { d: "M4 4h16l2 5H2z" }),
           React.createElement("path", { d: "M4 9v11h16V9" }),
           React.createElement("path", { d: "M10 20v-6h4v6" }))) : null,
+        P.onSettings ? React.createElement("button", {
+          className: "prt-ico tip-below tip-left", onClick: P.onSettings, "aria-label": "Settings",
+          "data-tip": "Settings"
+        }, React.createElement("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor",
+            strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
+          React.createElement("circle", { cx: 12, cy: 12, r: 3 }),
+          React.createElement("path", { d: "M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" }))) : null,
         React.createElement(ThemeBtn, { theme, flip: flipTheme }),
                 React.createElement("button", { className: "prt-out", onClick: onExit }, "Sign out"))),
 
@@ -5145,6 +5187,13 @@ function DealerDesk(P) {
               : React.createElement("span", { className: "dsk-ref na tip-below tip-left", "data-tip": "Live market reference is unavailable right now. Price using your own read \u2014 the ledger never requires a reference." }, "REF", React.createElement("b", null, "\u2014")))
           : null,
         active ? React.createElement("span", { className: "dsk-close" + (cd.warn ? " warn" : "") }, "Closes in ", React.createElement("b", null, cd.txt)) : null,
+        P.onSettings ? React.createElement("button", {
+          className: "prt-ico tip-below tip-left", onClick: P.onSettings, "aria-label": "Settings",
+          "data-tip": "Settings"
+        }, React.createElement("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor",
+            strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
+          React.createElement("circle", { cx: 12, cy: 12, r: 3 }),
+          React.createElement("path", { d: "M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" }))) : null,
         React.createElement(ThemeBtn, { theme, flip: flipTheme }),
                 React.createElement("button", { className: "prt-out", onClick: onExit }, "Sign out"))),
 
@@ -5547,6 +5596,104 @@ function Funding({ party, say, onChanged }) {
           " to accept. Locked until they do.")))) : null);
 }
 
+// ---- SETTINGS DRAWER ----
+//
+// Slides in from the right so the trading screen stays uncluttered. One section today
+// (fewer signatures); more settings belong here, not on the desk.
+//
+// FEWER SIGNATURES = a TradingMandate: signed once, time-limited, revocable at any time.
+// While it runs the venue opens the user's requests and invites every dealer in ONE
+// single-root choice (external signing refuses multi-root transactions, so without it
+// each invitation is its own signature), accepts the quote the user picks and proposes
+// or accepts settlement. It can never move funds: locking a coin always needs the
+// wallet's own key.
+function SettingsDrawer({ open, onClose, role, say }) {
+  const [m, setM] = useState(undefined);      // undefined = loading, null = none
+  const [hours, setHours] = useState(24);
+  const [busy, setBusy] = useState(false);
+  const panel = React.useRef(null);
+  const enc = encodeURIComponent;
+  const readM = useCallback(async () => {
+    const r = await api("/api/mandate?role=" + enc(role)).catch(() => null);
+    const x = r && r.mandate;
+    return x && Date.parse(x.expiresAt) > Date.now() ? x : null;
+  }, [role]);
+  useEffect(() => { if (open) { setM(undefined); readM().then(setM); } }, [open, readM]);
+  useEffect(() => {
+    if (!open) return;
+    const k = e => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", k);
+    setTimeout(() => { if (panel.current) panel.current.focus(); }, 30);
+    return () => document.removeEventListener("keydown", k);
+  }, [open]);
+  // The ledger records the signature a moment after the wallet returns.
+  const settle = async (want) => {
+    for (let i = 0; i < 15; i++) {
+      const x = await readM();
+      if (want ? !!x : !x) { setM(x); return true; }
+      await new Promise(r => setTimeout(r, 1500));
+    }
+    setM(await readM()); return false;
+  };
+  const turnOn = async () => {
+    if (busy) return; setBusy(true);
+    try {
+      const r = await post("/api/mandate", { party: role, hours });
+      if (r && r.build) {
+        say("Approve the mandate in your wallet\u2026");
+        await WalletLink.submit({ commands: r.commands, disclosedContracts: r.disclosedContracts || [] });
+      }
+      if (await settle(true)) say("Fewer signatures is on for " + hours + (hours === 1 ? " hour." : " hours."));
+    } catch (e) { say((e && e.message) || "could not turn it on", true); }
+    setBusy(false);
+  };
+  const turnOff = async () => {
+    if (busy) return; setBusy(true);
+    try {
+      const r = await post("/api/mandate/revoke", { party: role });
+      if (r && r.build) {
+        say("Approve in your wallet to end it now\u2026");
+        await WalletLink.submit({ commands: r.commands });
+      }
+      if (await settle(false)) say("Fewer signatures is off. Every step asks your wallet again.");
+    } catch (e) { say((e && e.message) || "could not turn it off", true); }
+    setBusy(false);
+  };
+  const until = m ? new Date(m.expiresAt) : null;
+  const untilTxt = until ? until.toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" }) : "";
+
+  return React.createElement("div", { className: "drw" + (open ? " on" : ""), "aria-hidden": !open },
+    React.createElement("div", { className: "drw-bg", onClick: onClose }),
+    React.createElement("aside", { className: "drw-p", role: "dialog", "aria-modal": "true",
+      "aria-label": "Settings", tabIndex: -1, ref: panel },
+      React.createElement("div", { className: "drw-h" },
+        React.createElement("h2", null, "Settings"),
+        React.createElement("button", { className: "prt-ico", onClick: onClose, "aria-label": "Close settings" }, "\u2715")),
+      React.createElement("section", { className: "drw-s" },
+        React.createElement("div", { className: "drw-t" },
+          React.createElement("h3", null, "Fewer signatures"),
+          React.createElement("span", { className: "drw-st" + (m ? " on" : "") },
+            m === undefined ? "\u2026" : m ? "On" : "Off")),
+        React.createElement("p", { className: "drw-d" },
+          "Sign once. For the time you choose, Umbra opens your requests and invites every dealer, accepts the quote you pick, and proposes or accepts settlement \u2014 without asking your wallet each time."),
+        React.createElement("p", { className: "drw-d" },
+          React.createElement("b", null, "It can never move your funds."),
+          " Locking your coins for a trade always needs your own signature. You can end it any time."),
+        m
+          ? React.createElement(React.Fragment, null,
+              React.createElement("div", { className: "drw-on" }, "On until ", React.createElement("b", null, untilTxt)),
+              React.createElement("button", { className: "drw-b ghost", disabled: busy, onClick: turnOff },
+                busy ? "Waiting for your wallet\u2026" : "Turn off now"))
+          : React.createElement(React.Fragment, null,
+              React.createElement("div", { className: "drw-seg", role: "radiogroup", "aria-label": "How long" },
+                [1, 8, 24].map(h => React.createElement("button", {
+                  key: h, role: "radio", "aria-checked": hours === h, "data-on": hours === h ? "1" : "0",
+                  onClick: () => setHours(h)
+                }, h === 1 ? "1 hour" : h + " hours"))),
+              React.createElement("button", { className: "drw-b", disabled: busy || m === undefined, onClick: turnOn },
+                busy ? "Waiting for your wallet\u2026" : "Turn on \u2014 one signature")))));
+}
+
 // ---- DEALER QUEUE ----
 //
 // Replaces the Requesting/Dealing switch. That switch was a leftover from the demo's
@@ -5658,6 +5805,7 @@ function PartyPortal({ role, wallet, onExit }) {
   // 'list me as available to price blocks' -- it does not stop the same party
   // raising its own requests, which is what a real desk does anyway.
   const [listed, setListed] = useState(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const pairRef = useRef(null);
   const [composedPair, setComposedPair] = useState({ base: "CBTC", quote: "cETH" });
   const onPair = useCallback(p => { setComposedPair(p); }, []);
@@ -6174,21 +6322,26 @@ function PartyPortal({ role, wallet, onExit }) {
   // inside PartyPortal's own hook list, so the moment a wallet party can switch
   // desks mid-session the hook count changes between renders and React throws
   // #311. As elements each desk owns its hooks and a switch remounts cleanly.
-  if (isDealer) return React.createElement(DealerDesk, {
+  const drawer = wallet ? React.createElement(SettingsDrawer, {
+    open: settingsOpen, onClose: () => setSettingsOpen(false), role, say }) : null;
+  if (isDealer) return React.createElement(React.Fragment, null, drawer, React.createElement(DealerDesk, {
     meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, ratePair, usd,
     price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid, role, deskSwitch,
     openTrade, settling, settleStep, onSettle: settleAsDealer, readFailed, fee,
-    listed, onToggleListing: toggleListing, wallet, say
-  });
+    listed, onToggleListing: toggleListing, wallet, say,
+    onSettings: wallet ? () => setSettingsOpen(true) : null
+  }));
 
   return React.createElement(React.Fragment, null,
+    drawer,
     React.createElement(RequesterDesk, {
       meta, signed, onExit, note, deskSwitch, role,
       rfqs, quotes: myQuotes, holdings, rate, series, usd, rateNote, onPair, history, composedPair,
       onCreate: createRfq, onAward: awardQuote, awarding, awardStep,
       composing, setComposing, ratePair, selRfqCid, setSelRfqCid,
       openTrade, settling, settleStep, onSettle: settleAsDealer, readFailed, fee,
-      wallet, say, listed, onToggleListing: toggleListing
+      wallet, say, listed, onToggleListing: toggleListing,
+      onSettings: wallet ? () => setSettingsOpen(true) : null
     }),
     React.createElement(GovernancePanel, { onOpen: setVault }),
     React.createElement(SettlementVault, { trade: vault, role, onClose: () => setVault(null) }));

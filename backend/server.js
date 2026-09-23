@@ -2222,6 +2222,24 @@ app.post("/api/mandate", async (req, res) => {
   } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
+// Withdraw the mandate early. RevokeMandate is `controller party`, so the party's own
+// wallet signs it -- the venue can neither keep a mandate alive nor end one for you.
+app.post("/api/mandate/revoke", async (req, res) => {
+  try {
+    const party = await partyIdFor(readPartyOrOp(req, (req.body || {}).party || (req.body || {}).role));
+    const m = await findMandate(party);
+    if (!m) return res.json({ ok: true, revoked: false, note: "no active mandate" });
+    const cmds = [{ ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:TradingMandate`,
+      contractId: m.contractId, choice: "RevokeMandate", choiceArgument: {} } }];
+    if (isWalletParty(party)) {
+      return res.json({ ok: true, build: true, party, commands: cmds,
+        note: "sign to end the mandate now" });
+    }
+    await act(req.body.role || "requester", "mandate-revoke", cmds);
+    res.json({ ok: true, revoked: true });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
 app.get("/api/mandate", async (req, res) => {
   try {
     const party = await partyIdFor(readPartyOrOp(req, req.query.role));
