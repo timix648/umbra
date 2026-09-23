@@ -241,6 +241,14 @@ async function onboardWalletConfirm(o) {
   if (prev && prev.publicKey && prev.publicKey !== o.publicKey) {
     throw Object.assign(new Error("this party is already onboarded with a different key"), { status: 409 });
   }
+  // One party per key. The UI adopts by fingerprint before it ever confirms, but a
+  // retry, a second tab or a hand-rolled client must not found a second party that
+  // assets could strand on. The key was proven above, so handing back its party is safe.
+  const same = Object.values(loadWallets()).find(w => w.fingerprint === o.fingerprint);
+  if (same) {
+    if (!same.publicKey) { const s = loadWallets(); s[same.partyId].publicKey = o.publicKey; saveWallets(s); }
+    return loadWallets()[same.partyId];
+  }
   await jpost("/v2/parties/external/allocate", {
     synchronizer: SYNC,
     onboardingTransactions: (o.topologyTransactions || []).map((t) => ({ transaction: t })),

@@ -1909,6 +1909,165 @@ const WalletLink = (() => {
     lB64(lBytes(lSigOf(await loopProvider.signMessage(
       String.fromCharCode(...lBytes(b64hash))))));
 
+  // ---- ONE PATH FOR EVERY WALLET ----------------------------------------------
+  // Every wallet trades as a party founded on OUR validator from the wallet's own key.
+  // The wallet only ever signs raw bytes -- the onboarding hash, the sign-in nonce and
+  // each prepared-transaction hash -- so there is one sign-in, one read path and one
+  // submit path for all of them, and no wallet vendor ever has to vet Umbra.
+  //
+  // A wallet qualifies if it shows its ed25519 public key and its signMessage signs
+  // the RAW BYTES it is handed. CIP-0103 does not say how signMessage turns its string
+  // into bytes, so that is checked, not assumed: the server verifies the onboarding
+  // signature against the key BEFORE any party exists, and a wallet that signs its
+  // text some other way is refused with a plain message and nothing half-created.
+  const rawKeyB64 = (k) => {
+    const u = lBytes(k);
+    const raw = u.length === 44 ? u.slice(12) : u;   // SPKI DER = 12-byte header + key
+    if (raw.length !== 32) throw new Error("not a 32-byte ed25519 key");
+    return lB64(raw);
+  };
+  // Sign raw bytes through a CIP-0103 signMessage: the bytes go in as a binary string,
+  // exactly as for Loop. Wallets differ on the params shape -- the WalletConnect
+  // binding takes { message }, the spec's prose a bare string -- so try both, but never
+  // retry after the user said no.
+  const cipSigner = (s) => async (b64) => {
+    if (!s || typeof s.signMessage !== "function") {
+      throw new Error("This wallet cannot sign messages, so Umbra cannot give it a party.");
+    }
+    const msg = String.fromCharCode(...lBytes(b64));
+    let r;
+    try { r = await s.signMessage({ message: msg }); }
+    catch (e) {
+      if (/reject|declin|denied|cancel/i.test((e && e.message) || "")) throw e;
+      r = await s.signMessage(msg);
+    }
+    return lB64(lBytes(lSigOf(r)));
+  };
+
+  // Find the key's party here, or found it. Matching on the fingerprint matters: the
+  // hint is a timestamp, so preparing twice drafts two party ids for one key.
+  async function custodyFound(pubB64, sign) {
+    const draft = await post("/api/ext/onboard/prepare", { publicKey: pubB64 });
+    const known = (await api("/api/ext/wallets")).wallets || [];
+    const existing = known.find(w => w.fingerprint === draft.fingerprint);
+    if (existing) return existing.partyId;
+    const r = await post("/api/ext/onboard/confirm", {
+      partyId: draft.partyId, fingerprint: draft.fingerprint, publicKey: draft.publicKey,
+      topologyTransactions: draft.topologyTransactions, multiHash: draft.multiHash,
+      multiHashSignature: await sign(draft.multiHash),
+    });
+    return r.party.partyId;
+  }
+  // Adopt only, never prompt -- for page reloads, where a wallet popup nobody asked
+  // for is its own bug. Null when this key has no party here yet.
+  async function custodyAdopt(pubB64) {
+    const draft = await post("/api/ext/onboard/prepare", { publicKey: pubB64 });
+    const known = (await api("/api/ext/wallets")).wallets || [];
+    const mine = known.find(w => w.fingerprint === draft.fingerprint);
+    return mine ? mine.partyId : null;
+  }
+  // Sign in while the user is already in a wallet flow. Non-fatal: if they decline,
+  // the first write asks again.
+  async function custodySignIn(party, sign) {
+    try { await walletSignIn(party, sign); }
+    catch (e) {
+      console.warn("[walletlink] sign-in failed:", e && e.message);
+      REAUTH = () => walletSignIn(party, sign);
+    }
+  }
+  // Prepare here, sign in the wallet, execute here.
+  async function custodySubmit(party, sign, params, tag) {
+    const prep = await post("/api/ext/prepare", {
+      party, commands: params.commands,
+      disclosedContracts: params.disclosedContracts || [], tag,
+    });
+    const out = await post("/api/ext/execute", {
+      party, commandId: prep.commandId,
+      preparedTransaction: prep.preparedTransaction,
+      hashingSchemeVersion: prep.hashingSchemeVersion,
+      signature: await sign(prep.preparedTransactionHash),
+      signedBy: party.split("::")[1],
+    });
+    return { committed: !!(out && out.ok), updateId: null, commandId: prep.commandId };
+  }
+
+  // The connected wallet's primary account and its key, from wherever this wallet
+  // keeps them: getPrimaryAccount, the account list, or (PartyLayer) the session.
+  async function primaryOf(base, s) {
+    let a = null;
+    try { if (typeof s.getPrimaryAccount === "function") a = await s.getPrimaryAccount(); }
+    catch (e) {}
+    if (!a || !a.publicKey) {
+      const list = (await base.accounts(s).catch(() => [])) || [];
+      a = list.find(x => x && x.primary && x.publicKey) ||
+          list.find(x => x && x.publicKey) || a || list[0] || null;
+    }
+    if ((!a || !a.publicKey) && typeof s.getActiveSession === "function") {
+      try {
+        const ss = await s.getActiveSession();
+        if (ss) a = Object.assign({}, a, {
+          partyId: (a && a.partyId) || ss.partyId,
+          publicKey: ss.publicKey || (ss.account && ss.account.publicKey) || null });
+      } catch (e) {}
+    }
+    if (!a) return null;
+    let pub = null;
+    try { pub = a.publicKey ? rawKeyB64(a.publicKey) : null; } catch (e) { pub = null; }
+    return { partyId: a.partyId || null, pub };
+  }
+
+  let cust = null;   // { walletId, party, sign, home } for a wallet on the one path
+  const custodial = (base) => Object.assign({}, base, {
+    serverReads: true,
+    init: async (s) => {
+      await base.init(s);
+      try {
+        if (await base.isConnected(s)) {
+          const a = await primaryOf(base, s);
+          const party = a && a.pub ? await custodyAdopt(a.pub) : null;
+          if (party) {
+            const sign = cipSigner(s);
+            cust = { walletId: base.id, party, sign, home: a.partyId };
+            REAUTH = () => walletSignIn(party, sign);
+          }
+        }
+      } catch (e) { console.warn("[walletlink] restore failed:", e && e.message); }
+      return true;
+    },
+    isConnected: async (s) =>
+      !!(cust && cust.walletId === base.id) && !!(await base.isConnected(s)),
+    connect: async (s) => {
+      await base.connect(s);
+      const a = await primaryOf(base, s);
+      if (!a || !a.pub) {
+        throw new Error("This wallet did not share its ed25519 public key, so Umbra cannot give it a party.");
+      }
+      const sign = cipSigner(s);
+      const party = await custodyFound(a.pub, sign);
+      cust = { walletId: base.id, party, sign, home: a.partyId };
+      await custodySignIn(party, sign);
+      return true;
+    },
+    disconnect: async (s) => {
+      cust = null; setSession(null); REAUTH = null;
+      return base.disconnect(s);
+    },
+    accounts: async () => (cust && cust.walletId === base.id)
+      ? [{ partyId: cust.party, hint: cust.party.split("::")[0],
+           namespace: cust.party.split("::")[1] || null, networkId: "devnet",
+           primary: true, disabled: false }]
+      : [],
+    homeParty: () => (cust && cust.walletId === base.id ? cust.home || null : null),
+    submit: async (s, params) => {
+      if (!cust || cust.walletId !== base.id) throw new Error("wallet is not connected");
+      return custodySubmit(cust.party, cust.sign, params, base.id);
+    },
+  });
+  // Every CIP-0103 route onto the one path. Loop, below, uses the same helpers.
+  for (const id of ["canton", "console", "discovered", "partylayer"]) {
+    if (adapters[id]) adapters[id] = custodial(adapters[id]);
+  }
+
   adapters.loop = {
     id: "loop", label: "Loop (5N)",
     // Read this party's contracts from OUR ledger, not through the wallet. Other
@@ -1976,32 +2135,10 @@ const WalletLink = (() => {
       loopProvider = provider;
       try { localStorage.setItem("umbra.loop.home", provider.party_id || ""); } catch (e) {}
 
-      // Find, or found, the party this key owns HERE. The party hint is a timestamp,
-      // so preparing twice would draft two different party ids for one key -- and any
-      // assets already sent would sit on the first. The fingerprint is what actually
-      // identifies the key, so match on that and adopt what already exists.
-      const draft = await post("/api/ext/onboard/prepare",
-                               { publicKey: lB64(lBytes(provider.public_key)) });
-      const known = (await api("/api/ext/wallets")).wallets || [];
-      const existing = known.find(w => w.fingerprint === draft.fingerprint);
-      if (existing) {
-        loopParty = existing.partyId;
-      } else {
-        const r = await post("/api/ext/onboard/confirm", {
-          partyId: draft.partyId, fingerprint: draft.fingerprint,
-          publicKey: draft.publicKey,
-          topologyTransactions: draft.topologyTransactions,
-          multiHashSignature: await loopSign(draft.multiHash),
-        });
-        loopParty = r.party.partyId;
-      }
-      // Sign in now, while the user is already in a wallet flow, so the first button
-      // they press is not refused. Non-fatal: if they decline, the first write asks.
-      try { await walletSignIn(loopParty, loopSign); }
-      catch (e) {
-        console.warn("[loop] sign-in failed:", e && e.message);
-        REAUTH = () => walletSignIn(loopParty, loopSign);
-      }
+      // Find, or found, the party this key owns HERE, then sign in -- the one path
+      // every wallet takes (see ONE PATH FOR EVERY WALLET above).
+      loopParty = await custodyFound(lB64(lBytes(provider.public_key)), loopSign);
+      await custodySignIn(loopParty, loopSign);
       try { localStorage.setItem("umbra.wallet", "loop"); } catch (e) {}
       return true;
     },
@@ -2031,21 +2168,10 @@ const WalletLink = (() => {
            namespace: loopParty.split("::")[1] || null,
            networkId: "devnet", primary: true, disabled: false }]
       : [],
-    // Prepare here, sign in Loop, execute here.
+    // Prepare here, sign in Loop, execute here -- the shared one-path submit.
     submit: async (s, params) => {
       if (!loopParty) throw new Error("Loop is not connected");
-      const prep = await post("/api/ext/prepare", {
-        party: loopParty, commands: params.commands,
-        disclosedContracts: params.disclosedContracts || [], tag: "loop",
-      });
-      const out = await post("/api/ext/execute", {
-        party: loopParty, commandId: prep.commandId,
-        preparedTransaction: prep.preparedTransaction,
-        hashingSchemeVersion: prep.hashingSchemeVersion,
-        signature: await loopSign(prep.preparedTransactionHash),
-        signedBy: loopParty.split("::")[1],
-      });
-      return { committed: !!(out && out.ok), updateId: null, commandId: prep.commandId };
+      return custodySubmit(loopParty, loopSign, params, "loop");
     },
   };
 
@@ -2218,6 +2344,10 @@ const WalletLink = (() => {
     // Returns true / false, or null when the wallet won't answer (some may not proxy
     // /v2/packages). Null means "unknown", never "broken" — do not block on it.
     async hasPackage(packageId) {
+      // On the one path the party lives on OUR node, where Umbra is vetted; the
+      // wallet's own validator is never involved, so there is nothing to warn about.
+      const cur = pick();
+      if (cur && cur.serverReads) return true;
       try {
         const r = await this.ledgerApi({ method: "get", resource: "/v2/packages" });
         const ids = (r && (r.packageIds || r.package_ids || r)) || [];

@@ -2360,6 +2360,15 @@ app.post("/api/ext/onboard/confirm", async (req, res) => {
     for (const k of ["partyId", "fingerprint", "topologyTransactions", "multiHashSignature"]) {
       if (!b[k]) return res.status(400).json({ error: "need " + k });
     }
+    // A wallet whose signMessage signs its TEXT rather than the raw bytes it was handed
+    // produces a valid signature over the wrong thing. Say so plainly, before any party
+    // exists -- the ledger would refuse it later with nothing useful to say.
+    if (b.multiHash && b.publicKey &&
+        !auth.verifyRawEd25519(b.publicKey, b.multiHash, b.multiHashSignature)) {
+      return res.status(400).json({ error:
+        "This wallet did not sign the raw bytes it was given, so Canton would reject its " +
+        "signature. It cannot hold an Umbra party yet." });
+    }
     const rec = await onboardWalletConfirm(b);
     res.json({ ok: true, party: rec, privateKeyHeldByServer: false });
   } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
