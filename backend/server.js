@@ -1912,11 +1912,30 @@ app.post("/api/swap/rfq", async (req, res) => {
     // submission. Interactive submission REFUSES both -- "Transaction with multiple root
     // nodes are not supported" -- so fewer signatures here needs a single-root choice in
     // the Daml, e.g. one that creates every invitation at once.)
+    //
+    // With a RequestDesk (umbra-v9 0.9.0) it is ONE signature: OpenRfq creates the
+    // request and invites every dealer in a single exercise. Without one, the page is
+    // told to set the desk up first (one signature, once ever); `commands` still carries
+    // the plain create so a client that cannot use the desk falls back to create +
+    // InviteAll.
     if (req.query.build === "1" || req.body.build || isWalletParty(requester)) {
+      const args = createCmd[0].CreateCommand.createArguments;
+      const desk = await findDesk(requester);
+      if (desk) {
+        return res.json({ ok: true, build: true, viaDesk: true, party: requester,
+          commands: [{ ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:RequestDesk`,
+            contractId: desk.contractId, choice: "OpenRfq",
+            choiceArgument: { offerAsset: args.offerAsset, offerAmount: args.offerAmount,
+              wantAsset: args.wantAsset, invited: args.invited, expiresAt: args.expiresAt } } }],
+          invited: [], expiresAt,
+          note: "one signature opens the request and invites every dealer" });
+      }
       return res.json({ ok: true, build: true, party: requester, commands: createCmd,
-        invited, expiresAt,
-        note: "sign via /api/ext/prepare + /api/ext/execute, then invite each dealer " +
-              "with POST /api/swap/rfqs/<rfqCid>/invite?build=1" });
+        invited, expiresAt, needsDesk: true,
+        deskCommands: [{ CreateCommand: { templateId: `#${PKGN}:UmbraSwap:RequestDesk`,
+          createArguments: { requester, operator } } }],
+        note: "sign deskCommands once (then every request is one signature), or sign " +
+              "commands and invite with /api/swap/rfqs/<rfqCid>/invite-all?build=1" });
     }
 
     const rfqBefore = await idSetSwap(requester, "UmbraSwap:SwapRfq");
@@ -2209,6 +2228,15 @@ app.get("/api/swap/settlements", async (req, res) => {
 // one wallet prompts to ask one question. Bundling is not possible on the wallet path
 // either: interactive submission rejects a transaction with more than one root node.
 // Exercising a choice on a contract that already exists is one root node.
+// The party's own RequestDesk, if it has set one up (umbra-v9 0.9.0+). Null otherwise,
+// including on a node without 0.9.0 -- callers fall back to create + InviteAll.
+async function findDesk(party) {
+  try {
+    return (await queryActive(party, "UmbraSwap:RequestDesk"))
+      .find(c => c.payload && c.payload.requester === party) || null;
+  } catch (e) { return null; }
+}
+
 async function findMandate(party) {
   try {
     const now = Date.now();

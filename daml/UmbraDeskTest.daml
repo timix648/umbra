@@ -1,0 +1,87 @@
+module UmbraDeskTest where
+
+import UmbraSwap
+import Daml.Script
+import DA.Time (addRelTime, minutes)
+import DA.Assert ((===))
+
+-- ============================================================================
+-- Proofs for RequestDesk -- one signature to open a request to any number of
+-- dealers, without giving the venue any power.
+--
+--   the desk opens a request and invites EVERY dealer, in one submission
+--   each dealer sees only its own invitation
+--   only the desk's owner can use it           (operator and outsiders fail)
+--   nobody can create a desk for someone else  (signatory requester)
+--   the owner can close it
+-- ============================================================================
+
+data D = D
+  with
+    operator  : Party
+    alice     : Party
+    dealerA   : Party
+    dealerB   : Party
+    outsider  : Party
+    cbtc      : AssetId
+    cc        : AssetId
+
+setupD : Script D
+setupD = do
+  operator <- allocateParty "operator"
+  alice    <- allocateParty "alice"
+  dealerA  <- allocateParty "dealerA"
+  dealerB  <- allocateParty "dealerB"
+  outsider <- allocateParty "outsider"
+  issuer   <- allocateParty "BitSafe"
+  ccAdmin  <- allocateParty "CantonCoin"
+  pure D with
+    operator; alice; dealerA; dealerB; outsider
+    cbtc = AssetId with admin = issuer,  symbol = "CBTC"
+    cc   = AssetId with admin = ccAdmin, symbol = "CC"
+
+openArgs : D -> Time -> OpenRfq
+openArgs d now = OpenRfq with
+  offerAsset = d.cbtc; offerAmount = 0.5; wantAsset = d.cc
+  invited = [d.dealerA, d.dealerB]
+  expiresAt = addRelTime now (minutes 30)
+
+deskOpensAndInvitesEveryoneInOneSubmission : Script ()
+deskOpensAndInvitesEveryoneInOneSubmission = do
+  d <- setupD
+  now <- getTime
+  desk <- submit d.alice do createCmd RequestDesk with requester = d.alice; operator = d.operator
+  (rfq, invs) <- submit d.alice do exerciseCmd desk (openArgs d now)
+  length invs === 2
+  -- each dealer holds exactly its own invitation, for this request
+  aInv <- query @SwapInvitation d.dealerA
+  bInv <- query @SwapInvitation d.dealerB
+  map (\(_, i) -> (i.dealer, i.rfqCid)) aInv === [(d.dealerA, rfq)]
+  map (\(_, i) -> (i.dealer, i.rfqCid)) bInv === [(d.dealerB, rfq)]
+  -- and the desk is still there for the next request
+  _ <- submit d.alice do exerciseCmd desk (openArgs d now)
+  pure ()
+
+onlyTheOwnerCanUseTheDesk : Script ()
+onlyTheOwnerCanUseTheDesk = do
+  d <- setupD
+  now <- getTime
+  desk <- submit d.alice do createCmd RequestDesk with requester = d.alice; operator = d.operator
+  submitMustFail d.operator do exerciseCmd desk (openArgs d now)
+  submitMustFail d.outsider do exerciseCmd desk (openArgs d now)
+  submitMustFail d.dealerA  do exerciseCmd desk (openArgs d now)
+
+nobodyCreatesADeskForSomeoneElse : Script ()
+nobodyCreatesADeskForSomeoneElse = do
+  d <- setupD
+  submitMustFail d.operator do createCmd RequestDesk with requester = d.alice; operator = d.operator
+  submitMustFail d.outsider do createCmd RequestDesk with requester = d.alice; operator = d.operator
+
+ownerCanCloseTheDesk : Script ()
+ownerCanCloseTheDesk = do
+  d <- setupD
+  desk <- submit d.alice do createCmd RequestDesk with requester = d.alice; operator = d.operator
+  submitMustFail d.operator do exerciseCmd desk CloseDesk
+  submit d.alice do exerciseCmd desk CloseDesk
+  left <- query @RequestDesk d.alice
+  length left === 0

@@ -45,7 +45,11 @@ source: daml
 # invitations, because invitations point at a contract id and cannot survive
 # their request shrinking. Both fields are Optional and absent means "the whole
 # thing", so every pre-0.8.0 caller keeps its behaviour.
-version: 0.8.0
+# 0.9.0: RequestDesk -- a party-owned desk whose OpenRfq creates a request AND invites
+# every dealer in one exercise (one root node), so an external party opens a request
+# to any number of dealers with ONE signature. Additive only: no existing template
+# changed, so contracts created under 0.8.0 keep working.
+version: 0.9.0
 dependencies:
   - daml-prim
   - daml-stdlib

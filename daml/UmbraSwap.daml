@@ -242,9 +242,11 @@ template SwapRfq
     -- create. At two dealers that is a wrinkle; at a hundred it is 101 wallet prompts to
     -- open one request, which is not a flow anyone would use.
     --
-    -- Submitted as a CreateAndExerciseCommand, this collapses the whole opening move to
-    -- a single signature. It grants nothing extra: the dealers are the ones already
-    -- named in , and InviteDealer remains for adding one later.
+    -- Exercised on its own after the create, it invites every dealer in ONE more
+    -- signature. (It cannot share the create's transaction: CreateAndExercise is two
+    -- root nodes, which interactive submission -- external parties -- refuses. For a
+    -- single signature see RequestDesk.OpenRfq.) It grants nothing extra: the dealers
+    -- are the ones already named in `invited`, and InviteDealer remains for adding one.
     nonconsuming choice InviteAll : [ContractId SwapInvitation]
       controller requester
       do
@@ -255,6 +257,47 @@ template SwapRfq
             rfqCid = self)
 
     choice CancelRfq : ()
+      controller requester
+      do pure ()
+
+
+-- A requester's own desk: opens a request AND invites every dealer on it in ONE
+-- signature.
+--
+-- Why a contract at all: an external party signs one root action per transaction,
+-- and a create plus an invite is two. A choice on a contract the party already holds
+-- is one root, and everything it creates sits beneath it -- so the opening move that
+-- took 1 + N signatures (then 2, with InviteAll) becomes 1. The desk is created once,
+-- by the party, and reused for every request.
+--
+-- It changes nobody's powers. The desk is `signatory requester` and OpenRfq is
+-- `controller requester`: only the party can open a request with it, exactly as if it
+-- had created the SwapRfq itself. The operator is an observer only so the venue can
+-- find the desk -- it can neither use it nor create one for anyone (that would need the
+-- party's signature). Unlike TradingMandate, nothing here lets the venue act.
+template RequestDesk
+  with
+    requester : Party
+    operator  : Party
+  where
+    signatory requester
+    observer operator
+
+    nonconsuming choice OpenRfq : (ContractId SwapRfq, [ContractId SwapInvitation])
+      with
+        offerAsset  : AssetId
+        offerAmount : Decimal
+        wantAsset   : AssetId
+        invited     : [Party]
+        expiresAt   : Time
+      controller requester
+      do
+        rfq <- create SwapRfq with
+          requester; operator; offerAsset; offerAmount; wantAsset; invited; expiresAt
+        invs <- exercise rfq InviteAll
+        pure (rfq, invs)
+
+    choice CloseDesk : ()
       controller requester
       do pure ()
 

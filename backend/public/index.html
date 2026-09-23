@@ -6284,10 +6284,34 @@ function PartyPortal({ role, wallet, onExit }) {
         invited: (f.invited && f.invited.length) ? f.invited : ["dealer1", "dealer2"],
         ttlMins: f.ttlMins
       });
-      // A wallet requester signs the SwapRfq itself, and each InviteDealer after
-      // it -- the invites need the rfq cid, which only exists once the create has
-      // committed, so they cannot be bundled into one signature.
-      if (r.build) {
+      // A wallet requester signs for itself. External signing takes ONE root action per
+      // transaction, so opening goes through the wallet's RequestDesk (one signature for
+      // the request and every invitation); without a desk it is the create, then
+      // InviteAll (two signatures, whatever the number of dealers).
+      let r2 = r;
+      // First request ever: set up this wallet's request desk (one signature, once),
+      // then open through it. Every later request is a single signature.
+      if (r.build && r.needsDesk && r.deskCommands) {
+        try {
+          say("One-time setup: approve your request desk in your wallet…");
+          await signBuilt({ build: true, commands: r.deskCommands });
+          for (let i = 0; i < 6 && !(r2.viaDesk); i++) {
+            r2 = await post("/api/swap/rfq", {
+              requester: role, offerAsset: f.offerAsset, offerAmount: f.offerAmount,
+              wantAsset: f.wantAsset, invited: f.invited, ttlMins: f.ttlMins });
+            if (!r2.viaDesk) await new Promise(res => setTimeout(res, 1500));
+          }
+        } catch (e) {
+          // Declined in the wallet: stop, do not start asking for other signatures.
+          if (/reject|declin|denied|cancel/i.test((e && e.message) || "")) throw e;
+          r2 = r;   // no desk after all: the two-signature path below
+        }
+      }
+      if (r2.build && r2.viaDesk) {
+        say("Sign once to open the request and invite every dealer…");
+        await signBuilt(r2);
+      } else if (r2.build) {
+        const r = r2;
         say("Sign the request in your wallet…");
         await signBuilt(r);
         const rfqCid = await findRfqCid(r.party, r.expiresAt);
