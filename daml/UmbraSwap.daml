@@ -4,11 +4,13 @@ module UmbraSwap where
 import DA.Date (date, Month(..))
 import DA.Time (time, addRelTime, minutes)
 import DA.List (find)
-import DA.Optional (isSome, fromOptional)
+import DA.Action (filterA)
+import DA.Optional (isSome, isNone, fromOptional)
 import Splice.Api.Token.HoldingV1
 import Splice.Api.Token.MetadataV1
 import Splice.Api.Token.AllocationV1
 import Splice.Api.Token.AllocationRequestV1
+import Splice.Api.Token.AllocationInstructionV1
 import qualified DA.TextMap as TextMap
 
 -- ============================================================================
@@ -301,6 +303,57 @@ template SwapRfq
         archive self
         pure deals
 
+    -- Award FIRM quotes (0.12.0) in ONE signature: take each part, lock the
+    -- requester's own leg for it, and send every other firm quote's locks home.
+    --
+    -- Each dealer locked its side when it quoted, so once this commits every leg of
+    -- a whole-quote part is in and the venue settles it straight away; a part that
+    -- takes less than the dealer locked is shrunk to size by the venue first (see
+    -- FirmRelock). Nothing needs either side to come back.
+    --
+    -- Nonconsuming + archive at the end, as AwardSplit, and for a second reason: the
+    -- operator observes this request, so a CONSUMING root would make the venue an
+    -- informee of everything beneath it -- including the losing quotes released here.
+    -- Nonconsuming, the root's informees are the requester alone; each dealer sees
+    -- only its own quote's part, and the venue only the deals and awards it observes.
+    nonconsuming choice AwardFirm : [ContractId SwapDeal]
+      with
+        parts    : [FirmPart]
+        releases : [QuoteRelease]
+        keepRest : Bool
+      controller requester
+      do
+        assertMsg "pick at least one quote" (not (null parts))
+        let total = sum (map (\x -> x.fill) parts)
+        assertMsg "the parts add up to more than the request" (total <= offerAmount)
+        deals <- takeParts self parts []
+        _ <- forA releases (\r ->
+          exercise r.quoteCid ReleaseFirm with wantArgs = r.wantArgs; feeArgs = r.feeArgs)
+        let remaining = offerAmount - total
+        if keepRest && remaining > 0.0
+          then do
+            rest <- create this with offerAmount = remaining
+            _ <- forA invited (\d ->
+              create SwapInvitation with
+                requester; operator; dealer = d
+                offerAsset; offerAmount = remaining; wantAsset; expiresAt
+                rfqCid = rest)
+            pure ()
+          else pure ()
+        archive self
+        pure deals
+
+    -- Withdraw the request and send every firm quote's locks home, in one signature.
+    -- Nonconsuming for the same reason as AwardFirm.
+    nonconsuming choice CancelFirm : ()
+      with
+        releases : [QuoteRelease]
+      controller requester
+      do
+        _ <- forA releases (\r ->
+          exercise r.quoteCid ReleaseFirm with wantArgs = r.wantArgs; feeArgs = r.feeArgs)
+        archive self
+
 
 -- A requester's own desk: opens a request AND invites every dealer on it in ONE
 -- signature.
@@ -333,6 +386,28 @@ template RequestDesk
         expiresAt   : Time
       controller requester
       do
+        rfq <- create SwapRfq with
+          requester; operator; offerAsset; offerAmount; wantAsset; invited; expiresAt
+        invs <- exercise rfq InviteAll
+        pure (rfq, invs)
+
+    -- Open a request AND send home the locks of firm quotes on this requester's
+    -- finished requests (0.12.0) -- the next request cleans up after the last, in the
+    -- same signature. Nonconsuming root: its informees are the requester alone (the
+    -- venue observes the desk but is not shown this), and each dealer sees only its
+    -- own quote go.
+    nonconsuming choice OpenRfqReleasing : (ContractId SwapRfq, [ContractId SwapInvitation])
+      with
+        offerAsset  : AssetId
+        offerAmount : Decimal
+        wantAsset   : AssetId
+        invited     : [Party]
+        expiresAt   : Time
+        releases    : [QuoteRelease]
+      controller requester
+      do
+        _ <- forA releases (\r ->
+          exercise r.quoteCid ReleaseFirm with wantArgs = r.wantArgs; feeArgs = r.feeArgs)
         rfq <- create SwapRfq with
           requester; operator; offerAsset; offerAmount; wantAsset; invited; expiresAt
         invs <- exercise rfq InviteAll
@@ -392,6 +467,66 @@ template SwapInvitation
           requester; operator; dealer
           offerAsset; offerAmount; wantAsset; price; validUntil
           rfqCid; maxFillAmount
+
+    -- A FIRM quote (0.12.0): the price AND the dealer's side of the trade, locked in
+    -- the dealer's own wallet, in ONE signature. The quote, the payment lock and the
+    -- fee lock used to be three separate approvals, because a wallet approves one
+    -- ledger action at a time; here they are one action.
+    --
+    -- The locks name the DEALER as executor, not the venue. An executor is a
+    -- stakeholder on its lock, so naming the venue would show it every quote's size
+    -- and price -- losing ones included. The venue only ever sees a quote's terms
+    -- once it is awarded, as today.
+    choice SubmitFirmQuote : ContractId FirmQuote
+      with
+        price         : Decimal
+        validUntil    : Time
+        maxFillAmount : Optional Decimal
+        feeParty      : Optional Party
+        feeAmount     : Optional Decimal      -- on the whole locked size
+        wantLock      : LockCall
+        feeLock       : Optional LockCall
+      controller dealer
+      do
+        now <- getTime
+        _ <- fetch rfqCid
+        assertMsg "price must be positive" (price > 0.0)
+        assertMsg "this request has expired" (now < expiresAt)
+        assertMsg "quote validity must be in the future" (validUntil > now)
+        case maxFillAmount of
+          Some m -> do
+            assertMsg "a fill limit must be positive" (m > 0.0)
+            assertMsg "a fill limit cannot exceed the request" (m <= offerAmount)
+          None -> pure ()
+        let fundedFill = fromOptional offerAmount maxFillAmount
+            fundedPrice = if fundedFill == offerAmount then price
+                          else (price * fundedFill) / offerAmount
+            tradeRef = offerAsset.symbol <> "/" <> wantAsset.symbol <> "@" <> show now
+                         <> "#" <> partyToText dealer
+            allocBy = addRelTime validUntil (minutes 15)
+            lockedUntil = addRelTime validUntil (minutes 30)
+            feeDue = case feeAmount of
+              Some a -> a > 0.0
+              None -> False
+        assertMsg "a fee needs a receiver" (not feeDue || isSome feeParty)
+        (wantCid, change) <- lockLeg dealer dealer requester wantAsset fundedPrice
+                               tradeRef "want" now allocBy lockedUntil wantLock
+        feeCid <- if not feeDue then pure None else
+          case (feeParty, feeAmount, feeLock) of
+            (Some fp, Some fa, Some fl) -> do
+              let fl' = if null fl.inputs then fl with inputs = change else fl
+              (c, _) <- lockLeg dealer dealer fp wantAsset fa tradeRef "fee" now allocBy lockedUntil fl'
+              pure (Some c)
+            _ -> abort "a fee was agreed but no fee lock was supplied"
+        create FirmQuote with
+          requester; operator; dealer
+          offerAsset; offerAmount; wantAsset; price; validUntil
+          rfqCid; maxFillAmount; fundedFill; tradeRef
+          wantAllocCid = wantCid
+          feeParty = if feeDue then feeParty else None
+          feeAmount = if feeDue then feeAmount else None
+          feeAllocCid = feeCid
+          lockedUntil
 
     choice DeclineInvitation : ()
       controller dealer
@@ -752,12 +887,14 @@ template SwapDeal
             && ol.instrumentId.id == offerAsset.symbol
             && ol.instrumentId.admin == offerAsset.admin
             && ov.settlement.executor == operator)
+        -- The dealer's leg names the venue as executor, or -- locked at quote time,
+        -- 0.12.0 -- the dealer itself. Either way it moves only under this deal.
         assertMsg "the want allocation is not this deal's want leg"
           (wl.sender == dealer && wl.receiver == requester
             && wl.amount == price
             && wl.instrumentId.id == wantAsset.symbol
             && wl.instrumentId.admin == wantAsset.admin
-            && wv.settlement.executor == operator)
+            && (wv.settlement.executor == operator || wv.settlement.executor == dealer))
 
         _ <- exercise offerAllocCid Allocation_ExecuteTransfer with extraArgs = offerArgs
         _ <- exercise wantAllocCid Allocation_ExecuteTransfer with extraArgs = wantArgs
@@ -772,7 +909,7 @@ template SwapDeal
                 && Some fl.amount == feeAmount
                 && fl.instrumentId.id == wantAsset.symbol
                 && fl.instrumentId.admin == wantAsset.admin
-                && fv.settlement.executor == operator)
+                && (fv.settlement.executor == operator || fv.settlement.executor == dealer))
             -- Executing a leg needs the RECEIVER's authority too. The venue's own is
             -- present here; any other fee receiver lends it through its FeeReceiver.
             case feeReceiver of
@@ -862,7 +999,9 @@ template FeeReceiver
         let v = (view a).allocation
         assertMsg "this allocation does not pay this receiver" (v.transferLeg.receiver == receiver)
         assertMsg "the paying dealer must be the allocation's sender" (v.transferLeg.sender == dealer)
-        assertMsg "the venue must be the allocation's executor" (v.settlement.executor == operator)
+        -- the venue, or (a fee locked with a firm quote, 0.12.0) the paying dealer
+        assertMsg "the venue or the paying dealer must be the allocation's executor"
+          (v.settlement.executor == operator || v.settlement.executor == dealer)
         exercise allocCid Allocation_ExecuteTransfer with extraArgs
 
     nonconsuming choice ReturnFee : Allocation_CancelResult
@@ -1456,6 +1595,48 @@ template DealerRegistration
       controller dealer
       do pure ()
 
+    -- Send the locks of this dealer's own firm quotes home, several at once (0.12.0).
+    -- Nonconsuming: its informees are the dealer alone, so the venue (an observer
+    -- here) is not shown them, and each requester sees only its own quote go.
+    -- Quote firm AND take back this dealer's dead quotes' locks, in ONE signature: the
+    -- next quote cleans up after the last. What comes home in the quoted asset can back
+    -- the new lock. Nonconsuming root, informees the dealer alone: the requester being
+    -- quoted sees its own quote, never the other quotes going home.
+    nonconsuming choice QuoteFirm : ContractId FirmQuote
+      with
+        invitation    : ContractId SwapInvitation
+        price         : Decimal
+        validUntil    : Time
+        maxFillAmount : Optional Decimal
+        feeParty      : Optional Party
+        feeAmount     : Optional Decimal
+        wantLock      : LockCall
+        feeLock       : Optional LockCall
+        releases      : [QuoteRelease]
+      controller dealer
+      do
+        freed <- forA releases (\r ->
+          exercise r.quoteCid PullFirm with wantArgs = r.wantArgs; feeArgs = r.feeArgs)
+        inv <- fetch invitation
+        assertMsg "that invitation is not to this dealer" (inv.dealer == dealer)
+        usable <- filterA (\h -> do
+          v <- view <$> fetch h
+          pure (v.owner == dealer && v.instrumentId.admin == inv.wantAsset.admin
+                && v.instrumentId.id == inv.wantAsset.symbol && isNone v.lock)) (concat freed)
+        exercise invitation SubmitFirmQuote with
+          price; validUntil; maxFillAmount; feeParty; feeAmount
+          wantLock = wantLock with inputs = wantLock.inputs ++ usable
+          feeLock
+
+    nonconsuming choice PullFirmQuotes : [ContractId Holding]
+      with
+        releases : [QuoteRelease]
+      controller dealer
+      do
+        freed <- forA releases (\r ->
+          exercise r.quoteCid PullFirm with wantArgs = r.wantArgs; feeArgs = r.feeArgs)
+        pure (concat freed)
+
 template DealerSuspension
   with
     operator : Party
@@ -1469,3 +1650,252 @@ template DealerSuspension
     choice LiftSuspension : ()
       controller operator
       do pure ()
+
+
+-- ----------------------------------------------------------------------------
+-- FIRM QUOTES (0.12.0): the dealer locks when it quotes
+-- ----------------------------------------------------------------------------
+-- A request already states what the requester gives and wants; a dealer's price
+-- completes the trade. So the dealer locks its side WITH the quote -- one signature
+-- for quote, payment lock and fee lock -- and the requester's award locks its own
+-- side in the same signature. Every leg is then in, and the venue settles.
+--
+-- Custody never moves: every lock sits in its owner's wallet at the token registry
+-- and can only execute as the deal both signed, or go back to its owner.
+
+-- How to lock one leg through the token registry: its factory, the registry's
+-- context for the call, and the holdings to lock (empty = the change from the
+-- previous lock in the same transaction).
+data LockCall = LockCall
+  with
+    factory   : ContractId AllocationFactory
+    extraArgs : ExtraArgs
+    inputs    : [ContractId Holding]
+  deriving (Eq, Show)
+
+-- One firm quote to send home, with the registry context for each of its locks.
+data QuoteRelease = QuoteRelease
+  with
+    quoteCid : ContractId FirmQuote
+    wantArgs : ExtraArgs
+    feeArgs  : Optional ExtraArgs
+  deriving (Eq, Show)
+
+-- One part of a firm award: which quote, how much of the request, and the
+-- requester's own lock for it.
+data FirmPart = FirmPart
+  with
+    quoteCid  : ContractId FirmQuote
+    fill      : Decimal
+    offerLock : LockCall
+  deriving (Eq, Show)
+
+-- Lock one leg: the allocation is spelled out HERE, from terms the contract
+-- already holds, so the caller supplies only the registry plumbing and cannot
+-- change who pays whom, how much, or under which trade.
+lockLeg : Party -> Party -> Party -> AssetId -> Decimal -> Text -> Text -> Time -> Time -> Time
+       -> LockCall -> Update (ContractId Allocation, [ContractId Holding])
+lockLeg executor sender receiver asset amount ref legId now allocBy settleBy call = do
+  r <- exercise call.factory AllocationFactory_Allocate with
+    expectedAdmin = asset.admin
+    allocation = AllocationSpecification with
+      settlement = SettlementInfo with
+        executor
+        settlementRef = Reference with id = ref, cid = None
+        requestedAt = now
+        allocateBefore = allocBy
+        settleBefore = settleBy
+        meta = emptyMetadata
+      transferLegId = legId
+      transferLeg = TransferLeg with
+        sender; receiver; amount
+        instrumentId = InstrumentId with admin = asset.admin, id = asset.symbol
+        meta = emptyMetadata
+    requestedAt = now
+    inputHoldingCids = call.inputs
+    extraArgs = call.extraArgs
+  case r.output of
+    AllocationInstructionResult_Completed c -> pure (c, r.senderChangeCids)
+    _ -> abort ("the registry did not lock the " <> legId <> " leg straight away")
+
+-- Withdraw a quote's locks; the holdings go back to the dealer.
+releaseLocks : ContractId Allocation -> Optional (ContractId Allocation) -> ExtraArgs
+            -> Optional ExtraArgs -> Update [ContractId Holding]
+releaseLocks w f wa fa = do
+  r1 <- exercise w Allocation_Withdraw with extraArgs = wa
+  r2 <- case (f, fa) of
+    (Some fc, Some a) -> do
+      r <- exercise fc Allocation_Withdraw with extraArgs = a
+      pure r.senderHoldingCids
+    (Some _, None) -> abort "the fee lock needs its registry context to be released"
+    _ -> pure []
+  pure (r1.senderHoldingCids ++ r2)
+
+-- Take each part in turn, chaining the requester's change from one lock to the next.
+takeParts : ContractId SwapRfq -> [FirmPart] -> [ContractId Holding] -> Update [ContractId SwapDeal]
+takeParts _ [] _ = pure []
+takeParts rfq (x :: xs) change = do
+  q <- fetch x.quoteCid
+  assertMsg "that quote does not answer this request" (q.rfqCid == rfq)
+  let ol = x.offerLock
+      lk = if null ol.inputs then ol with inputs = change else ol
+  (d, change') <- exercise x.quoteCid TakeFirm with fill = x.fill; offerLock = lk
+  ds <- takeParts rfq xs change'
+  pure (d :: ds)
+
+template FirmQuote
+  with
+    requester     : Party
+    operator      : Party
+    dealer        : Party
+    offerAsset    : AssetId
+    offerAmount   : Decimal
+    wantAsset     : AssetId
+    price         : Decimal            -- total wantAsset for the WHOLE offer
+    validUntil    : Time
+    rfqCid        : ContractId SwapRfq
+    maxFillAmount : Optional Decimal
+    fundedFill    : Decimal            -- how much of the request the locks cover
+    tradeRef      : Text               -- the settlement reference every lock carries
+    wantAllocCid  : ContractId Allocation
+    feeParty      : Optional Party
+    feeAmount     : Optional Decimal   -- on fundedFill
+    feeAllocCid   : Optional (ContractId Allocation)
+    lockedUntil   : Time
+  where
+    -- Exactly as SwapQuote: the dealer signs, only the requester sees it. The venue
+    -- is not on it, and not on its locks.
+    signatory dealer
+    observer requester
+
+    -- The requester takes `fill` of the request. Its own leg is locked here too, so a
+    -- whole-quote award leaves a deal with every leg in.
+    choice TakeFirm : (ContractId SwapDeal, [ContractId Holding])
+      with
+        fill      : Decimal
+        offerLock : LockCall
+      controller requester
+      do
+        now <- getTime
+        _ <- fetch rfqCid
+        assertMsg "this quote is no longer firm" (now < validUntil)
+        assertMsg "a fill must be positive" (fill > 0.0)
+        assertMsg "this dealer did not lock that much" (fill <= fundedFill)
+        let full = fill == fundedFill
+            fillPrice = if fill == offerAmount then price else (price * fill) / offerAmount
+            partFee = if full then feeAmount else fmap (\f -> (f * fill) / fundedFill) feeAmount
+            tradeId = if full then tradeRef else tradeRef <> "~" <> show fill
+            allocBy = addRelTime now (minutes 15)
+            settleBy = addRelTime now (minutes 30)
+        (_, change) <- lockLeg operator requester dealer offerAsset fill tradeId "offer"
+                         now allocBy settleBy offerLock
+        _ <- create RfqAward with
+          requester; operator; dealer
+          offerAsset; offerAmount
+          filledAmount = fill
+          wantAsset
+          price = fillPrice
+          awardedAt = now
+        -- Less than the dealer locked: the venue swaps its locks for ones of exactly
+        -- this size before settling (FirmRelock). A whole quote needs nothing.
+        if full then pure () else do
+          _ <- create FirmRelock with
+            requester; operator; dealer; wantAsset; tradeId
+            price = fillPrice; feeParty; feeAmount = partFee
+            allocateBefore = allocBy
+            fundedWant = wantAllocCid; fundedFee = feeAllocCid; released = False
+          pure ()
+        d <- create SwapDeal with
+          requester; operator; dealer
+          offerAsset
+          offerAmount = fill
+          wantAsset
+          price = fillPrice
+          tradeId
+          allocateBefore = allocBy
+          settleBefore = settleBy
+          feeParty
+          feeAmount = partFee
+        pure (d, change)
+
+    -- The requester passes on this quote (another won, or the request is withdrawn):
+    -- the dealer's locks go home in the requester's own award or cancel.
+    choice ReleaseFirm : [ContractId Holding]
+      with
+        wantArgs : ExtraArgs
+        feeArgs  : Optional ExtraArgs
+      controller requester
+      do releaseLocks wantAllocCid feeAllocCid wantArgs feeArgs
+
+    -- The dealer takes its quote and its locks back.
+    choice PullFirm : [ContractId Holding]
+      with
+        wantArgs : ExtraArgs
+        feeArgs  : Optional ExtraArgs
+      controller dealer
+      do releaseLocks wantAllocCid feeAllocCid wantArgs feeArgs
+
+    -- Retract a quote whose locks are already gone (withdrawn in the wallet).
+    choice RetractFirm : ()
+      controller dealer
+      do pure ()
+
+
+-- A firm quote awarded for LESS than the dealer locked. The venue swaps the
+-- dealer's locks for ones of exactly the awarded size: first sending the quote-time
+-- locks home, then locking the part. It can do nothing else -- the terms are fixed
+-- here, signed by both principals, and every new lock is spelled out by lockLeg.
+template FirmRelock
+  with
+    requester      : Party
+    operator       : Party
+    dealer         : Party
+    wantAsset      : AssetId
+    tradeId        : Text
+    price          : Decimal          -- the part's price
+    feeParty       : Optional Party
+    feeAmount      : Optional Decimal -- the part's fee
+    allocateBefore : Time
+    fundedWant     : ContractId Allocation
+    fundedFee      : Optional (ContractId Allocation)
+    released       : Bool
+  where
+    signatory requester, dealer
+    observer operator
+
+    choice ReleaseFunded : ContractId FirmRelock
+      with
+        wantArgs : ExtraArgs
+        feeArgs  : Optional ExtraArgs
+      controller operator
+      do
+        assertMsg "already released" (not released)
+        _ <- releaseLocks fundedWant fundedFee wantArgs feeArgs
+        create this with released = True
+
+    choice LockPart : ()
+      with
+        want : LockCall
+        fee  : Optional LockCall
+      controller operator
+      do
+        now <- getTime
+        assertMsg "release the quote's locks first" released
+        assertMsg "this part is past its lock deadline" (now < allocateBefore)
+        let settleBy = addRelTime allocateBefore (minutes 15)
+        (_, change) <- lockLeg operator dealer requester wantAsset price tradeId "want"
+                         now allocateBefore settleBy want
+        case (feeParty, feeAmount) of
+          (Some fp, Some fa) | fa > 0.0 -> case fee of
+            Some fc -> do
+              let fc' = if null fc.inputs then fc with inputs = change else fc
+              _ <- lockLeg operator dealer fp wantAsset fa tradeId "fee" now allocateBefore settleBy fc'
+              pure ()
+            None -> abort "this part owes a fee: supply its lock"
+          _ -> pure ()
+
+    -- Nothing left to do: the quote's locks are home (and the part is locked, or
+    -- its deal is over).
+    choice DropRelock : ()
+      controller operator
+      do assertMsg "the quote's locks must be sent home first" released

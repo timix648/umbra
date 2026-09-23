@@ -5992,6 +5992,15 @@ function PartyPortal({ role, wallet, onExit }) {
         let dealTrade = null;
         const dl = await api("/api/swap/deals?role=" + enc2(role)).catch(() => ({}));
         if (dl && Array.isArray(dl.deals)) {
+          for (const d of dl.deals) {
+            if (dealWatch.current[d.contractId]) continue;
+            const dp = d.payload, amDealer = dp.dealer === role;
+            watchDeal(d, amDealer
+              ? { offerSym: dispSym(dp.wantAsset.symbol), offerAmt: dp.price, wantSym: dispSym(dp.offerAsset.symbol),
+                  wantAmt: dp.offerAmount, dealerName: "the requester" }
+              : { offerSym: dispSym(dp.offerAsset.symbol), offerAmt: dp.offerAmount, wantSym: dispSym(dp.wantAsset.symbol),
+                  wantAmt: dp.price, dealerName: DEALER_NAME(dp.dealer) });
+          }
           const openIds = new Set(dl.deals.map(d => d.contractId));
           for (const [cid, w] of Object.entries(dealWatch.current)) {
             if (openIds.has(cid)) continue;
@@ -6415,7 +6424,12 @@ function PartyPortal({ role, wallet, onExit }) {
     // holding of the want-asset >= the price, or it reverts at settlement and
     // wastes the requester\u2019s award. Block it here, not at the ledger.
     const _wMax = holdings.filter(h => sameSym(h.payload.asset.symbol, wantSym)).reduce((s, h) => s + Number(h.payload.amount), 0);
-    const _cost = quoteCost(fee, p, wantSym);
+    // A capped quote locks only its capped share of the price.
+    const _iv = (inv || []).find(x => x.contractId === cid);
+    const _whole = _iv ? Number(_iv.payload.offerAmount) : 0;
+    const _capN = Number(maxFill[cid] || 0);
+    const _share = _whole && _capN > 0 && _capN < _whole ? _capN / _whole : 1;
+    const _cost = quoteCost(fee, Number(p) * _share, wantSym);
     if (_cost > _wMax + 1e-12) { say("You cannot back that: with the venue fee it costs " + fmtAmtStr(_cost) + " " + dispSym(wantSym) + " and you hold " + fmtAmtStr(_wMax) + ". Quote lower, or fund your party first.", true); return; }
     setBusy(b => ({ ...b, [cid]: true }));
     try {
@@ -6424,8 +6438,15 @@ function PartyPortal({ role, wallet, onExit }) {
       const capN = Number(maxFill[cid] || 0);
       const cap = capN > 0 && (!whole || capN < whole) ? String(capN) : null;
       const r = await post("/api/swap/invitations/" + cid + "/quote", { dealer: role, price: p, maxFillAmount: cap });
-      if (r.build) { say("Sign your quote in your wallet…"); await signBuilt(r); }
-      say("Quote sent. Only the buyer can see it.");
+      if (r.build) {
+        say(r.firm ? "Sign once in your wallet: your quote, and the " + fmtAmtStr(r.locks.amount) + " " +
+          dispSym(r.locks.symbol) + (r.locks.fee ? " + fee" : "") + " that backs it…" : "Sign your quote in your wallet…", false, 60000);
+        await signBuilt(r);
+      }
+      say(r.firm
+        ? "Quote sent, backed by your locked " + dispSym(r.locks.symbol) + ". If the buyer takes it, it settles by itself; " +
+          "if not, it comes back to you." + (r.released ? " Funds from your earlier expired quotes came back too." : "")
+        : "Quote sent. Only the buyer can see it.", false, 9000);
       setPrice(x => { const n = { ...x }; delete n[cid]; return n; });
       load();
     } catch (e) { say(e.message, true); }
@@ -6443,6 +6464,7 @@ function PartyPortal({ role, wallet, onExit }) {
     const extra = [];
     const others = myQuotes
       .filter(x => x.contractId !== q.contractId && x.payload.rfqCid === p.rfqCid &&
+                   (x.kind === "firm") === (q.kind === "firm") &&
                    new Date(x.payload.validUntil).getTime() > Date.now())
       .sort((a, b) => Number(b.payload.price) - Number(a.payload.price));   // most for the offer first
     for (const o of others) {
@@ -6456,6 +6478,10 @@ function PartyPortal({ role, wallet, onExit }) {
   async function doAwardSplit(plan, mode) {
     setSplit(null);
     if (!mode || awarding) return;
+    if (plan.q.kind === "firm") {
+      const chosen = [plan.first].concat(mode === "all" ? plan.extra : []);
+      return awardFirm(plan.q, chosen, mode === "keep");
+    }
     const p = plan.q.payload;
     const parts = [{ quoteCid: plan.first.q.contractId, fill: plan.first.fill }];
     if (mode === "all") plan.extra.forEach(x => parts.push({ quoteCid: x.q.contractId, fill: x.fill }));
@@ -6500,8 +6526,46 @@ function PartyPortal({ role, wallet, onExit }) {
     } finally { setAwarding(false); setAwardStep(null); }
   }
 
+  // FIRM quotes (0.12.0): every dealer already locked its side when it quoted, so one
+  // signature takes the quote(s), locks the requester's side and sends every other
+  // quote's locks home. The venue settles right after; the panel opens when it has.
+  async function awardFirm(q0, parts, keepRest) {
+    const p = q0.payload, enc = encodeURIComponent;
+    setAwarding(true);
+    try {
+      setAwardStep("Approve once in your wallet: take " + (parts.length > 1 ? "these " + parts.length + " quotes" : "this quote") +
+        " and lock your " + dispSym(p.offerAsset.symbol) + "…");
+      const before = new Set((((await api("/api/swap/deals?role=" + enc(role)).catch(() => ({}))).deals) || []).map(d => d.contractId));
+      const a = await post("/api/swap/rfqs/" + p.rfqCid + "/award-firm",
+        { requester: role, parts: parts.map(x => ({ quoteCid: x.q.contractId, fill: x.fill })), keepRest: !!keepRest });
+      await signBuilt(a);
+      post("/api/swap/deals/kick", {}).catch(() => {});
+      setAwardStep("Settling…");
+      let fresh = [];
+      for (let i = 0; i < 15; i++) {
+        fresh = (((await api("/api/swap/deals?role=" + enc(role)).catch(() => ({}))).deals) || [])
+          .filter(d => !before.has(d.contractId));
+        if (fresh.length >= parts.length) break;
+        await new Promise(r => setTimeout(r, 1200));
+      }
+      for (const d of fresh) {
+        watchDeal(d, { offerSym: dispSym(p.offerAsset.symbol), offerAmt: d.payload.offerAmount,
+          wantSym: dispSym(p.wantAsset.symbol), wantAmt: d.payload.price, dealerName: DEALER_NAME(d.payload.dealer) });
+      }
+      say("Done on your side. The trade settles in a few seconds — nothing more to sign.", false, 9000);
+      load();
+    } catch (e) {
+      say((e && e.message) || "the award did not go through", !(e && e.declined), 9000);
+    } finally { setAwarding(false); setAwardStep(null); }
+  }
+
   async function awardQuote(q) {
     if (awarding) return;
+    if (q.kind === "firm") {
+      const whole = Number(q.payload.offerAmount), funded = Number(q.payload.fundedFill);
+      if (funded < whole - 1e-12) { setSplit(planSplit(q)); return; }
+      return awardFirm(q, [{ q, fill: whole }], false);
+    }
     // The quote takes less than the whole request: ask what to do with the rest.
     const _cap = q.payload.maxFillAmount != null ? Number(q.payload.maxFillAmount) : null;
     if (wallet && _cap != null && _cap < Number(q.payload.offerAmount) - 1e-12) {

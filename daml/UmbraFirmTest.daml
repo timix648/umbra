@@ -1,0 +1,386 @@
+module UmbraFirmTest where
+
+import UmbraSwap
+import Splice.Api.Token.HoldingV1
+import Splice.Api.Token.AllocationV1
+import Splice.Api.Token.AllocationInstructionV1
+import Splice.Api.Token.MetadataV1
+import Daml.Script
+import DA.Time (addRelTime, minutes)
+import DA.Assert ((===))
+import DA.List (sort)
+
+-- ============================================================================
+-- Proofs for firm quotes (0.12.0).
+--
+-- The dealer locks its side WITH its quote, and the requester's award locks the
+-- other side, so each signs once and the venue settles:
+--
+--   one dealer signature = the quote + its payment lock + its fee lock
+--   the venue is on none of it: not the quote, not its locks
+--   a whole-quote award leaves every leg in, and the venue settles it
+--   the same award sends every losing quote's locks home -- in that one signature
+--   a part smaller than the dealer locked is shrunk to size, then settles
+--   only the requester can take a quote; nobody can take more than was locked
+--   withdrawing the request sends every lock home
+--   a dealer can take its own quotes and locks back, several at once
+--   a fee locked at quote time lands in a wallet the venue has no key for
+-- ============================================================================
+
+-- A stand-in registry: locks by splitting the input holdings into a locked part
+-- (backing the allocation) and change, as a real registry does.
+template TestFactory
+  with
+    admin : Party
+    users : [Party]
+  where
+    signatory admin
+    observer users
+
+    interface instance AllocationFactory for TestFactory where
+      view = AllocationFactoryView with admin; meta = emptyMetadata
+      allocationFactory_allocateImpl _self arg = do
+        let leg = arg.allocation.transferLeg
+            asset = AssetId with admin = leg.instrumentId.admin, symbol = leg.instrumentId.id
+        assertMsg "wrong registry" (arg.expectedAdmin == admin && asset.admin == admin)
+        hs <- forA arg.inputHoldingCids (\c -> do
+          let hc = fromInterfaceContractId @AssetHolding c
+          h <- fetch hc
+          assertMsg "not the sender's holding" (h.owner == leg.sender && h.asset == asset)
+          archive hc
+          pure h.amount)
+        let total = sum hs
+        assertMsg "insufficient funds to lock" (total >= leg.amount)
+        locked <- create AssetHolding with owner = leg.sender; asset; amount = leg.amount
+        change <- if total > leg.amount
+          then do
+            c <- create AssetHolding with owner = leg.sender; asset; amount = total - leg.amount
+            pure [toInterfaceContractId @Holding c]
+          else pure []
+        a <- create AssetAllocation with
+          sender = leg.sender; receiver = leg.receiver
+          executor = arg.allocation.settlement.executor
+          asset; amount = leg.amount; holdingCid = locked
+          legId = arg.allocation.transferLegId
+        pure AllocationInstructionResult with
+          output = AllocationInstructionResult_Completed with allocationCid = toInterfaceContractId @Allocation a
+          senderChangeCids = change
+          meta = emptyMetadata
+      allocationFactory_publicFetchImpl _self _arg =
+        pure (AllocationFactoryView with admin; meta = emptyMetadata)
+
+data F = F
+  with
+    operator  : Party
+    requester : Party
+    dealerA   : Party
+    dealerB   : Party
+    vault     : Party
+    cbtc      : AssetId
+    cc        : AssetId
+    btcReg    : ContractId AllocationFactory
+    ccReg     : ContractId AllocationFactory
+
+setupF : Script F
+setupF = do
+  operator  <- allocateParty "operator"
+  requester <- allocateParty "requester"
+  dealerA   <- allocateParty "dealerA"
+  dealerB   <- allocateParty "dealerB"
+  vault     <- allocateParty "vault"
+  btcIssuer <- allocateParty "BitSafe"
+  ccAdmin   <- allocateParty "CantonCoin"
+  let users = [operator, requester, dealerA, dealerB, vault]
+  b <- submit btcIssuer do createCmd TestFactory with admin = btcIssuer; users
+  c <- submit ccAdmin do createCmd TestFactory with admin = ccAdmin; users
+  pure F with
+    operator; requester; dealerA; dealerB; vault
+    cbtc = AssetId with admin = btcIssuer, symbol = "CBTC"
+    cc   = AssetId with admin = ccAdmin,   symbol = "Amulet"
+    btcReg = toInterfaceContractId @AllocationFactory b
+    ccReg  = toInterfaceContractId @AllocationFactory c
+
+mint : Party -> AssetId -> Decimal -> Script (ContractId Holding)
+mint owner asset amount = do
+  c <- submitMulti [owner, asset.admin] [] do
+    createCmd AssetHolding with owner; asset; amount
+  pure (toInterfaceContractId @Holding c)
+
+ea : ExtraArgs
+ea = ExtraArgs with context = emptyChoiceContext; meta = emptyMetadata
+
+call : ContractId AllocationFactory -> [ContractId Holding] -> LockCall
+call f hs = LockCall with factory = f; extraArgs = ea; inputs = hs
+
+-- Everything a party owns, by asset.
+wallet : Party -> Script [(Text, Decimal)]
+wallet p = do
+  hs <- query @AssetHolding p
+  pure (sort (map (\(_, h) -> (h.asset.symbol, h.amount)) (filter (\(_, h) -> h.owner == p) hs)))
+
+total : Party -> Text -> Script Decimal
+total p sym = do
+  w <- wallet p
+  pure (sum (map snd (filter (\(s, _) -> s == sym) w)))
+
+-- A 2 CBTC request for CC to both dealers.
+openRfq : F -> Script (ContractId SwapRfq, ContractId SwapInvitation, ContractId SwapInvitation)
+openRfq f = do
+  now <- getTime
+  rfq <- submit f.requester do
+    createCmd SwapRfq with
+      requester = f.requester; operator = f.operator
+      offerAsset = f.cbtc; offerAmount = 2.0; wantAsset = f.cc
+      invited = [f.dealerA, f.dealerB]; expiresAt = addRelTime now (minutes 30)
+  _ <- submit f.requester do exerciseCmd rfq InviteAll
+  [(ia, _)] <- filter (\(_, i) -> i.rfqCid == rfq) <$> query @SwapInvitation f.dealerA
+  [(ib, _)] <- filter (\(_, i) -> i.rfqCid == rfq) <$> query @SwapInvitation f.dealerB
+  pure (rfq, ia, ib)
+
+-- One signature: the quote, the payment lock and (if any) the fee lock.
+firm : F -> Party -> ContractId SwapInvitation -> Decimal -> Optional Decimal -> Optional Decimal
+    -> Script (ContractId FirmQuote)
+firm f dealer inv price cap fee = do
+  now <- getTime
+  cash <- mint dealer f.cc 2000.0
+  submit dealer do
+    exerciseCmd inv SubmitFirmQuote with
+      price; validUntil = addRelTime now (minutes 20); maxFillAmount = cap
+      feeParty = fmap (const f.vault) fee; feeAmount = fee
+      wantLock = call f.ccReg [cash]
+      feeLock = fmap (const (call f.ccReg [])) fee
+
+release : F -> Party -> ContractId FirmQuote -> Script QuoteRelease
+release f who q = do
+  Some fq <- queryContractId who q
+  pure QuoteRelease with
+    quoteCid = q; wantArgs = ea
+    feeArgs = fmap (const ea) fq.feeAllocCid
+
+-- The legs of a deal, found the way the venue finds them: by sender and leg.
+legOf : Party -> Party -> Text -> Script (ContractId Allocation)
+legOf reader sender legId = do
+  as <- query @AssetAllocation reader
+  case filter (\(_, a) -> a.sender == sender && a.legId == legId) as of
+    [(c, _)] -> pure (toInterfaceContractId @Allocation c)
+    xs -> do
+      debug ("legs found: " <> show (length xs))
+      abort ("expected exactly one " <> legId <> " leg")
+
+settle : F -> ContractId SwapDeal -> Party -> Optional (ContractId FeeReceiver) -> Script ()
+settle f d dealer fr = do
+  Some deal <- queryContractId f.operator d
+  o <- legOf f.requester f.requester "offer"
+  w <- legOf f.requester dealer "want"
+  fee <- case deal.feeAmount of
+    Some _ -> fmap Some (legOf dealer dealer "fee")
+    None -> pure None
+  _ <- submitMulti [f.operator] [f.requester, dealer] do
+    exerciseCmd d SettleDeal with
+      offerAllocCid = o; wantAllocCid = w; offerArgs = ea; wantArgs = ea
+      feeAllocCid = fee; feeArgs = fmap (const ea) fee; feeReceiver = fr
+  pure ()
+
+aFirmQuoteIsOneSignatureAndLocksTheDealersSide : Script ()
+aFirmQuoteIsOneSignatureAndLocksTheDealersSide = do
+  f <- setupF
+  (_, ia, _) <- openRfq f
+  q <- firm f f.dealerA ia 1000.0 None (Some 5.0)
+  Some fq <- queryContractId f.requester q
+  fq.fundedFill === 2.0
+  -- 1000 locked for the requester, 5 for the fee, 995 change: nothing lost
+  wallet f.dealerA >>= (=== sort [("Amulet", 1000.0), ("Amulet", 5.0), ("Amulet", 995.0)])
+  as <- query @AssetAllocation f.dealerA
+  sort (map (\(_, a) -> (a.legId, a.receiver, a.amount, a.executor)) as) ===
+    sort [("want", f.requester, 1000.0, f.dealerA), ("fee", f.vault, 5.0, f.dealerA)]
+
+theVenueIsOnNoFirmQuoteOrItsLocks : Script ()
+theVenueIsOnNoFirmQuoteOrItsLocks = do
+  f <- setupF
+  (_, ia, ib) <- openRfq f
+  _ <- firm f f.dealerA ia 1000.0 None None
+  _ <- firm f f.dealerB ib 990.0 None None
+  qs <- query @FirmQuote f.operator
+  length qs === 0
+  ls <- query @AssetAllocation f.operator
+  length ls === 0
+  -- and no dealer sees the other's
+  qa <- query @FirmQuote f.dealerA
+  map (\(_, x) -> x.dealer) qa === [f.dealerA]
+
+aWholeAwardIsOneSignatureAndSettles : Script ()
+aWholeAwardIsOneSignatureAndSettles = do
+  f <- setupF
+  fr <- submit f.vault do createCmd FeeReceiver with receiver = f.vault; operator = f.operator
+  (rfq, ia, _) <- openRfq f
+  q <- firm f f.dealerA ia 1000.0 None (Some 5.0)
+  btc <- mint f.requester f.cbtc 3.0
+  [d] <- submit f.requester do
+    exerciseCmd rfq AwardFirm with
+      parts = [FirmPart with quoteCid = q; fill = 2.0; offerLock = call f.btcReg [btc]]
+      releases = []; keepRest = False
+  -- every leg is in: the venue settles straight away
+  settle f d f.dealerA (Some fr)
+  wallet f.requester >>= (=== [("Amulet", 1000.0), ("CBTC", 1.0)])
+  total f.dealerA "CBTC" >>= (=== 2.0)
+  total f.dealerA "Amulet" >>= (=== 995.0)
+  wallet f.vault >>= (=== [("Amulet", 5.0)])
+  gone <- queryContractId f.requester rfq
+  gone === None
+
+theAwardSendsTheLosersLocksHome : Script ()
+theAwardSendsTheLosersLocksHome = do
+  f <- setupF
+  (rfq, ia, ib) <- openRfq f
+  qa <- firm f f.dealerA ia 1000.0 None None
+  qb <- firm f f.dealerB ib 990.0 None (Some 5.0)
+  rb <- release f f.requester qb
+  btc <- mint f.requester f.cbtc 2.0
+  -- readAs B: the requester is not on B's fee lock; on the network the venue
+  -- discloses it in the command
+  _ <- submitMulti [f.requester] [f.dealerB] do
+    exerciseCmd rfq AwardFirm with
+      parts = [FirmPart with quoteCid = qa; fill = 2.0; offerLock = call f.btcReg [btc]]
+      releases = [rb]; keepRest = False
+  -- B's quote is gone and its locks are home: all 2000 CC free, nothing allocated
+  gone <- queryContractId f.dealerB qb
+  gone === None
+  lb <- query @AssetAllocation f.dealerB
+  length (filter (\(_, a) -> a.sender == f.dealerB) lb) === 0
+  total f.dealerB "Amulet" >>= (=== 2000.0)
+  -- ...and the venue was shown none of it
+  qs <- query @FirmQuote f.operator
+  length qs === 0
+
+aSmallerPartIsShrunkToSizeThenSettles : Script ()
+aSmallerPartIsShrunkToSizeThenSettles = do
+  f <- setupF
+  fr <- submit f.vault do createCmd FeeReceiver with receiver = f.vault; operator = f.operator
+  (rfq, _, ib) <- openRfq f
+  -- B locks for the whole 2 CBTC (990 CC + 10 fee); the requester takes 1
+  q <- firm f f.dealerB ib 990.0 None (Some 10.0)
+  btc <- mint f.requester f.cbtc 1.0
+  [d] <- submit f.requester do
+    exerciseCmd rfq AwardFirm with
+      parts = [FirmPart with quoteCid = q; fill = 1.0; offerLock = call f.btcReg [btc]]
+      releases = []; keepRest = True
+  Some deal <- queryContractId f.operator d
+  (deal.offerAmount, deal.price, deal.feeAmount) === (1.0, 495.0, Some 5.0)
+  -- the venue swaps B's quote-time locks for ones of exactly this size
+  [(r, _)] <- query @FirmRelock f.operator
+  r2 <- submitMulti [f.operator] [f.dealerB] do
+    exerciseCmd r ReleaseFunded with wantArgs = ea; feeArgs = Some ea
+  free <- query @AssetHolding f.dealerB
+  let cash = [toInterfaceContractId @Holding c | (c, h) <- free, h.owner == f.dealerB, h.asset == f.cc]
+  _ <- submitMulti [f.operator] [f.dealerB] do
+    exerciseCmd r2 LockPart with want = call f.ccReg cash; fee = Some (call f.ccReg [])
+  settle f d f.dealerB (Some fr)
+  wallet f.requester >>= (=== [("Amulet", 495.0)])
+  total f.dealerB "Amulet" >>= (=== 1500.0)
+  wallet f.vault >>= (=== [("Amulet", 5.0)])
+  -- the other half is open again for new quotes
+  open <- query @SwapRfq f.requester
+  map (\(_, x) -> x.offerAmount) open === [1.0]
+
+onlyTheRequesterTakesAndNeverMoreThanLocked : Script ()
+onlyTheRequesterTakesAndNeverMoreThanLocked = do
+  f <- setupF
+  (rfq, ia, _) <- openRfq f
+  q <- firm f f.dealerA ia 1000.0 (Some 1.0) None
+  btc <- mint f.requester f.cbtc 2.0
+  let part x = FirmPart with quoteCid = q; fill = x; offerLock = call f.btcReg [btc]
+  submitMustFail f.requester do
+    exerciseCmd rfq AwardFirm with parts = [part 1.5]; releases = []; keepRest = False
+  submitMultiMustFail [f.operator] [f.requester] do
+    exerciseCmd rfq AwardFirm with parts = [part 1.0]; releases = []; keepRest = False
+  submitMultiMustFail [f.dealerA] [f.requester] do
+    exerciseCmd q TakeFirm with fill = 1.0; offerLock = call f.btcReg [btc]
+
+withdrawingTheRequestSendsEveryLockHome : Script ()
+withdrawingTheRequestSendsEveryLockHome = do
+  f <- setupF
+  (rfq, ia, ib) <- openRfq f
+  qa <- firm f f.dealerA ia 1000.0 None (Some 5.0)
+  qb <- firm f f.dealerB ib 990.0 None None
+  ra <- release f f.requester qa
+  rb <- release f f.requester qb
+  submitMulti [f.requester] [f.dealerA] do exerciseCmd rfq CancelFirm with releases = [ra, rb]
+  total f.dealerA "Amulet" >>= (=== 2000.0)
+  total f.dealerB "Amulet" >>= (=== 2000.0)
+  la <- query @AssetAllocation f.dealerA
+  length la === 0
+  gone <- queryContractId f.requester rfq
+  gone === None
+
+aDealerTakesItsOwnQuotesBackAtOnce : Script ()
+aDealerTakesItsOwnQuotesBackAtOnce = do
+  f <- setupF
+  now <- getTime
+  reg <- submit f.dealerA do
+    createCmd DealerRegistration with dealer = f.dealerA; operator = f.operator; since = now
+  (_, ia, _) <- openRfq f
+  (_, ia2, _) <- openRfq f
+  q1 <- firm f f.dealerA ia 1000.0 None None
+  q2 <- firm f f.dealerA ia2 1001.0 None None
+  r1 <- release f f.dealerA q1
+  r2 <- release f f.dealerA q2
+  _ <- submit f.dealerA do exerciseCmd reg PullFirmQuotes with releases = [r1, r2]
+  total f.dealerA "Amulet" >>= (=== 4000.0)
+  qs <- query @FirmQuote f.dealerA
+  length qs === 0
+  -- nobody else can pull a dealer's quote through the dealer's registration
+  submitMultiMustFail [f.operator] [f.dealerA] do
+    exerciseCmd reg PullFirmQuotes with releases = []
+
+aFirmFeeNeedsTheVenueAndTheDealer : Script ()
+aFirmFeeNeedsTheVenueAndTheDealer = do
+  f <- setupF
+  fr <- submit f.vault do createCmd FeeReceiver with receiver = f.vault; operator = f.operator
+  (_, ia, _) <- openRfq f
+  q <- firm f f.dealerA ia 1000.0 None (Some 5.0)
+  Some fq <- queryContractId f.dealerA q
+  let Some fc = fq.feeAllocCid
+  -- the dealer alone cannot pull the fee into the vault, nor can the venue alone
+  submitMultiMustFail [f.dealerA] [f.vault] do
+    exerciseCmd fr CollectFee with dealer = f.dealerA; allocCid = fc; extraArgs = ea
+  submitMultiMustFail [f.operator] [f.dealerA, f.vault] do
+    exerciseCmd fr CollectFee with dealer = f.dealerA; allocCid = fc; extraArgs = ea
+
+theNextQuoteTakesBackTheDealersDeadLocks : Script ()
+theNextQuoteTakesBackTheDealersDeadLocks = do
+  f <- setupF
+  now <- getTime
+  reg <- submit f.dealerA do
+    createCmd DealerRegistration with dealer = f.dealerA; operator = f.operator; since = now
+  (_, ia, _) <- openRfq f
+  old <- firm f f.dealerA ia 1000.0 None (Some 5.0)
+  r <- release f f.dealerA old
+  (_, ia2, _) <- openRfq f
+  -- no fresh coins: the new lock is backed by what the dead quote had locked
+  _ <- submit f.dealerA do
+    exerciseCmd reg QuoteFirm with
+      invitation = ia2; price = 900.0; validUntil = addRelTime now (minutes 20)
+      maxFillAmount = None; feeParty = None; feeAmount = None
+      wantLock = call f.ccReg []; feeLock = None; releases = [r]
+  qs <- query @FirmQuote f.dealerA
+  map (\(_, q) -> q.price) qs === [900.0]
+  total f.dealerA "Amulet" >>= (=== 2000.0)
+  -- the venue is shown none of it
+  vq <- query @FirmQuote f.operator
+  length vq === 0
+
+theNextRequestTakesBackLocksOnTheLastOne : Script ()
+theNextRequestTakesBackLocksOnTheLastOne = do
+  f <- setupF
+  now <- getTime
+  desk <- submit f.requester do createCmd RequestDesk with requester = f.requester; operator = f.operator
+  (_, ia, _) <- openRfq f
+  q <- firm f f.dealerA ia 1000.0 None (Some 5.0)
+  r <- release f f.requester q
+  _ <- submitMulti [f.requester] [f.dealerA] do
+    exerciseCmd desk OpenRfqReleasing with
+      offerAsset = f.cbtc; offerAmount = 1.0; wantAsset = f.cc
+      invited = [f.dealerA]; expiresAt = addRelTime now (minutes 30); releases = [r]
+  total f.dealerA "Amulet" >>= (=== 2000.0)
+  gone <- queryContractId f.dealerA q
+  gone === None

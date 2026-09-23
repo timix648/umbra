@@ -44,7 +44,9 @@ const { onboardExternalParty, prepareSignExecute, prepareSignExecuteMulti,
 require("dotenv").config();
 
 const app = express();
-app.use(express.json());
+// A prepared transaction that also sends locks home carries their contracts and can
+// pass the 100kb default (a firm quote releasing a dead one did: 413).
+app.use(express.json({ limit: "4mb" }));
 // Who is asking, available anywhere in the request's async chain. act() and
 // realSubmit() - the only places the venue signs with its OWN keys - read it to decide
 // whether this request is entitled to that (see assertMayUseVenueKeys).
@@ -1566,6 +1568,7 @@ async function queryAllocations(party) {
       executor: st.executor,
       settlementRef: st.settlementRef, settleBefore: st.settleBefore,
       transferLegId: al.transferLegId,
+      holdingCids: vv.holdingCids || [],
     });
   }
   return out;
@@ -1930,11 +1933,21 @@ app.post("/api/swap/rfq", async (req, res) => {
       const args = createCmd[0].CreateCommand.createArguments;
       const desk = await findDesk(requester);
       if (desk) {
+        // Firm quotes (0.12.0) left on this requester's FINISHED requests still hold
+        // their dealers' funds; the next request sends them home in the same signature.
+        const dead = FIRM_ON() ? await deadFirmQuotesFor(requester) : [];
+        const releases = [], disc = [];
+        for (const q of dead) {
+          try { const r = await releasePlumbing(q); releases.push(r.release); disc.push(r.disclosed); }
+          catch (e) { console.error("[firm] cannot release", q.contractId.slice(0, 16), "with the next request:", e.message); }
+        }
+        const choiceArgument = { offerAsset: args.offerAsset, offerAmount: args.offerAmount,
+          wantAsset: args.wantAsset, invited: args.invited, expiresAt: args.expiresAt };
         return res.json({ ok: true, build: true, viaDesk: true, party: requester,
           commands: [{ ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:RequestDesk`,
-            contractId: desk.contractId, choice: "OpenRfq",
-            choiceArgument: { offerAsset: args.offerAsset, offerAmount: args.offerAmount,
-              wantAsset: args.wantAsset, invited: args.invited, expiresAt: args.expiresAt } } }],
+            contractId: desk.contractId, choice: releases.length ? "OpenRfqReleasing" : "OpenRfq",
+            choiceArgument: releases.length ? Object.assign(choiceArgument, { releases }) : choiceArgument } }],
+          disclosedContracts: mergeDisc(...disc), released: releases.length,
           invited: [], expiresAt,
           note: "one signature opens the request and invites every dealer" });
       }
@@ -2162,6 +2175,12 @@ app.post("/api/swap/invitations/:cid/quote", async (req, res) => {
       (req.body.validMins
         ? new Date(Date.now() + Number(req.body.validMins) * 60000).toISOString()
         : defaultFirm);
+    // FIRM (0.12.0): the quote and the dealer's locks in one signature.
+    if (FIRM_ON() && isWalletParty(dealerParty) && !req.body.plain) {
+      const built = await buildFirmQuote(dealerParty, req.params.cid, req.body.price,
+        req.body.maxFillAmount, validUntil);
+      return res.status(built.status || 200).json(built);
+    }
     const cmds = [{
       ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapInvitation`,
         contractId: req.params.cid, choice: "SubmitSwapQuote",
@@ -2188,7 +2207,12 @@ app.post("/api/swap/invitations/:cid/quote", async (req, res) => {
 app.get("/api/swap/quotes", async (req, res) => {
   try {
     const role = readParty(req, req.query.role);
-    const quotes = await queryActive(await partyIdFor(role), "UmbraSwap:SwapQuote");
+    const me = await partyIdFor(role);
+    const plain = await queryActive(me, "UmbraSwap:SwapQuote");
+    // Firm quotes (0.12.0) read the same way -- same fields, plus their locks.
+    const firm = (await queryActive(me, "UmbraSwap:FirmQuote").catch(() => []))
+      .map(q => Object.assign({}, q, { kind: "firm" }));
+    const quotes = plain.concat(firm);
     res.json({ ok: true, role, count: quotes.length, quotes });
   } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
@@ -2889,8 +2913,10 @@ async function dealLegs(deal) {
   const p = deal.payload;
   const feeDue = !!(p.feeParty && p.feeAmount && Number(p.feeAmount) > 0);
   const offerLeg = await findExistingAllocation(p.requester, p.tradeId, "offer", p.offerAsset.symbol, p.offerAmount);
-  const wantLeg  = await findExistingAllocation(p.dealer, p.tradeId, "want", p.wantAsset.symbol, p.price);
-  const feeLeg   = feeDue ? await findExistingAllocation(p.dealer, p.tradeId, "fee", p.wantAsset.symbol, p.feeAmount) : null;
+  // The dealer's legs name the venue, or -- locked with a firm quote -- the dealer.
+  const dx = [p.operator, p.dealer];
+  const wantLeg  = await findExistingAllocation(p.dealer, p.tradeId, "want", p.wantAsset.symbol, p.price, dx);
+  const feeLeg   = feeDue ? await findExistingAllocation(p.dealer, p.tradeId, "fee", p.wantAsset.symbol, p.feeAmount, dx) : null;
   return { p, feeDue, offerLeg, wantLeg, feeLeg,
            complete: !!(offerLeg && wantLeg && (!feeDue || feeLeg)) };
 }
@@ -2926,6 +2952,14 @@ app.post("/api/swap/deals/:cid/next", async (req, res) => {
       return res.status(403).json({ error: "only the two principals of a deal can act on it" });
     }
     const past = Date.now() >= Date.parse(p.allocateBefore);
+    // A firm quote taken for less than it locked: the venue resizes the dealer's locks
+    // itself (FirmRelock), so the dealer has nothing to sign.
+    const resizing = me === p.dealer && (await queryActive(await partyIdFor("requester"), "UmbraSwap:FirmRelock")
+      .catch(() => [])).some(r => r.payload && r.payload.tradeId === p.tradeId);
+    if (resizing && !past) {
+      return res.json({ ok: true, status: "waiting", deadline: p.allocateBefore,
+        note: "the venue is sizing your locks to the part that was taken -- nothing to sign" });
+    }
     const lockOf = (sender, receiver, asset, amount, legId) => ({
       ok: false, status: "awaiting-allocation",
       awaiting: allocationInstruction(sender, receiver, asset.admin, asset.symbol, amount, p.tradeId, legId),
@@ -2955,6 +2989,10 @@ async function dealDisclosures(ctxs, legs, templateSuffix, cid, operator) {
   for (const l of legs.filter(Boolean)) {
     try { for (const d of await allocDisclosure([l.contractId], l.sender)) add(d); }
     catch (e) { console.error("[deal] allocation disclosure failed (continuing):", e.message); }
+    // A lock the venue is not executor of (a firm quote's) sits on holdings the venue
+    // cannot see; they travel with the command.
+    try { for (const d of await holdingDisclosure(l.sender, l.holdingCids || [])) add(d); }
+    catch (e) { console.error("[deal] holding disclosure failed (continuing):", e.message); }
   }
   try { add(await templateDisclosure(templateSuffix, cid, operator)); }
   catch (e) { console.error("[deal] deal disclosure failed (continuing):", e.message); }
@@ -3056,7 +3094,9 @@ async function dealWorker() {
     } finally { dealBusy.delete(deal.contractId); }
   }
 }
-if (SIGNED_MODE) setInterval(() => { dealWorker().catch(() => {}); }, 15000);
+if (SIGNED_MODE) setInterval(() => {
+  relockWorker().catch(() => {}).then(() => dealWorker()).catch(() => {});
+}, 15000);
 
 // A fee receiver's one-time consent to collect fees into its own wallet.
 app.post("/api/fee/receiver", async (req, res) => {
@@ -3070,6 +3110,409 @@ app.post("/api/fee/receiver", async (req, res) => {
       createArguments: { receiver: party, operator } } }],
       note: "one signature; lets fees land in this wallet. It can only ever receive." });
   } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
+// ---- FIRM QUOTES (umbra-v9 0.12.0) ---------------------------------------------
+//
+// A dealer locks its side WITH its quote (one signature), and the requester's award
+// locks the other side (one signature) -- so every leg of a whole-quote award is in
+// the moment it commits, and dealWorker settles it on its next pass.
+//
+// Every lock is spelled out on-ledger by lockLeg from terms the contracts hold; the
+// server only supplies the registry's plumbing (factory, context, disclosures) and
+// which coins to lock. The quote-time locks name the DEALER as executor, so the
+// venue is on no losing quote and no losing lock. Releasing them happens inside the
+// requester's award or cancel, or the dealer's own pull -- never by the venue.
+
+const FIRM_ON = () => !/^(0|false|no)$/i.test(String(process.env.UMBRA_FIRM || "1"));
+
+async function freeCoins(party, asset) {
+  const hs = await queryRealHoldings(party);
+  return hs.filter(h => !h.lock && h.id === asset.symbol && (!asset.admin || h.admin === asset.admin))
+    .sort((a, b) => Number(b.amount) - Number(a.amount));
+}
+function pickCoins(coins, need) {
+  const cids = []; let got = 0;
+  for (const c of coins) { if (got >= need - 1e-12) break; cids.push(c.contractId); got += Number(c.amount); }
+  return { cids, got };
+}
+function discOf(list) {
+  return (list || []).map(d => ({ templateId: d.templateId, contractId: d.contractId,
+    createdEventBlob: d.createdEventBlob, synchronizerId: d.synchronizerId || "" }));
+}
+function mergeDisc(...lists) {
+  const seen = {}, out = [];
+  for (const l of lists) for (const d of (l || [])) {
+    if (d && d.contractId && !seen[d.contractId]) { seen[d.contractId] = true; out.push(d); }
+  }
+  return out;
+}
+
+// Holdings (locked or not) WITH their created-event blobs, read as their owner, so a
+// command submitted by someone else can carry them.
+async function holdingDisclosure(owner, cids) {
+  const want = new Set((cids || []).filter(Boolean));
+  if (!owner || !want.size) return [];
+  const offset = await ledgerEnd();
+  const body = { filter: { filtersByParty: { [owner]: { cumulative: [{
+    identifierFilter: { InterfaceFilter: { value: {
+      interfaceId: "#splice-api-token-holding-v1:Splice.Api.Token.HoldingV1:Holding",
+      includeInterfaceView: false, includeCreatedEventBlob: true } } } }] } } },
+    verbose: false, activeAtOffset: offset };
+  const r = await ledgerFetch("/v2/state/active-contracts", { method: "POST", body: JSON.stringify(body) });
+  const text = await r.text();
+  if (!r.ok) throw new Error(humanize(`${r.status} ${text}`));
+  let items;
+  try { items = JSON.parse(text); }
+  catch { items = text.trim().split("\n").filter(Boolean).map(l => JSON.parse(l)); }
+  const out = [];
+  for (const x of (Array.isArray(items) ? items : [items])) {
+    const jac = x && x.contractEntry && x.contractEntry.JsActiveContract;
+    const ce = (jac && jac.createdEvent) || (x && x.createdEvent);
+    if (!ce || !want.has(ce.contractId) || !ce.createdEventBlob) continue;
+    out.push({ templateId: ce.templateId, contractId: ce.contractId, createdEventBlob: ce.createdEventBlob,
+      synchronizerId: (jac && jac.synchronizerId) || ce.synchronizerId || "" });
+  }
+  return out;
+}
+
+// The registry plumbing for one lock: which factory, its context, what to disclose.
+// The allocation itself is written by the contract; these arguments only ask the
+// registry for the context (it validates them, so they mirror what lockLeg builds).
+async function lockPlumbing(o) {
+  const now = new Date().toISOString();
+  const args = {
+    expectedAdmin: o.asset.admin,
+    allocation: {
+      settlement: { executor: o.executor, settlementRef: { id: o.ref, cid: null },
+        requestedAt: now, allocateBefore: o.allocateBefore, settleBefore: o.settleBefore,
+        meta: { values: {} } },
+      transferLegId: o.legId,
+      transferLeg: { sender: o.sender, receiver: o.receiver, amount: dec10(o.amount),
+        instrumentId: { admin: o.asset.admin, id: o.asset.symbol }, meta: { values: {} } },
+    },
+    requestedAt: now, inputHoldingCids: o.inputs,
+    extraArgs: { context: { values: {} }, meta: { values: {} } },
+  };
+  const fc = await allocationFactory(registryForAdmin(o.asset.admin) || REGISTRY_URL_DEFAULT, o.asset.admin, args);
+  return { call: { factory: fc.factoryId, extraArgs: xargs(fc.choiceContext), inputs: o.inputs },
+           disclosed: discOf(fc.choiceContext && fc.choiceContext.disclosedContracts) };
+}
+
+// Sending one firm quote's locks home: the registry's withdraw context for each lock,
+// plus the locks and the holdings behind them (the one releasing may not see them).
+async function releasePlumbing(q) {
+  const p = q.payload;
+  const allocs = await queryAllocations(p.dealer);
+  const byCid = Object.fromEntries(allocs.map(a => [a.contractId, a]));
+  const one = async (cid) => {
+    const a = byCid[cid];
+    if (!a) throw new Error("a lock of this quote is gone (withdrawn in the wallet?)");
+    const ctx = await withdrawContext(registryForAdmin(a.admin) || REGISTRY_URL_DEFAULT, a.admin, cid);
+    return { args: xargs(ctx), disclosed: mergeDisc(discOf(ctx.disclosedContracts),
+      await allocDisclosure([cid], p.dealer), await holdingDisclosure(p.dealer, a.holdingCids)) };
+  };
+  const w = await one(p.wantAllocCid);
+  const f = p.feeAllocCid ? await one(p.feeAllocCid) : null;
+  return { release: { quoteCid: q.contractId, wantArgs: w.args, feeArgs: f ? f.args : null },
+           disclosed: mergeDisc(w.disclosed, f && f.disclosed) };
+}
+
+async function feeWalletReady(fee) {
+  const operator = await partyIdFor("requester");
+  return !fee || FEE_PARTY === operator || !!(await findFeeReceiver(FEE_PARTY));
+}
+const FEE_NOT_READY = "the venue's fee wallet has not enabled fee collection yet, so a trade could not " +
+  "settle. The venue owner runs `node fee-wallet.js enable-fees` once.";
+
+// Firm quotes whose request is over (awarded elsewhere, withdrawn, or expired) or
+// whose firmness has lapsed: their locks are dead weight.
+async function liveRfqSet() {
+  const operator = await partyIdFor("requester");
+  return new Set((await queryActive(operator, "UmbraSwap:SwapRfq").catch(() => [])).map(c => c.contractId));
+}
+async function deadFirmQuotesFor(requester) {
+  const live = await liveRfqSet(), now = Date.now();
+  return (await queryActive(requester, "UmbraSwap:FirmQuote").catch(() => []))
+    .filter(q => q.payload && q.payload.requester === requester &&
+      (!live.has(q.payload.rfqCid) || Date.parse(q.payload.validUntil) <= now));
+}
+async function deadFirmQuotesOf(dealer) {
+  const live = await liveRfqSet(), now = Date.now();
+  return (await queryActive(dealer, "UmbraSwap:FirmQuote").catch(() => []))
+    .filter(q => q.payload && q.payload.dealer === dealer &&
+      (!live.has(q.payload.rfqCid) || Date.parse(q.payload.validUntil) <= now));
+}
+
+async function buildFirmQuote(dealer, invCid, priceIn, capIn, validUntil) {
+  const inv = (await queryActive(dealer, "UmbraSwap:SwapInvitation")).find(c => c.contractId === invCid);
+  if (!inv) return { status: 404, error: "that invitation is no longer open" };
+  const ip = inv.payload;
+  const price = Number(priceIn);
+  if (!(price > 0)) return { status: 400, error: "enter a positive price" };
+  const whole = Number(ip.offerAmount);
+  const cap = capIn == null || capIn === "" ? null : Number(capIn);
+  const funded = cap != null && cap < whole ? cap : whole;
+  const fundedPrice = funded === whole ? price : price * funded / whole;
+  const fee = feeFor(ip.wantAsset.symbol, fundedPrice);
+  if (!(await feeWalletReady(fee))) return { status: 409, error: FEE_NOT_READY };
+  const need = fundedPrice + (fee ? Number(fee) : 0);
+  // The dealer's dead quotes come home in this same signature (through its
+  // DealerRegistration), and what comes home in this asset can back the new lock.
+  const reg = (await queryActive(dealer, "UmbraSwap:DealerRegistration").catch(() => []))
+    .find(c => c.payload && c.payload.dealer === dealer);
+  const releases = [], relDisc = [];
+  let comingHome = 0, homeHoldings = [];
+  if (reg) {
+    const allocs = await queryAllocations(dealer).catch(() => []);
+    for (const q of await deadFirmQuotesOf(dealer)) {
+      try {
+        const r = await releasePlumbing(q);
+        releases.push(r.release); relDisc.push(r.disclosed);
+        for (const a of allocs.filter(a => a.contractId === q.payload.wantAllocCid || a.contractId === q.payload.feeAllocCid)) {
+          if (a.instrument === ip.wantAsset.symbol && a.admin === ip.wantAsset.admin) {
+            comingHome += Number(a.amount); homeHoldings = homeHoldings.concat(a.holdingCids || []);
+          }
+        }
+      } catch (e) { console.error("[firm] cannot release", q.contractId.slice(0, 16), "with the next quote:", e.message); }
+    }
+  }
+  const { cids, got: gotFree } = pickCoins(await freeCoins(dealer, ip.wantAsset), need);
+  const got = gotFree + comingHome;
+  if (got < need - 1e-9) {
+    return { status: 400, error: "To stand behind this quote you lock " + need.toFixed(8).replace(/\.?0+$/, "") +
+      " " + ip.wantAsset.symbol + " (price" + (fee ? " + venue fee" : "") + "), and you have " +
+      got.toFixed(8).replace(/\.?0+$/, "") + " free. Quote lower, cap the size, or fund your party." };
+  }
+  const vu = Date.parse(validUntil);
+  const allocBy = new Date(vu + 15 * 60000).toISOString();
+  const lockedUntil = new Date(vu + 30 * 60000).toISOString();
+  // The registry is asked for its context with coins that exist now; when the lock
+  // is backed only by what is coming home, those (still locked) holdings stand in.
+  const ctxInputs = cids.length ? cids : homeHoldings;
+  const base = { executor: dealer, sender: dealer, asset: ip.wantAsset, ref: "umbra-firm-quote",
+                 allocateBefore: allocBy, settleBefore: lockedUntil, inputs: ctxInputs };
+  const w = await lockPlumbing(Object.assign({}, base, { receiver: ip.requester, amount: fundedPrice, legId: "want" }));
+  const f = fee ? await lockPlumbing(Object.assign({}, base, { receiver: FEE_PARTY, amount: fee, legId: "fee" })) : null;
+  const args = {
+    price: String(priceIn), validUntil,
+    maxFillAmount: cap != null && cap < whole ? String(capIn) : null,
+    feeParty: fee ? FEE_PARTY : null, feeAmount: fee || null,
+    wantLock: Object.assign({}, w.call, { inputs: cids }),
+    // the fee is locked from the change of the payment lock, in the same transaction
+    feeLock: f ? Object.assign({}, f.call, { inputs: [] }) : null,
+  };
+  const commands = reg
+    ? [{ ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:DealerRegistration`, contractId: reg.contractId,
+        choice: "QuoteFirm", choiceArgument: Object.assign({ invitation: invCid, releases }, args) } }]
+    : [{ ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapInvitation`, contractId: invCid,
+        choice: "SubmitFirmQuote", choiceArgument: args } }];
+  return {
+    ok: true, build: true, firm: true, party: dealer, validUntil, released: releases.length,
+    locks: { amount: dec10(fundedPrice), fee: fee || null, symbol: ip.wantAsset.symbol, until: lockedUntil },
+    commands,
+    disclosedContracts: mergeDisc(w.disclosed, f && f.disclosed, ...relDisc),
+    note: "one signature: the quote, the payment lock and the fee lock",
+  };
+}
+
+// The firm quotes on one request, as its requester sees them.
+async function firmQuotesOn(requester, rfqCid) {
+  return (await queryActive(requester, "UmbraSwap:FirmQuote").catch(() => []))
+    .filter(c => c.payload && c.payload.requester === requester && c.payload.rfqCid === rfqCid);
+}
+
+// Award firm quotes: every part, the requester's lock for each, and every other firm
+// quote on the request sent home -- one signature.
+app.post("/api/swap/rfqs/:cid/award-firm", async (req, res) => {
+  try {
+    const b = req.body || {};
+    const requester = await partyIdFor(readPartyOrOp(req, b.requester));
+    const on = await firmQuotesOn(requester, req.params.cid);
+    const parts = Array.isArray(b.parts) ? b.parts : [];
+    if (!parts.length) return res.status(400).json({ error: "pick at least one quote" });
+    const chosen = [];
+    for (const x of parts) {
+      const q = on.find(c => c.contractId === x.quoteCid);
+      if (!q) return res.status(404).json({ error: "that quote is no longer live: " + String(x.quoteCid).slice(0, 16) });
+      const fill = Number(x.fill);
+      if (!(fill > 0) || fill > Number(q.payload.fundedFill) + 1e-12) {
+        return res.status(400).json({ error: "that dealer locked for at most " + q.payload.fundedFill });
+      }
+      chosen.push({ q, fill });
+    }
+    if (chosen.some(c => c.q.payload.feeAmount) && !(await feeWalletReady(true))) {
+      return res.status(409).json({ error: FEE_NOT_READY });
+    }
+    const offer = chosen[0].q.payload.offerAsset;
+    const totalFill = chosen.reduce((t, c) => t + c.fill, 0);
+    const { cids, got } = pickCoins(await freeCoins(requester, offer), totalFill);
+    if (got < totalFill - 1e-9) {
+      return res.status(400).json({ error: "You need " + totalFill + " " + offer.symbol +
+        " free to lock for this award, and have " + got.toFixed(8).replace(/\.?0+$/, "") + "." });
+    }
+    const operator = await partyIdFor("requester");
+    const now = Date.now();
+    const allocBy = new Date(now + 15 * 60000).toISOString(), settleBy = new Date(now + 30 * 60000).toISOString();
+    const specs = [], disc = [];
+    for (let i = 0; i < chosen.length; i++) {
+      const c = chosen[i];
+      const pl = await lockPlumbing({ executor: operator, sender: requester, receiver: c.q.payload.dealer,
+        asset: offer, amount: c.fill, inputs: cids, ref: "umbra-firm-award", legId: "offer",
+        allocateBefore: allocBy, settleBefore: settleBy });
+      // the first part locks the chosen coins; each next part locks the change of the last
+      specs.push({ quoteCid: c.q.contractId, fill: dec10(c.fill),
+        offerLock: Object.assign({}, pl.call, { inputs: i === 0 ? cids : [] }) });
+      disc.push(pl.disclosed);
+    }
+    const releases = [];
+    for (const q of on.filter(c => !chosen.some(x => x.q.contractId === c.contractId))) {
+      try { const r = await releasePlumbing(q); releases.push(r.release); disc.push(r.disclosed); }
+      catch (e) { console.error("[firm] cannot release", q.contractId.slice(0, 16), "in the award:", e.message); }
+    }
+    res.json({ ok: true, build: true, firm: true, party: requester,
+      commands: [{ ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapRfq`,
+        contractId: req.params.cid, choice: "AwardFirm",
+        choiceArgument: { parts: specs, releases, keepRest: !!b.keepRest } } }],
+      disclosedContracts: mergeDisc(...disc), parts: specs.length, released: releases.length,
+      note: "one signature: take the quote(s), lock your side, send every other quote's locks home" });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
+// Withdraw a request and send every firm quote's locks home -- one signature.
+app.post("/api/swap/rfqs/:cid/cancel-firm", async (req, res) => {
+  try {
+    const b = req.body || {};
+    const requester = await partyIdFor(readPartyOrOp(req, b.requester));
+    const releases = [], disc = [];
+    for (const q of await firmQuotesOn(requester, req.params.cid)) {
+      try { const r = await releasePlumbing(q); releases.push(r.release); disc.push(r.disclosed); }
+      catch (e) { console.error("[firm] cannot release", q.contractId.slice(0, 16), "on cancel:", e.message); }
+    }
+    res.json({ ok: true, build: true, party: requester,
+      commands: [{ ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:SwapRfq`,
+        contractId: req.params.cid, choice: "CancelFirm", choiceArgument: { releases } } }],
+      disclosedContracts: mergeDisc(...disc), released: releases.length });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
+// A dealer's own firm quotes, with which of them are dead weight: past their
+// firmness, or answering a request that is gone.
+app.get("/api/swap/firm", async (req, res) => {
+  try {
+    const me = await partyIdFor(readPartyOrOp(req, req.query.role));
+    const operator = await partyIdFor("requester");
+    const mine = (await queryActive(me, "UmbraSwap:FirmQuote").catch(() => []))
+      .filter(c => c.payload && c.payload.dealer === me);
+    const live = new Set((await queryActive(operator, "UmbraSwap:SwapRfq").catch(() => [])).map(c => c.contractId));
+    const now = Date.now();
+    const quotes = mine.map(q => Object.assign({}, q, {
+      stale: Date.parse(q.payload.validUntil) <= now || !live.has(q.payload.rfqCid) }));
+    res.json({ ok: true, count: quotes.length, quotes });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
+// The dealer takes quotes (and their locks) back: every stale one by default, or the
+// ones named. Several at once through its DealerRegistration; one otherwise.
+app.post("/api/swap/firm/pull", async (req, res) => {
+  try {
+    const b = req.body || {};
+    const me = await partyIdFor(readPartyOrOp(req, b.party));
+    const operator = await partyIdFor("requester");
+    const mine = (await queryActive(me, "UmbraSwap:FirmQuote").catch(() => []))
+      .filter(c => c.payload && c.payload.dealer === me);
+    const live = new Set((await queryActive(operator, "UmbraSwap:SwapRfq").catch(() => [])).map(c => c.contractId));
+    const now = Date.now();
+    const pick = Array.isArray(b.quoteCids) && b.quoteCids.length
+      ? mine.filter(q => b.quoteCids.includes(q.contractId))
+      : mine.filter(q => Date.parse(q.payload.validUntil) <= now || !live.has(q.payload.rfqCid));
+    if (!pick.length) return res.json({ ok: true, nothing: true });
+    const releases = [], disc = [];
+    for (const q of pick) {
+      try { const r = await releasePlumbing(q); releases.push(r.release); disc.push(r.disclosed); }
+      catch (e) { console.error("[firm] cannot release", q.contractId.slice(0, 16), ":", e.message); }
+    }
+    if (!releases.length) return res.status(409).json({ error: "those locks could not be found -- they may already be back in your wallet" });
+    const reg = (await queryActive(me, "UmbraSwap:DealerRegistration").catch(() => []))
+      .find(c => c.payload && c.payload.dealer === me);
+    const commands = reg
+      ? [{ ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:DealerRegistration`, contractId: reg.contractId,
+          choice: "PullFirmQuotes", choiceArgument: { releases } } }]
+      : [{ ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:FirmQuote`, contractId: releases[0].quoteCid,
+          choice: "PullFirm", choiceArgument: { wantArgs: releases[0].wantArgs, feeArgs: releases[0].feeArgs } } }];
+    res.json({ ok: true, build: true, party: me, commands, disclosedContracts: mergeDisc(...disc),
+      released: reg ? releases.length : 1 });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
+// A firm quote awarded for less than the dealer locked: send the quote-time locks
+// home, then lock exactly the part. Only ever the terms both principals signed.
+const relockBusy = new Set();
+const relockFails = {};
+async function relockWorker() {
+  let rs = [];
+  const operator = await partyIdFor("requester");
+  try { rs = await queryActive(operator, "UmbraSwap:FirmRelock"); } catch (e) { return; }
+  if (!rs.length) return;
+  const deals = await queryActive(operator, "UmbraSwap:SwapDeal").catch(() => []);
+  for (const r of rs) {
+    if (relockBusy.has(r.contractId)) continue;
+    relockBusy.add(r.contractId);
+    const p = r.payload;
+    try {
+      if (!p.released) {
+        const rel = await releasePlumbing({ contractId: r.contractId,
+          payload: { dealer: p.dealer, wantAllocCid: p.fundedWant, feeAllocCid: p.fundedFee } });
+        await realSubmit({ commandId: "relock-release-" + Date.now(), actAs: [operator],
+          commands: [{ ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:FirmRelock`, contractId: r.contractId,
+            choice: "ReleaseFunded",
+            choiceArgument: { wantArgs: rel.release.wantArgs, feeArgs: rel.release.feeArgs } } }],
+          disclosedContracts: rel.disclosed }, "relock-release", { duty: true });
+        console.log("[firm] released the quote-time locks for", p.tradeId);
+      } else {
+        const deal = deals.find(d => d.payload && d.payload.tradeId === p.tradeId);
+        if (deal && Date.now() < Date.parse(p.allocateBefore) - 60000) {
+          const fee = p.feeAmount && Number(p.feeAmount) > 0 ? Number(p.feeAmount) : 0;
+          const need = Number(p.price) + fee;
+          const { cids, got } = pickCoins(await freeCoins(p.dealer, p.wantAsset), need);
+          if (got < need - 1e-9) throw new Error("the dealer no longer has " + need + " " + p.wantAsset.symbol + " free");
+          const settleBy = new Date(Date.parse(p.allocateBefore) + 15 * 60000).toISOString();
+          const base = { executor: operator, sender: p.dealer, asset: p.wantAsset, ref: p.tradeId,
+                         allocateBefore: p.allocateBefore, settleBefore: settleBy, inputs: cids };
+          const w = await lockPlumbing(Object.assign({}, base, { receiver: p.requester, amount: p.price, legId: "want" }));
+          const f = fee ? await lockPlumbing(Object.assign({}, base, { receiver: p.feeParty, amount: p.feeAmount, legId: "fee" })) : null;
+          await realSubmit({ commandId: "relock-lock-" + Date.now(), actAs: [operator],
+            commands: [{ ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:FirmRelock`, contractId: r.contractId,
+              choice: "LockPart",
+              choiceArgument: { want: w.call, fee: f ? Object.assign({}, f.call, { inputs: [] }) : null } } }],
+            disclosedContracts: mergeDisc(w.disclosed, f && f.disclosed, await holdingDisclosure(p.dealer, cids)) },
+            "relock-lock", { duty: true });
+          console.log("[firm] locked the awarded part for", p.tradeId);
+        } else {
+          await realSubmit({ commandId: "relock-drop-" + Date.now(), actAs: [operator],
+            commands: [{ ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:FirmRelock`, contractId: r.contractId,
+              choice: "DropRelock", choiceArgument: {} } }] }, "relock-drop", { duty: true });
+          console.log("[firm] dropped a finished relock for", p.tradeId);
+        }
+      }
+      delete relockFails[r.contractId];
+    } catch (e) {
+      const n = (relockFails[r.contractId] = (relockFails[r.contractId] || 0) + 1);
+      if (n <= 3 || n % 20 === 0) console.error("[firm] relock " + r.contractId.slice(0, 16) + " attempt " + n + ": " + e.message);
+    } finally { relockBusy.delete(r.contractId); }
+  }
+}
+
+// Run the venue's half now rather than on the next tick: after an award or a lock,
+// so a trade whose legs are all in settles in seconds.
+let kickAt = 0;
+app.post("/api/swap/deals/kick", async (req, res) => {
+  const now = Date.now();
+  if (now - kickAt > 3000) {
+    kickAt = now;
+    relockWorker().then(() => dealWorker()).catch(() => {});
+  }
+  res.json({ ok: true });
 });
 
 app.post("/api/swap/pending/:cid/accept-real", async (req, res) => {
@@ -3819,7 +4262,7 @@ async function locateAllocation(j, senderParty, beforeIds, instrId, amount, labe
 // Matching is deliberately strict: same sender, same leg, same settlement reference,
 // same instrument and amount. A near-miss must NOT be adopted, because executing the
 // wrong allocation moves real assets.
-async function findExistingAllocation(senderParty, settleId, legId, instrId, amount) {
+async function findExistingAllocation(senderParty, settleId, legId, instrId, amount, executors) {
   if (!senderParty || !settleId) return null;
   let allocs;
   try { allocs = await queryAllocations(senderParty); }
@@ -3829,8 +4272,10 @@ async function findExistingAllocation(senderParty, settleId, legId, instrId, amo
   // itself, from before that default was fixed) can never settle -- adopting it would
   // walk the trade to a SwapSettlement that ExecuteRealSwap then refuses.
   const operator = await partyIdFor("requester").catch(() => null);
+  // A firm quote's own locks (0.12.0) name the dealer; the caller says so.
+  const okExec = executors && executors.length ? executors : (operator ? [operator] : null);
   return allocs.find(a =>
-    (!operator || a.executor === operator) &&
+    (!okExec || okExec.includes(a.executor)) &&
     a.sender === senderParty &&
     a.transferLegId === legId &&
     a.settlementRef && a.settlementRef.id === settleId &&
