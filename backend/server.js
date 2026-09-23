@@ -1317,7 +1317,14 @@ app.post("/api/real/allocate", async (req, res) => {
     const senderRole = b.senderRole || req.query.role || "requester";
     const sender = (b.sender && String(b.sender).includes("::")) ? b.sender : await partyIdFor(senderRole);
     const receiver = (b.receiver && String(b.receiver).includes("::")) ? b.receiver : await partyIdFor(b.receiverRole || "dealer1");
-    const executor = (b.executor && String(b.executor).includes("::")) ? b.executor : await partyIdFor(b.executorRole || senderRole);
+    // A settlement leg (it names a settleId) is executed by the VENUE: ExecuteRealSwap is
+    // `controller operator` and its guard checks each leg's executor == operator. This
+    // used to default to the SENDER, so every leg a wallet allocated named the wallet
+    // itself -- the trade reached a signed SwapSettlement and then could never execute,
+    // leaving both sides' coins locked until the allocation expired.
+    const executor = (b.executor && String(b.executor).includes("::")) ? b.executor
+      : (b.settleId ? await partyIdFor("requester")
+                    : await partyIdFor(b.executorRole || senderRole));
     const admin = b.admin, id = b.id, amount = b.amount;
     const holdingCids = b.holdingCids || [];
     // Resolve the registry from the instrument's admin when the caller doesn't name one.
@@ -1588,7 +1595,8 @@ app.post("/api/real/withdraw/:cid", async (req, res) => {
   try {
     const b = req.body || {};
     const cid = req.params.cid;
-    const role = b.role || req.query.role || "requester";
+    // Only the allocation's own party (or the operator) may even ask.
+    const role = readPartyOrOp(req, b.role || req.query.role);
     const party = await partyIdFor(role);
 
     const allocs = await queryAllocations(party);
@@ -3539,7 +3547,12 @@ async function findExistingAllocation(senderParty, settleId, legId, instrId, amo
   try { allocs = await queryAllocations(senderParty); }
   catch (e) { dbg("[wallet-alloc] query failed:", e.message); return null; }
   const want = Number(amount);
+  // Only a leg the venue can execute counts. One naming another executor (the sender
+  // itself, from before that default was fixed) can never settle -- adopting it would
+  // walk the trade to a SwapSettlement that ExecuteRealSwap then refuses.
+  const operator = await partyIdFor("requester").catch(() => null);
   return allocs.find(a =>
+    (!operator || a.executor === operator) &&
     a.sender === senderParty &&
     a.transferLegId === legId &&
     a.settlementRef && a.settlementRef.id === settleId &&

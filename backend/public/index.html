@@ -388,6 +388,15 @@
   .prt-ico.on{color:var(--ok);border-color:var(--okline);background:var(--okbg)}
   .prt-ico.on:hover{filter:brightness(1.1)}
   .prt-ico[disabled]{opacity:.5;cursor:progress}
+  /* coins locked in trade legs, with a way out */
+  .lk-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
+  .lk-row:last-child{border-bottom:0}
+  .lk-l{display:flex;flex-direction:column;gap:2px;font-size:12px;color:var(--mute);min-width:0}
+  .lk-l b{color:var(--text);font-size:13px}
+  .lk-bad{color:var(--amber)}
+  .lk-b{font:600 11px/1 var(--sans);padding:7px 11px;border-radius:5px;cursor:pointer;background:transparent;color:var(--mute);border:1px solid var(--line2)}
+  .lk-b.go{color:var(--text);border-color:var(--amberline);background:var(--amberbg)}
+  .lk-b:disabled{cursor:progress;opacity:.6}
   /* settings drawer: slides in from the right */
   .drw{position:fixed;inset:0;z-index:900;pointer-events:none}
   .drw.on{pointer-events:auto}
@@ -5449,14 +5458,35 @@ function Funding({ party, say, onChanged }) {
     return () => clearInterval(t);
   }, [loadWallet]);
 
+  const [allocs, setAllocs] = useState([]);
   const load = useCallback(async () => {
-    const [p, h] = await Promise.all([
+    const [p, h, al] = await Promise.all([
       api("/api/real/pending?role=" + encodeURIComponent(party)).catch(() => ({})),
-      api("/api/real/holdings?role=" + encodeURIComponent(party)).catch(() => ({}))
+      api("/api/real/holdings?role=" + encodeURIComponent(party)).catch(() => ({})),
+      api("/api/real/allocations?role=" + encodeURIComponent(party)).catch(() => ({}))
     ]);
     setPending((p && (p.offers || p.pending)) || []);
     setRaw((h && h.raw) || []);
+    setAllocs(((al && al.allocations) || []).filter(a => a.sender === party));
   }, [party]);
+
+  // Coins locked into a trade leg. A trade that died part-way (or a leg that can never
+  // settle) left them locked with no way out on this page; the owner releases them here,
+  // with its own signature -- Allocation_Withdraw is the sender's choice, not the venue's.
+  const release = async (a) => {
+    if (busy) return;
+    const dead = a.executor === party || (a.settleBefore && Date.parse(a.settleBefore) < Date.now());
+    if (!dead && !window.confirm("This leg belongs to a trade that may still settle. Releasing it cancels your side of that trade. Release anyway?")) return;
+    setBusy("rel:" + a.contractId);
+    try {
+      const b = await post("/api/real/withdraw/" + a.contractId + "?build=1", { role: party, build: true });
+      say("Approve releasing " + fmtAmtStr(a.amount) + " " + dispSym(a.instrument) + " in your wallet…");
+      await WalletLink.submit({ commands: b.commands, disclosedContracts: b.disclosedContracts });
+      say("Released " + fmtAmtStr(a.amount) + " " + dispSym(a.instrument) + ". It is free to use again.");
+      await load(); onChanged && onChanged();
+    } catch (e) { say((e && e.message) || "could not release it", true); }
+    setBusy("");
+  };
   useEffect(() => {
     load();
     // An incoming transfer arrives without any action on this page, so it has to be
@@ -5593,7 +5623,28 @@ function Funding({ party, say, onChanged }) {
             fmtAmtStr(o.amount) + " " + dispSym(o.instrument)),
           "sent — waiting for ",
           U.abbrevParty ? U.abbrevParty(o.receiver, 9, 6) : "the recipient",
-          " to accept. Locked until they do.")))) : null);
+          " to accept. Locked until they do.")))) : null,
+    allocs.length ? React.createElement("section", { className: "mod" },
+      React.createElement("div", { className: "mod-h" },
+        React.createElement("h2", null, "Locked in trades"),
+        React.createElement("span", { className: "mod-c m" }, allocs.length)),
+      React.createElement("div", { className: "mod-b" },
+        allocs.map(a => {
+          const expired = a.settleBefore && Date.parse(a.settleBefore) < Date.now();
+          const stuck = a.executor === party;   // names itself as executor: can never settle
+          return React.createElement("div", { key: a.contractId, className: "lk-row" },
+            React.createElement("div", { className: "lk-l" },
+              React.createElement("b", null, fmtAmtStr(a.amount) + " " + dispSym(a.instrument)),
+              React.createElement("span", null, "to " + (U.abbrevParty ? U.abbrevParty(a.receiver, 9, 6) : a.receiver)),
+              React.createElement("span", { className: stuck || expired ? "lk-bad" : "" },
+                stuck ? "cannot settle — release it"
+                  : expired ? "trade expired — release it"
+                  : "until " + new Date(a.settleBefore).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))),
+            React.createElement("button", {
+              className: "lk-b" + (stuck || expired ? " go" : ""), disabled: !!busy,
+              onClick: () => release(a)
+            }, busy === "rel:" + a.contractId ? "Waiting…" : "Release"));
+        }))) : null);
 }
 
 // ---- SETTINGS DRAWER ----
