@@ -5502,21 +5502,44 @@ function DealerDesk(P) {
 // not document the holding response, so read it defensively; null (not {}) means
 // "unknown", and the deposit form then leaves the amount check to the wallet.
 function walletBalancesOf(res) {
-  const top = Array.isArray(res) ? res
-    : (res && (res.holdings || res.data || res.items || res.payload || res.result)) || [];
-  const list = Array.isArray(top) ? top : (top && (top.holdings || top.items)) || [];
+  // Walk the whole answer and take every entry that names an instrument AND carries
+  // an amount. The first version looked in fixed places, so an entry whose id was an
+  // object ({ admin, id }) or that only carried the token's name ("Bitsafe") was
+  // dropped -- and a wallet holding 0.12 CBTC showed 0 here.
+  const NAMES = { bitsafe: "CBTC", canton: "CC", "canton coin": "CC", amulet: "CC" };
+  const symOf = v => {
+    if (v == null) return null;
+    if (typeof v === "object") return symOf(v.id || v.instrument_id || v.instrumentId || v.symbol || v.ticker);
+    const t = String(v).trim();
+    if (!t || t.length > 40 || t.includes("::")) return null;
+    return NAMES[t.toLowerCase()] || dispSym(t);
+  };
+  const num = v => {
+    if (v != null && typeof v === "object") v = v.amount != null ? v.amount : v.value;
+    return v != null && v !== "" && !isNaN(Number(v)) ? Number(v) : null;
+  };
+  const idOf = x => symOf(x.instrument_id) || symOf(x.instrumentId) || symOf(x.instrument) ||
+    symOf(x.symbol) || symOf(x.token_symbol) || symOf(x.ticker) ||
+    (x.token && symOf(x.token)) || (x.asset && symOf(x.asset)) ||
+    (x.metadata && symOf(x.metadata.symbol)) || symOf(x.name);
+  const amtOf = x => {
+    for (const k of ["total_unlocked_coin", "unlocked_amount", "unlocked", "available",
+                     "available_amount", "free", "amount", "balance", "total_amount", "total", "quantity"]) {
+      const n = num(x[k]);
+      if (n != null) return n;
+    }
+    return null;
+  };
   const out = {};
-  for (const x of list) {
-    if (!x) continue;
-    const inst = x.instrument || x.instrumentId || {};
-    const id = x.instrument_id || inst.id || inst.instrument_id ||
-               (typeof x.instrumentId === "string" ? x.instrumentId : null) || x.symbol || x.id;
-    const amt = [x.total_unlocked_coin, x.unlocked_amount, x.available, x.amount, x.balance, x.total]
-      .find(v => v != null && !isNaN(Number(v)));
-    if (!id || amt == null) continue;
-    const s = dispSym(String(id));
-    out[s] = (out[s] || 0) + Number(amt);
-  }
+  const walk = (node, depth) => {
+    if (!node || depth > 5) return;
+    if (Array.isArray(node)) { node.forEach(n => walk(n, depth + 1)); return; }
+    if (typeof node !== "object") return;
+    const id = idOf(node), amt = amtOf(node);
+    if (id && amt != null) { out[id] = (out[id] || 0) + amt; return; }
+    Object.values(node).forEach(v => walk(v, depth + 1));
+  };
+  walk(res, 0);
   return Object.keys(out).length ? out : null;
 }
 
@@ -5535,7 +5558,9 @@ function Funding({ party, say, onChanged }) {
     const res = await WalletLink.walletHoldings();
     if (res != null && !window.__umbraLoggedHoldings) {
       window.__umbraLoggedHoldings = true;
-      console.info("[funding] wallet holdings response:", res);
+      // Loop does not document this answer; keep it visible for checking the parse.
+      console.info("[funding] wallet holdings response:", JSON.stringify(res).slice(0, 4000),
+                   "-> read as", walletBalancesOf(res));
     }
     setWalletBal(walletBalancesOf(res));
   }, []);

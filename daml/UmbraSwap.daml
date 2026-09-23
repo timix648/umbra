@@ -860,6 +860,8 @@ template SwapDeal
         feeAllocCid   : Optional (ContractId Allocation)
         feeArgs       : Optional ExtraArgs
         feeReceiver   : Optional (ContractId FeeReceiver)
+        -- the market mid at execution, stamped on the receipt (0.12.2)
+        refMid        : Optional Decimal
       controller operator
       do
         now <- getTime
@@ -929,6 +931,7 @@ template SwapDeal
           feeParty; feeAmount
           settledVia = "deal"
           executedAt = now
+          refMid
 
     -- Past the lock deadline, send every lock home. Only legs of THIS deal, only
     -- back to their senders (Allocation_Cancel returns the holdings to the sender).
@@ -1276,6 +1279,9 @@ template SettlementReceipt
     feeAmount   : Optional Decimal
     settledVia  : Text        -- "standin" or "real", matching the settlement
     executedAt  : Time
+    -- The market mid when it executed (0.12.2), so the book can show how far from
+    -- market the trade was. Optional: receipts written before it carry none.
+    refMid      : Optional Decimal
   where
     signatory requester, dealer
     observer operator
@@ -1336,6 +1342,7 @@ template SwapSettlement
           offerAsset; offerAmount; wantAsset; price
           feeParty; feeAmount; settledVia
           executedAt = now
+          refMid
         pure ()
 
     -- v7 REAL path: one-command, all-signed atomic settle for registry tokens.
@@ -1424,6 +1431,7 @@ template SwapSettlement
           offerAsset; offerAmount; wantAsset; price
           feeParty; feeAmount; settledVia
           executedAt = now
+          refMid
         pure ()
 
     -- Either principal can abort before execution; both allocations are then

@@ -58,7 +58,7 @@ source: daml
 # in ONE signature -- the best dealer up to its cap, the rest at the next best price --
 # then closes or reopens the remainder. SwapQuote.AwardPart is one such part.
 # Additive only.
-version: 0.12.1
+version: 0.12.2
 dependencies:
   - daml-prim
   - daml-stdlib

@@ -178,7 +178,7 @@ settle f d dealer fr = do
   _ <- submitMulti [f.operator] [f.requester, dealer] do
     exerciseCmd d SettleDeal with
       offerAllocCid = o; wantAllocCid = w; offerArgs = ea; wantArgs = ea
-      feeAllocCid = fee; feeArgs = fmap (const ea) fee; feeReceiver = fr
+      feeAllocCid = fee; feeArgs = fmap (const ea) fee; feeReceiver = fr; refMid = Some 499.0
   pure ()
 
 aFirmQuoteIsOneSignatureAndLocksTheDealersSide : Script ()
@@ -225,6 +225,9 @@ aWholeAwardIsOneSignatureAndSettles = do
   total f.dealerA "CBTC" >>= (=== 2.0)
   total f.dealerA "Amulet" >>= (=== 995.0)
   wallet f.vault >>= (=== [("Amulet", 5.0)])
+  -- the market mid at execution is on the record, for the book
+  [(_, rc)] <- query @SettlementReceipt f.requester
+  rc.refMid === Some 499.0
   gone <- queryContractId f.requester rfq
   gone === None
 

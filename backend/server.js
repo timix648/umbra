@@ -3027,6 +3027,9 @@ async function settleDeal(deal, L) {
         feeAllocCid: L.feeLeg ? L.feeLeg.contractId : null,
         feeArgs: fc ? xargs(fc) : null,
         feeReceiver,
+        // the market mid now, stamped on the receipt so the book can show the trade
+        // against market (0.12.2); a missing feed just leaves it empty
+        refMid: await refMidFor(p.offerAsset.symbol, p.wantAsset.symbol).then(m => m == null ? null : String(m)).catch(() => null),
       } } }],
     disclosedContracts: disclosed,
   }, "settle-deal", { duty: true });
