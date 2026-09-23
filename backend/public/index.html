@@ -279,7 +279,8 @@
 
   .sgn-btn{cursor:pointer;border:0;font:600 11.5px/1 var(--sans);letter-spacing:0.08em;
     text-transform:uppercase;color:#0B0E13;background:var(--accent);padding:15px 24px;border-radius:4px;
-    white-space:nowrap;box-shadow:0 6px 18px rgba(157,116,255,.3);transition:background .16s,transform .08s}
+    white-space:normal;line-height:1.35;max-width:100%;overflow-wrap:anywhere;text-align:center;
+    box-shadow:0 6px 18px rgba(157,116,255,.3);transition:background .16s,transform .08s}
   .sgn-btn:hover{background:#B08FFF}
   .sgn-btn:active{transform:translateY(1px)}
 
@@ -754,6 +755,7 @@
   .hold-fill{position:absolute;left:0;top:0;bottom:0;width:0;
     background:linear-gradient(90deg,#A883FF,#8B5CF6);transition:width .05s linear;z-index:0}
   .hold-t{position:relative;z-index:1}
+  .rq-step{padding:10px 14px;border-top:1px solid var(--line);font-size:12px;line-height:1.45;color:var(--accent2)}
   .btn.hold:active{transform:none}
 
   /* dealers who have not priced */
@@ -2153,11 +2155,21 @@ const WalletLink = (() => {
       party, commands: params.commands,
       disclosedContracts: params.disclosedContracts || [], tag,
     });
+    // Anything thrown while SIGNING is the wallet declining or its window being
+    // closed -- the transaction was never sent, so nothing was refused and nothing
+    // moved. Mark it, so the page says "not signed, press again", not "reverted".
+    let signature;
+    try { signature = await sign(prep.preparedTransactionHash); }
+    catch (e) {
+      const d = new Error("You closed the wallet window before approving, so nothing was signed and nothing moved. Press the button again when you're ready.");
+      d.declined = true;
+      throw d;
+    }
     const out = await post("/api/ext/execute", {
       party, commandId: prep.commandId,
       preparedTransaction: prep.preparedTransaction,
       hashingSchemeVersion: prep.hashingSchemeVersion,
-      signature: await sign(prep.preparedTransactionHash),
+      signature,
       signedBy: party.split("::")[1],
     });
     return { committed: !!(out && out.ok), updateId: null, commandId: prep.commandId };
@@ -4704,8 +4716,13 @@ function RequesterDesk(P) {
                           },
                             React.createElement("span", { className: "hold-fill", style: { width: (held ? holdPct * 100 : 0) + "%" } }),
                             React.createElement("span", { className: "hold-t" },
-                              awarding ? (awardStep || "Settling\u2026") : (held ? "Hold\u2026" : "Hold to award"))))); 
+                              awarding ? "Working\u2026" : (held ? "Hold\u2026" : "Hold to award"))))); 
                     }))),
+            // The small award button keeps a short label; the step being waited on
+            // is spelled out here, under the quotes, where it has room.
+            (awarding && awardStep)
+              ? React.createElement("div", { className: "rq-step", role: "status" }, awardStep)
+              : null,
             (rfq && invited.length > quotes.length)
               ? React.createElement("div", { className: "rq-passed" },
                   invited.map(d => cleanRole(d)).filter(d => !quotedBy.has(d)).map(d =>
@@ -5895,7 +5912,15 @@ function PartyPortal({ role, wallet, onExit }) {
   const [selRfqCid, setSelRfqCid] = useState(null);  // requester-selected live RFQ (drives REF fetch)
   const [composing, setComposing] = useState(false); // requester composing a new RFQ (focuses REF on the form)
 
-  const say = (m, bad) => { setNote({ m, bad }); setTimeout(() => setNote(null), 3400); };
+  const noteTimer = useRef(null);
+  // One timer: an earlier short note must not clear a later, longer one early.
+  const say = (m, bad, ms) => { setNote({ m, bad }); clearTimeout(noteTimer.current);
+    noteTimer.current = setTimeout(() => setNote(null), ms || 3400); };
+  // Deals this browser locked into and is waiting on. The settlement panel is for a
+  // trade that SETTLED, so it opens only when the venue has actually settled one of
+  // these (a receipt appears) -- never while the other side has yet to lock.
+  const dealWatch = useRef({});
+  const watchDeal = (d, view) => { if (d && d.contractId) dealWatch.current[d.contractId] = { d, view }; };
 
   const load = useCallback(async () => {
     try {
@@ -5966,6 +5991,23 @@ function PartyPortal({ role, wallet, onExit }) {
         // in, the venue finishes it, so nothing is shown and nothing is asked.
         let dealTrade = null;
         const dl = await api("/api/swap/deals?role=" + enc2(role)).catch(() => ({}));
+        if (dl && Array.isArray(dl.deals)) {
+          const openIds = new Set(dl.deals.map(d => d.contractId));
+          for (const [cid, w] of Object.entries(dealWatch.current)) {
+            if (openIds.has(cid)) continue;
+            const dp = w.d.payload;
+            const rc = ((hist && hist.receipts) || []).find(r => r.payload && r.payload.dealer === dp.dealer &&
+              r.payload.requester === dp.requester && Number(r.payload.offerAmount) === Number(dp.offerAmount) &&
+              Number(r.payload.price) === Number(dp.price) && r.payload.settledVia === "deal");
+            if (rc) {
+              delete dealWatch.current[cid];
+              setVault(Object.assign({}, w.view, { cid: rc.contractId, offset: rc.offset, signed: true }));
+            } else if (Date.parse(dp.allocateBefore) + 120000 < Date.now()) {
+              delete dealWatch.current[cid];
+              say("The trade did not complete in time, so every lock was returned. Nothing moved.", false, 9000);
+            }
+          }
+        }
         const dnew = ((dl && dl.deals) || []).slice().sort((x, y) => (x.payload.tradeId < y.payload.tradeId ? 1 : -1))[0];
         if (dnew) {
           const nx2 = await post("/api/swap/deals/" + dnew.contractId + "/next", { party: role }).catch(() => null);
@@ -6162,9 +6204,36 @@ function PartyPortal({ role, wallet, onExit }) {
     const sleep = ms => new Promise(r => setTimeout(r, ms));
     const al = ins.allocate || {};
     const sym = dispSym(al.instrument);
-    const hr = await api("/api/real/holdings?role=" + encodeURIComponent(role)).catch(() => ({}));
-    const mine = ((hr && hr.raw) || []).filter(x => !x.lock && sameSym(x.id, sym))
-      .sort((a2, b2) => Number(b2.amount) - Number(a2.amount));
+    const enc = encodeURIComponent;
+    const freeCoins = async () => {
+      const hr = await api("/api/real/holdings?role=" + enc(role)).catch(() => ({}));
+      return ((hr && hr.raw) || []).filter(x => !x.lock && sameSym(x.id, sym))
+        .sort((a2, b2) => Number(b2.amount) - Number(a2.amount));
+    };
+    let mine = await freeCoins();
+    let freeSum = mine.reduce((t, x) => t + Number(x.amount), 0);
+    // Short, but part of the balance sits in a lock from a trade that EXPIRED (the old
+    // flow never returned those by itself): release those first, with this wallet's
+    // approval, then lock. Deals from now on return their locks automatically.
+    if (freeSum < Number(al.amount)) {
+      const alr = await api("/api/real/allocations?role=" + enc(role)).catch(() => ({}));
+      const stale = ((alr && alr.allocations) || []).filter(a => a.sender === role && sameSym(a.instrument, sym) &&
+        a.settleBefore && Date.parse(a.settleBefore) < Date.now());
+      const staleSum = stale.reduce((t, a) => t + Number(a.amount), 0);
+      if (stale.length && freeSum + staleSum >= Number(al.amount)) {
+        for (const a of stale) {
+          onStep("Releasing " + fmtAmtStr(a.amount) + " " + sym + " from an expired trade first — approve in your wallet…");
+          const b = await post("/api/real/withdraw/" + a.contractId + "?build=1", { role, build: true });
+          await WalletLink.submit({ commands: b.commands, disclosedContracts: b.disclosedContracts });
+        }
+        for (let i = 0; i < 20; i++) {
+          mine = await freeCoins();
+          freeSum = mine.reduce((t, x) => t + Number(x.amount), 0);
+          if (freeSum >= Number(al.amount)) break;
+          await sleep(1500);
+        }
+      }
+    }
     const cids = []; let got = 0;
     for (const h of mine) { if (got >= Number(al.amount)) break; cids.push(h.contractId); got += Number(h.amount); }
     if (!cids.length || got < Number(al.amount)) {
@@ -6310,10 +6379,14 @@ function PartyPortal({ role, wallet, onExit }) {
     setSettling(true); setSettleStep("Checking the trade…");
     try {
       if (openTrade.kind === "deal") {
-        const st = await lockDealLegs(openTrade.c.contractId, setSettleStep);
+        const dp = openTrade.c.payload;
+        // The dealer's view: it pays the price and receives the request's offer.
+        watchDeal(openTrade.c, { offerSym: dispSym(dp.wantAsset.symbol), offerAmt: dp.price,
+          wantSym: dispSym(dp.offerAsset.symbol), wantAmt: dp.offerAmount, dealerName: "the requester" });
+        await lockDealLegs(openTrade.c.contractId, setSettleStep);
         setOpenTrade(null);
-        say(st.status === "done" ? "Settled. The swap executed atomically."
-          : "Locked. The venue settles this trade on its own — nothing more to sign.");
+        say("Locked. The trade settles by itself in a few seconds — nothing more to sign.", false, 9000);
+        load();
         return;
       }
       const rr = openTrade.kind === "proposal"
@@ -6324,8 +6397,9 @@ function PartyPortal({ role, wallet, onExit }) {
       say("Settled. The swap executed atomically.");
       setOpenTrade(null);
     } catch (e) {
-      // `waiting` is the trade progressing on the other side, not a failure.
-      if (e && e.waiting) say(e.message);
+      // `waiting` is the trade progressing on the other side, not a failure; a closed
+      // wallet window is not one either -- nothing was sent.
+      if (e && (e.waiting || e.declined)) say(e.message, false, 8000);
       else say((e && e.message) || "settlement failed", true);
     } finally {
       setSettling(false);
@@ -6406,21 +6480,20 @@ function PartyPortal({ role, wallet, onExit }) {
       }
       if (!fresh.length) throw new Error("the award was signed, but the deals did not appear -- refresh in a moment");
       // One lock per dealer filled: each part is its own deal, settled on its own.
-      for (const d of fresh) await lockDealLegs(d.contractId, setAwardStep);
+      for (const d of fresh) {
+        watchDeal(d, { offerSym: dispSym(p.offerAsset.symbol), offerAmt: d.payload.offerAmount,
+          wantSym: dispSym(p.wantAsset.symbol), wantAmt: d.payload.price, dealerName: DEALER_NAME(d.payload.dealer) });
+        await lockDealLegs(d.contractId, setAwardStep);
+      }
       const by = new Date(fresh[0].payload.allocateBefore).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      setVault({
-        waiting: true, failed: false,
-        reason: "Your " + dispSym(p.offerAsset.symbol) + " is locked for " + fresh.length + (fresh.length > 1 ? " deals" : " deal") +
-          ". Each settles on its own as soon as its dealer locks — nothing more to sign. Anything a dealer has not locked by " +
+      say("Your " + dispSym(p.offerAsset.symbol) + " is locked for " + fresh.length + (fresh.length > 1 ? " deals" : " deal") +
+          ". Each settles by itself as soon as its dealer locks — nothing more to sign. Anything not locked by " +
           by + " comes back to you." + (plan.total - filled > 1e-12
             ? " The unfilled " + fmtAmtStr(plan.total - filled) + " " + dispSym(p.offerAsset.symbol) +
-              (keepRest ? " is open again for new quotes." : " was closed — it never left your wallet.") : ""),
-        offerSym: dispSym(p.offerAsset.symbol), offerAmt: filled,
-        wantSym: dispSym(p.wantAsset.symbol), wantAmt: received,
-        dealerName: fresh.length > 1 ? fresh.length + " dealers" : DEALER_NAME(fresh[0].payload.dealer), signed
-      });
+              (keepRest ? " is open again for new quotes." : " was closed — it never left your wallet.") : ""), false, 12000);
       load();
     } catch (e) {
+      if (e && e.declined) { say(e.message, false, 8000); return; }
       setVault({ failed: !e.waiting, waiting: !!e.waiting, reason: e.message,
         offerSym: dispSym(p.offerAsset.symbol), offerAmt: filled, wantSym: dispSym(p.wantAsset.symbol),
         wantAmt: received, dealerName: DEALER_NAME(p.dealer), signed });
@@ -6465,15 +6538,15 @@ function PartyPortal({ role, wallet, onExit }) {
           if (!deal) await new Promise(r => setTimeout(r, 1500));
         }
         if (!deal) throw new Error("the award was signed, but the deal did not appear -- refresh in a moment");
-        const st = await lockDealLegs(deal.contractId, setAwardStep);
+        watchDeal(deal, { offerSym: dispSym(offerSym), offerAmt: deal.payload.offerAmount,
+          wantSym: dispSym(wantSym), wantAmt: deal.payload.price, dealerName: DEALER_NAME(p.dealer) });
+        await lockDealLegs(deal.contractId, setAwardStep);
         const by = new Date(deal.payload.allocateBefore).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-        const e = new Error(st.status === "done" ? "Settled." :
-          "Your " + dispSym(offerSym) + " is locked for this trade. It settles automatically as soon as " +
+        say("Your " + dispSym(offerSym) + " is locked. The trade settles by itself as soon as " +
           DEALER_NAME(p.dealer) + " locks theirs \u2014 nothing more to sign. If they have not by " + by +
-          ", your " + dispSym(offerSym) + " comes back to you on its own.");
-        e.waiting = st.status !== "done";
-        if (!e.waiting) { load(); return; }
-        throw e;
+          ", it comes back to you.", false, 12000);
+        load();
+        return;
       }
       if (a.build) {
         setAwardStep("Sign the acceptance in your wallet\u2026");
@@ -6508,6 +6581,7 @@ function PartyPortal({ role, wallet, onExit }) {
       });
       load();
     } catch (e) {
+      if (e && e.declined) { say(e.message, false, 8000); return; }
       // The ledger refusing a trade is not an error to be toasted away \u2014 it is
       // the soundness guarantee doing its job. Show it.
       // "Waiting on the counterparty" is NOT a refusal. Saying "nothing moved" there
@@ -6552,7 +6626,7 @@ function PartyPortal({ role, wallet, onExit }) {
           }
         } catch (e) {
           // Declined in the wallet: stop, do not start asking for other signatures.
-          if (/reject|declin|denied|cancel/i.test((e && e.message) || "")) throw e;
+          if ((e && e.declined) || /reject|declin|denied|cancel/i.test((e && e.message) || "")) throw e;
           r2 = r;   // no desk after all: the two-signature path below
         }
       }
