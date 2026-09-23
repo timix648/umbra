@@ -790,6 +790,15 @@ app.post("/api/dealers/register", async (req, res) => {
           } }];
         })();
 
+    // A wallet desk lists ITSELF: only that wallet may ask, and its own key signs.
+    // (Sending it through act() only ever produced an error - act signs for venue
+    // roles, and the page had no way to pick the commands out of that error.)
+    if (isWalletParty(party)) {
+      if (auth.callerParty(req) !== party && !auth.isOperator(req)) {
+        return res.status(403).json({ error: "only that wallet can list or delist itself" });
+      }
+      return res.json({ ok: true, build: true, party, listed: active, commands: cmds });
+    }
     try {
       const result = await act(who, active ? "dealer-list" : "dealer-unlist", cmds);
       return res.json({ ok: true, party, listed: active, onLedger: true, result });

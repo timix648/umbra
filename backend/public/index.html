@@ -4151,7 +4151,7 @@ const ASSET_LONG = sym => {
 function RequesterDesk(P) {
   const { meta, signed, onExit, note, rfqs, quotes, holdings, rate, series, usd, rateNote,
           onCreate, onAward, awarding, awardStep, onPair, history, composedPair, composing, setComposing, ratePair,
-          selRfqCid, setSelRfqCid, deskSwitch, role, wallet, say } = P;
+          selRfqCid, setSelRfqCid, deskSwitch, role, wallet, say, listed, onToggleListing } = P;
   const settled = (history && history.settlements) || [];
   // the reference is for the pair the requester is composing -- matches the fetch
   // in load() (requester prices composedPair), so label and value agree and
@@ -4255,6 +4255,14 @@ function RequesterDesk(P) {
           React.createElement("b", { className: "m" }, fmtUsd(totalUsd(usd, holdings)) || "\u2014")),
         rfq ? React.createElement("button", { className: "btn sm", onClick: () => setComposing(c => !c) },
           composing ? "Close" : "New request") : null,
+        // Opting in to price other people's blocks. Here, not only on the dealer desk:
+        // a wallet reaches that desk by opening an invitation, and nobody can invite it
+        // until it is listed.
+        wallet && listed != null ? React.createElement("button", {
+          className: "prt-out tip-below tip-left", onClick: onToggleListing,
+          "data-tip": listed ? "You are in the dealer directory: buyers can invite you to price blocks. Click to leave it."
+                             : "Join the dealer directory so buyers can invite you to price their blocks. You can still raise your own requests."
+        }, listed ? "Listed as dealer ✓" : "List me as a dealer") : null,
         React.createElement(ThemeBtn, { theme, flip: flipTheme }),
         React.createElement("span", { className: "prt-trust " + (signed ? "sg" : "op") }, signed ? "self-signing" : "operator acts"),
         React.createElement("button", { className: "prt-out", onClick: onExit }, "Sign out"))),
@@ -5441,7 +5449,8 @@ function PartyPortal({ role, wallet, onExit }) {
       if (md && md.parties) setParties(md.parties);
       if (md) setSigned(!!md.signedMode);
       if (md) setFee(md.fee || null);
-      if (wallet && isDealer) {
+      // Every wallet can list itself, from either desk -- so read its listing on both.
+      if (wallet) {
         const dl = await api("/api/dealers?all=1").catch(() => null);
         const meRow = dl && (dl.dealers || []).find(d => d.partyId === role);
         setListed(meRow ? !!meRow.listed : false);
@@ -5670,6 +5679,12 @@ function PartyPortal({ role, wallet, onExit }) {
   const toggleListing = useCallback(async () => {
     try {
       const r = await post("/api/dealers/register", { party: role, active: !listed });
+      // A wallet's listing is signed by the wallet (the registration is `signatory
+      // dealer`): the server hands back the commands and the wallet signs them here.
+      if (r && r.build) {
+        say("Approve the listing in your wallet…");
+        await WalletLink.submit({ commands: r.commands, disclosedContracts: r.disclosedContracts || [] });
+      }
       setListed(!!r.listed);
       say(r.listed ? "You are listed — buyers can now invite you to price blocks."
                    : "Delisted. You will not appear in the dealer directory.");
@@ -5845,7 +5860,7 @@ function PartyPortal({ role, wallet, onExit }) {
       onCreate: createRfq, onAward: awardQuote, awarding, awardStep,
       composing, setComposing, ratePair, selRfqCid, setSelRfqCid,
       openTrade, settling, settleStep, onSettle: settleAsDealer, readFailed, fee,
-      wallet, say
+      wallet, say, listed, onToggleListing: toggleListing
     }),
     React.createElement(GovernancePanel, { onOpen: setVault }),
     React.createElement(SettlementVault, { trade: vault, role, onClose: () => setVault(null) }));
