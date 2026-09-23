@@ -175,6 +175,23 @@ function saveWallets(s) {
   try { fs.chmodSync(WALLET_STORE, 0o600); } catch { /* non-posix */ }
 }
 
+// A party id is <hint>::<fingerprint of its namespace key>, and the fingerprint is
+// computed by the participant from the key itself. So a claimed public key is PROVEN
+// to belong to a party - never taken on the caller's word - by having the participant
+// fingerprint it and checking the party id carries that fingerprint. Without this, a
+// caller could record their own key against someone else's party, sign in as it, and
+// read its quotes.
+async function fingerprintOf(publicKeyB64) {
+  const g = await jpost("/v2/parties/external/generate-topology", {
+    partyHint: "keycheck", synchronizer: SYNC,
+    publicKey: { format: "CRYPTO_KEY_FORMAT_RAW", keyData: publicKeyB64,
+                 keySpec: "SIGNING_KEY_SPEC_EC_CURVE25519" },
+  });
+  return g.publicKeyFingerprint;
+}
+const ownsParty = (fingerprint, partyId) =>
+  !!fingerprint && String(partyId || "").endsWith("::" + fingerprint);
+
 async function onboardWalletPrepare(publicKeyB64, partyHint) {
   if (!publicKeyB64) throw new Error("need the wallet's raw ed25519 public key (base64)");
   const raw = Buffer.from(publicKeyB64, "base64");
@@ -186,6 +203,22 @@ async function onboardWalletPrepare(publicKeyB64, partyHint) {
   const g = await jpost("/v2/parties/external/generate-topology", {
     partyHint: partyHint || ("wallet-" + Date.now()), synchronizer: SYNC, publicKey,
   });
+  // Backfill. Wallets onboarded before confirm recorded the key have publicKey null
+  // and can never sign in. g.publicKeyFingerprint was computed by the participant
+  // from THIS key, so a record with that fingerprint and that namespace is provably
+  // this key's party. Only ever fills a missing key; never replaces one.
+  const s = loadWallets();
+  let filled = 0;
+  for (const rec of Object.values(s)) {
+    if (!rec.publicKey && rec.fingerprint === g.publicKeyFingerprint &&
+        ownsParty(g.publicKeyFingerprint, rec.partyId)) {
+      rec.publicKey = publicKeyB64; filled++;
+    }
+  }
+  if (filled) {
+    saveWallets(s);
+    console.log("[wallet] recorded the missing public key for", g.publicKeyFingerprint);
+  }
   return {
     partyId: g.partyId,
     fingerprint: g.publicKeyFingerprint,
@@ -196,6 +229,18 @@ async function onboardWalletPrepare(publicKeyB64, partyHint) {
 }
 
 async function onboardWalletConfirm(o) {
+  // Verify the key BEFORE allocating, so a refusal leaves nothing half-done.
+  if (!o.publicKey) {
+    throw Object.assign(new Error(
+      "need the wallet's public key - without it this party could never sign in"), { status: 400 });
+  }
+  if ((await fingerprintOf(o.publicKey)) !== o.fingerprint || !ownsParty(o.fingerprint, o.partyId)) {
+    throw Object.assign(new Error("that public key does not belong to this party"), { status: 400 });
+  }
+  const prev = loadWallets()[o.partyId];
+  if (prev && prev.publicKey && prev.publicKey !== o.publicKey) {
+    throw Object.assign(new Error("this party is already onboarded with a different key"), { status: 409 });
+  }
   await jpost("/v2/parties/external/allocate", {
     synchronizer: SYNC,
     onboardingTransactions: (o.topologyTransactions || []).map((t) => ({ transaction: t })),
@@ -232,7 +277,7 @@ async function onboardWalletConfirm(o) {
   // signs a nonce and we check it against this. The fingerprint alone is a hash
   // and cannot verify anything. Still no private key field, and never one.
   s[o.partyId] = { partyId: o.partyId, fingerprint: o.fingerprint,
-                   publicKey: o.publicKey || null,
+                   publicKey: o.publicKey,          // verified above, never null
                    onboardedAt: new Date().toISOString() };   // note: no private key field
   saveWallets(s);
   console.log("[wallet] onboarded", o.partyId, "(no private key held)");

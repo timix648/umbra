@@ -1464,8 +1464,49 @@ function RoleIcon({ role }) {
 }
 const short = p => !p ? "—" : p.length > 26 ? p.slice(0, 13) + "…" + p.slice(-7) : p;
 const cleanRole = pid => (pid || "").split("::")[0].replace(/-\d+$/, "");
-async function api(path, opts) {
-  const r = await fetch(API + path, opts);
+// ---- SESSION ----
+//
+// Every state-changing call, and every read of a wallet's own view, needs a session:
+// the wallet signs a one-time nonce and backend/auth.js swaps it for a short-lived
+// bearer token. The server takes the party from the token, never from the request.
+// Held in sessionStorage so a reload inside its lifetime costs no extra wallet
+// prompt; it never outlives the tab.
+let SESSION = (() => {
+  try {
+    const x = JSON.parse(sessionStorage.getItem("umbra.session") || "null");
+    return x && x.token && Date.now() < x.exp ? x : null;
+  } catch (e) { return null; }
+})();
+let REAUTH = null;     // set by a wallet adapter once it can sign
+let reauthing = null;  // one prompt for a burst of refusals, not one per request
+function setSession(x) {
+  SESSION = x;
+  try {
+    if (x) sessionStorage.setItem("umbra.session", JSON.stringify(x));
+    else sessionStorage.removeItem("umbra.session");
+  } catch (e) {}
+}
+async function walletSignIn(party, sign) {
+  REAUTH = () => walletSignIn(party, sign);
+  const { nonce } = await post("/api/auth/challenge", { party });
+  const signature = await sign(nonce);
+  const v = await post("/api/auth/verify", { party, nonce, signature });
+  setSession({ token: v.token, party, exp: Date.now() + (v.expiresInMs || 0) - 30000 });
+}
+async function api(path, opts, retried) {
+  const o = Object.assign({}, opts);
+  o.headers = Object.assign({}, o.headers);
+  if (SESSION && Date.now() < SESSION.exp) o.headers.Authorization = "Bearer " + SESSION.token;
+  const r = await fetch(API + path, o);
+  // A refused WRITE is a user action, so asking the wallet to sign in again is
+  // expected. A refused READ is not: re-prompting from page-load polling would be a
+  // wallet popup nobody asked for.
+  if (r.status === 401 && !retried && REAUTH && o.method === "POST" &&
+      path.indexOf("/api/auth/") !== 0) {
+    reauthing = reauthing || REAUTH().finally(() => { reauthing = null; });
+    await reauthing;
+    return api(path, opts, true);
+  }
   const t = await r.text();
   let j;
   try {
@@ -1904,7 +1945,11 @@ const WalletLink = (() => {
                                          { publicKey: lB64(lBytes(provider.public_key)) });
                 const known = (await api("/api/ext/wallets")).wallets || [];
                 const mine = known.find(w => w.fingerprint === draft.fingerprint);
-                if (mine) loopParty = mine.partyId;
+                if (mine) {
+                  loopParty = mine.partyId;
+                  // No prompt on load; the first write signs in if the session lapsed.
+                  REAUTH = () => walletSignIn(loopParty, loopSign);
+                }
               } catch (e) { console.warn("[loop] restore failed:", e && e.message); }
               fin();
             },
@@ -1944,10 +1989,18 @@ const WalletLink = (() => {
       } else {
         const r = await post("/api/ext/onboard/confirm", {
           partyId: draft.partyId, fingerprint: draft.fingerprint,
+          publicKey: draft.publicKey,
           topologyTransactions: draft.topologyTransactions,
           multiHashSignature: await loopSign(draft.multiHash),
         });
         loopParty = r.party.partyId;
+      }
+      // Sign in now, while the user is already in a wallet flow, so the first button
+      // they press is not refused. Non-fatal: if they decline, the first write asks.
+      try { await walletSignIn(loopParty, loopSign); }
+      catch (e) {
+        console.warn("[loop] sign-in failed:", e && e.message);
+        REAUTH = () => walletSignIn(loopParty, loopSign);
       }
       try { localStorage.setItem("umbra.wallet", "loop"); } catch (e) {}
       return true;
@@ -1955,6 +2008,7 @@ const WalletLink = (() => {
     disconnect: async (s) => {
       try { s.logout(); } catch (e) {}
       loopProvider = null; loopParty = null;
+      setSession(null); REAUTH = null;
       try { localStorage.removeItem("umbra.wallet"); localStorage.removeItem("umbra.loop.home"); } catch (e) {}
     },
     // Where the user's OTHER balance lives -- the party their wallet hosts and shows.
