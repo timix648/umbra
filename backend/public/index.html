@@ -4,9 +4,29 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>UMBRA — Dark OTC Venue</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&display=swap">
+<!-- Figtree, served from this origin (SIL OFL 1.1, /assets/fonts/OFL.txt). Not Google
+     Fonts: a private venue should not tell a third party who opened it. -->
+<link rel="preload" href="/assets/fonts/figtree-latin.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+  /* latin-ext */
+  @font-face {
+    font-family: 'Figtree';
+    font-style: normal;
+    font-weight: 400 700;
+    font-display: swap;
+    src: url(/assets/fonts/figtree-latin-ext.woff2) format('woff2');
+    unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+  }
+  /* latin */
+  @font-face {
+    font-family: 'Figtree';
+    font-style: normal;
+    font-weight: 400 700;
+    font-display: swap;
+    src: url(/assets/fonts/figtree-latin.woff2) format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  }
+</style>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2032%2032%22%3E%3Ccircle%20cx%3D%2216%22%20cy%3D%2216%22%20r%3D%2210%22%20fill%3D%22none%22%20stroke%3D%22%237c3aed%22%20stroke-width%3D%224.5%22%2F%3E%3Ccircle%20cx%3D%2216%22%20cy%3D%2216%22%20r%3D%2210.5%22%20fill%3D%22none%22%20stroke%3D%22%23c4b5fd%22%20stroke-width%3D%221.2%22%2F%3E%3C%2Fsvg%3E">
 <style>
   /* ============ THEME TOKENS ============ */
@@ -713,7 +733,10 @@
 .mr-mid .fnum{margin-left:0;font-size:inherit;font-weight:inherit;color:inherit;letter-spacing:inherit}
 .mr-mid .fnum sub{font-size:.62em;font-weight:inherit}
   .mr-spark{width:100%;height:44px;margin:14px 0 10px;display:block}
-  .mr-spark.empty{height:44px;border-bottom:1px dashed var(--line2)}
+  /* no price history yet: a hairline, not a 44px empty box */
+  .mr-spark.empty{height:0;margin:12px 0 10px;border-bottom:1px solid var(--line)}
+  /* touch screens: header controls get a 44px hit area (desktop keeps them compact) */
+  @media (pointer:coarse){.icbtn,.prt-ico{width:44px;height:44px}.prt-out{min-height:44px}}
   .mr-foot{display:flex;align-items:center;gap:8px;font:500 10px/1 var(--sans);color:var(--dim)}
 
   /* holdings list */
@@ -743,6 +766,14 @@
   .prt > main.dsk{flex:1;min-height:0}
   @media(max-width:1080px){.dsk{grid-template-columns:1fr;height:auto;overflow:visible}
     .prt{height:auto;overflow:visible}}
+  /* phones: 44px side padding took a quarter of the width; the two-up offer row cut the
+     amount field off; the quote table ran past its card. Stack, and let tables scroll. */
+  @media(max-width:600px){
+    .rqk,.dsk{padding:12px 12px;gap:12px}
+    .r2{grid-template-columns:1fr}
+    .qm{display:block;overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch}
+    .prt-bar{padding-left:12px;padding-right:12px}
+  }
   .dsk-col{display:flex;flex-direction:column;gap:16px;min-width:0;min-height:0;
     overflow-y:auto;overflow-x:hidden;scrollbar-width:thin}
   .dsk-col::-webkit-scrollbar{width:5px}
@@ -862,7 +893,9 @@
     transition:filter .15s, transform .1s, box-shadow .15s}
   .btn.prime:hover{filter:brightness(1.08);box-shadow:inset 0 1px 0 rgba(255,255,255,.34), 0 4px 16px rgba(139,92,246,.42)}
   .btn.prime:active{transform:translateY(1px)}
-  .btn.prime:disabled{opacity:.45;filter:none;box-shadow:none}
+  /* disabled = neutral, not faded purple: the faded accent still read as pressable */
+  .btn.prime:disabled{opacity:1;filter:none;box-shadow:none;background:var(--bg3);color:var(--mute);
+    outline:1px solid var(--line);outline-offset:-1px;cursor:not-allowed}
 
   /* redaction that reads as censorship, not a loading bar */
   .wh{display:flex;align-items:center;gap:11px;margin-bottom:9px}
@@ -1783,9 +1816,11 @@ const WalletLink = (() => {
       const optional = (a) => (a ? [a] : []);
       const adapterList = [
         S.LoopAdapter, S.ConsoleAdapter, S.Cantor8Adapter, S.NightlyAdapter, S.SendAdapter,
-        // OneSwap is a Canton AMM, so its users already hold the assets a block
-        // trade needs. Its adapter is a plain CIP-0103 provider and needs no config.
-        ...optional(S.OneSwapProviderAdapter),
+        // NOT OneSwap: its adapter is a generic provider wrapper that needs a
+        // providerId and OneSwap's wallet URL. Passed bare, it threw "Cannot read
+        // properties of undefined (reading 'providerId')" inside createPartyLayer,
+        // which took PartyLayer down whole -- every "other wallet" silently fell
+        // through to the plain Canton SDK picker. Add it back only with its config.
         // WalletConnect is a transport rather than one vendor's wallet, so it
         // reaches every mobile wallet that speaks the protocol at once.
         ...(WC_PROJECT_ID ? optional(S.WalletConnectAdapter) : []),
@@ -2027,7 +2062,7 @@ const WalletLink = (() => {
   // hint is a timestamp, so preparing twice drafts two party ids for one key.
   async function custodyFound(pubB64, sign) {
     const draft = await post("/api/ext/onboard/prepare", { publicKey: pubB64 });
-    const known = (await api("/api/ext/wallets")).wallets || [];
+    const known = (await api("/api/ext/wallets?fingerprint=" + encodeURIComponent(draft.fingerprint))).wallets || [];
     const existing = known.find(w => w.fingerprint === draft.fingerprint);
     if (existing) return existing.partyId;
     const r = await post("/api/ext/onboard/confirm", {
@@ -2041,7 +2076,7 @@ const WalletLink = (() => {
   // for is its own bug. Null when this key has no party here yet.
   async function custodyAdopt(pubB64) {
     const draft = await post("/api/ext/onboard/prepare", { publicKey: pubB64 });
-    const known = (await api("/api/ext/wallets")).wallets || [];
+    const known = (await api("/api/ext/wallets?fingerprint=" + encodeURIComponent(draft.fingerprint))).wallets || [];
     const mine = known.find(w => w.fingerprint === draft.fingerprint);
     return mine ? mine.partyId : null;
   }
@@ -2181,7 +2216,7 @@ const WalletLink = (() => {
                 try { localStorage.setItem("umbra.loop.home", provider.party_id || ""); } catch (e) {}
                 const draft = await post("/api/ext/onboard/prepare",
                                          { publicKey: lB64(lBytes(provider.public_key)) });
-                const known = (await api("/api/ext/wallets")).wallets || [];
+                const known = (await api("/api/ext/wallets?fingerprint=" + encodeURIComponent(draft.fingerprint))).wallets || [];
                 const mine = known.find(w => w.fingerprint === draft.fingerprint);
                 if (mine) {
                   loopParty = mine.partyId;
@@ -2920,10 +2955,10 @@ function OperatorConsole({ onExit }) {
     try {
       // don't waste dealers' time: requester must actually hold the offer amount
       const _rh = (hold && hold.requester && hold.requester.assets) || [];
-      const _have = _rh.filter(h => h.payload.asset.symbol === f.offerAsset.symbol)
+      const _have = _rh.filter(h => sameSym(h.payload.asset.symbol, f.offerAsset.symbol))
         .reduce((s, h) => s + Number(h.payload.amount), 0);
       if (_have < Number(f.offerAmount)) {
-        push("You only hold " + _have + " " + f.offerAsset.symbol + " \u2014 can't offer " + f.offerAmount, "er");
+        push("You only hold " + _have + " " + dispSym(f.offerAsset.symbol) + " \u2014 can't offer " + f.offerAmount, "er");
         return;
       }
       await post("/api/swap/rfq", {
@@ -2933,7 +2968,7 @@ function OperatorConsole({ onExit }) {
         invited: (f.invited && f.invited.length) ? f.invited : ["dealer1", "dealer2"]
       });
       push("Swap RFQ created");
-      addlog("SWAP " + f.offerAmount + " " + f.offerAsset.symbol + " \u2192 " + f.wantAsset.symbol + (mode ? " (requester-signed)" : ""), "ok");
+      addlog("SWAP " + f.offerAmount + " " + dispSym(f.offerAsset.symbol) + " \u2192 " + dispSym(f.wantAsset.symbol) + (mode ? " (requester-signed)" : ""), "ok");
       refresh();
     } catch (e) {
       push(e.message, "er");
@@ -2977,7 +3012,7 @@ function OperatorConsole({ onExit }) {
     const list = (hold[role] && hold[role].assets) || [];
     const want = Number(need);
     const match = list
-      .filter(h => h.payload.asset.symbol === symbol && Number(h.payload.amount) >= want)
+      .filter(h => sameSym(h.payload.asset.symbol, symbol) && Number(h.payload.amount) >= want)
       .sort((a, b) => Number(a.payload.amount) - Number(b.payload.amount))[0];
     return match ? match.contractId : null;
   }
@@ -3235,9 +3270,9 @@ function OperatorConsole({ onExit }) {
             /*#__PURE__*/React.createElement(AssetIcon, { symbol: p.offerAsset.symbol, size: "sm" }),
             /*#__PURE__*/React.createElement("span", { style: { color: "var(--accent)" } }, "\u2192"),
             /*#__PURE__*/React.createElement(AssetIcon, { symbol: p.wantAsset.symbol, size: "sm" }))),
-          /*#__PURE__*/React.createElement("td", null, fmtAmtStr(p.offerAmount), " ", p.offerAsset.symbol),
+          /*#__PURE__*/React.createElement("td", null, fmtAmtStr(p.offerAmount), " ", dispSym(p.offerAsset.symbol)),
           /*#__PURE__*/React.createElement("td", { className: "px" },
-            Number(p.price).toFixed(2), " ", p.wantAsset.symbol, isBest ? " \u25c2" : ""),
+            Number(p.price).toFixed(2), " ", dispSym(p.wantAsset.symbol), isBest ? " \u25c2" : ""),
           /*#__PURE__*/React.createElement("td", null,
             /*#__PURE__*/React.createElement("input", {
               style: { width: 64, padding: "4px 6px" },
@@ -3245,7 +3280,7 @@ function OperatorConsole({ onExit }) {
               placeholder: fmtAmtStr(p.maxFillAmount == null ? p.offerAmount : p.maxFillAmount),
               title: p.maxFillAmount == null
                 ? "How much of the block to take from this dealer. Blank takes all of it."
-                : ("This dealer will take at most " + fmtAmtStr(p.maxFillAmount) + " " + p.offerAsset.symbol),
+                : ("This dealer will take at most " + fmtAmtStr(p.maxFillAmount) + " " + dispSym(p.offerAsset.symbol)),
               value: fills[q.contractId] || "",
               onChange: e => setFills(f => ({ ...f, [q.contractId]: e.target.value }))
             }),
@@ -3394,7 +3429,7 @@ function AssetIcon({
   symbol,
   size
 }) {
-  const SRC = { cBTC: "/assets/cbtc.png", cETH: "/assets/ceth.png", CC: "/assets/cc.png" };
+  const SRC = { CBTC: "/assets/cbtc.png", cETH: "/assets/ceth.png", CC: "/assets/cc.png" };
   const cls = "tic" + (size === "sm" ? " sm" : size === "lg" ? " lg" : "");
   const src = SRC[dispSym(symbol)];
   const [bad, setBad] = useState(false);
@@ -3421,13 +3456,17 @@ function SwapRfqForm({
   role,
   // Present only on the wallet path. Undefined on the demo desks and the operator
   // console, which is what keeps the house dealers visible there.
-  wallet
+  wallet,
+  // Embedded under a card that already has its own heading: skip this form's.
+  bare
 }) {
-  const FALLBACK = [{ symbol: "cBTC" }, { symbol: "cETH" }, { symbol: "CC" }];
+  const FALLBACK = [{ symbol: "CBTC" }, { symbol: "cETH" }, { symbol: "CC" }];
   const [assets, setAssets] = useState(FALLBACK);
-  const [offerSym, setOfferSym] = useState("cBTC");
+  const [offerSym, setOfferSym] = useState("CBTC");
   const [wantSym, setWantSym] = useState("cETH");
-  const [amount, setAmount] = useState("1");
+  // Empty, not "1": a prefilled size the user never chose, at a zero balance, greeted
+  // every new wallet with an "Insufficient" button before it had done anything.
+  const [amount, setAmount] = useState("");
   const [busy, setBusy] = useState(false);
   const [dealers, setDealers] = useState([]);
   const [invited, setInvited] = useState([]);
@@ -3511,7 +3550,7 @@ function SwapRfqForm({
   // quote. `holdings` is optional: where it isn't supplied we can't know the balance,
   // so we must not block (a false "insufficient" is worse than no check at all).
   const _offerHeld = (holdings || [])
-    .filter(h => h.payload.asset.symbol === offerSym)
+    .filter(h => sameSym(h.payload.asset.symbol, offerSym))
     .reduce((s, h) => s + Number(h.payload.amount), 0);
   const _amt = Number(amount);
   const _short = !!holdings && isFinite(_amt) && _amt > 0 && _amt > _offerHeld;
@@ -3521,17 +3560,15 @@ function SwapRfqForm({
   // instead of making you check Holdings and come back.
   const _offerBalances = {};
   (holdings || []).forEach(h => {
-    const s = h.payload.asset.symbol;
+    const s = dispSym(h.payload.asset.symbol);
     _offerBalances[s] = (_offerBalances[s] || 0) + Number(h.payload.amount);
   });
 
   return /*#__PURE__*/React.createElement("div", {
     className: "pane"
-  }, /*#__PURE__*/React.createElement("div", {
+  }, bare ? null : /*#__PURE__*/React.createElement("div", {
     className: "ph"
-  }, /*#__PURE__*/React.createElement("h3", null, "New Asset Swap"), /*#__PURE__*/React.createElement("span", {
-    className: "c"
-  }, "any ↔ any")), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("h3", null, "New Asset Swap")), /*#__PURE__*/React.createElement("div", {
     className: "pb"
   }, /*#__PURE__*/React.createElement("div", {
     className: "r2"
@@ -3597,9 +3634,9 @@ function SwapRfqForm({
 
   /*#__PURE__*/React.createElement("button", {
     className: "btn prime",
-    disabled: busy || offerSym === wantSym || _short || !invited.length,
+    disabled: busy || offerSym === wantSym || _short || !invited.length || !(_amt > 0),
     onClick: async () => {
-      if (busy || _short || !invited.length) return;
+      if (busy || _short || !invited.length || !(_amt > 0)) return;
       setBusy(true);
       try {
         await onCreate({
@@ -3616,8 +3653,9 @@ function SwapRfqForm({
       : (!invited.length ? "Pick at least one dealer to ask"
         : "Request quotes to swap one asset for another — dealers compete, winner settles atomically")
   }, busy ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", { className: "spinr" }), "Creating")
-     : (_short ? ("Insufficient " + offerSym)
-        : (!invited.length ? "Pick a dealer" : "Create Swap RFQ")))));
+     : (!(_amt > 0) ? "Enter an amount"
+        : (_short ? ("Insufficient " + offerSym)
+        : (!invited.length ? "Pick a dealer" : "Create Swap RFQ"))))));
 }
 function RfqForm({
   onCreate
@@ -3694,21 +3732,21 @@ function DealerCard({
     className: "k"
   }, /*#__PURE__*/React.createElement("span", { className: "apair" },
       /*#__PURE__*/React.createElement(AssetIcon, { symbol: iv.payload.offerAsset.symbol, size: "sm" }),
-      fmtAmtStr(iv.payload.offerAmount) + " " + iv.payload.offerAsset.symbol,
+      fmtAmtStr(iv.payload.offerAmount) + " " + dispSym(iv.payload.offerAsset.symbol),
       /*#__PURE__*/React.createElement("span", { style: { color: "var(--accent)" } }, "\u2192"),
       /*#__PURE__*/React.createElement(AssetIcon, { symbol: iv.payload.wantAsset.symbol, size: "sm" }),
-      iv.payload.wantAsset.symbol)), /*#__PURE__*/React.createElement("div", {
+      dispSym(iv.payload.wantAsset.symbol))), /*#__PURE__*/React.createElement("div", {
     className: "s"
-  }, "swap \u00b7 quote in ", iv.payload.wantAsset.symbol)), /*#__PURE__*/React.createElement("div", {
+  }, "swap \u00b7 quote in ", dispSym(iv.payload.wantAsset.symbol))), /*#__PURE__*/React.createElement("div", {
     className: "acts"
   }, /*#__PURE__*/React.createElement("input", {
     style: { width: 72, padding: "5px 7px" },
-    placeholder: iv.payload.wantAsset.symbol,
+    placeholder: dispSym(iv.payload.wantAsset.symbol),
     value: prices[iv.contractId] || "",
     onChange: e => setPrices(p => ({ ...p, [iv.contractId]: e.target.value }))
   }), /*#__PURE__*/React.createElement("input", {
     style: { width: 62, padding: "5px 7px" },
-    placeholder: "max " + iv.payload.offerAsset.symbol,
+    placeholder: "max " + dispSym(iv.payload.offerAsset.symbol),
     title: "The most of this block you will take at that price. Blank means all of it.",
     value: sizes[iv.contractId] || "",
     onChange: e => setSizes(p => ({ ...p, [iv.contractId]: e.target.value }))
@@ -3772,11 +3810,11 @@ function DealerCard({
     style: { paddingLeft: 0, paddingRight: 0 }
   }, /*#__PURE__*/React.createElement("span", { className: "apair" },
       /*#__PURE__*/React.createElement(AssetIcon, { symbol: q.payload.offerAsset.symbol, size: "sm" }),
-      q.payload.offerAmount + " " + q.payload.offerAsset.symbol,
+      q.payload.offerAmount + " " + dispSym(q.payload.offerAsset.symbol),
       /*#__PURE__*/React.createElement("span", { style: { color: "var(--accent)" } }, "\u2192"),
       /*#__PURE__*/React.createElement(AssetIcon, { symbol: q.payload.wantAsset.symbol, size: "sm" })), /*#__PURE__*/React.createElement("span", {
     className: "v"
-  }, Number(q.payload.price).toFixed(2), " ", q.payload.wantAsset.symbol))), data.q.map(q => /*#__PURE__*/React.createElement("div", {
+  }, Number(q.payload.price).toFixed(2), " ", dispSym(q.payload.wantAsset.symbol)))), data.q.map(q => /*#__PURE__*/React.createElement("div", {
     className: "bal",
     key: q.contractId,
     style: {
@@ -4000,9 +4038,9 @@ function Login({ onPick, onWallet }) {
         ]);
         if (!live) return;
         if (le) setOffset(le.offset);
-        const a = (rg && rg.assets && rg.assets.length) ? rg.assets.map(x => dispSym(x.symbol)) : ["cBTC", "cETH", "CC"];
+        const a = (rg && rg.assets && rg.assets.length) ? rg.assets.map(x => dispSym(x.symbol)) : ["CBTC", "cETH", "CC"];
         setAssets(a);
-      } catch (e) { setAssets(["cBTC", "cETH", "CC"]); }
+      } catch (e) { setAssets(["CBTC", "cETH", "CC"]); }
     })();
     return () => { live = false; };
   }, []);
@@ -4129,14 +4167,35 @@ const totalUsd = (usd, hs) => {
   return any ? t : null;
 };
 
-// The ledger's instrument ids are protocol names, not tickers: Canton Coin is created
-// by the template "Amulet", and cBTC is registered as "CBTC". Holdings mapped these to
-// tickers inline while the trade book printed them raw, so one asset showed as CC in
-// the balance panel and AMU in the book directly beneath it. One helper, used by both.
-const dispSym = s => s === "Amulet" ? "CC" : (s === "CBTC" ? "cBTC" : s);
-// The inverse. The UI trades in display symbols; every ledger call wants the
-// instrument id the registry actually issued, and CC/Amulet is the pair that bites.
-const ledgerSym = s => s === "CC" ? "Amulet" : (s === "cBTC" ? "CBTC" : s);
+// The names people see are CBTC, CC and cETH -- one spelling each, everywhere.
+// The ledger's instrument ids are protocol names: Canton Coin is the template
+// "Amulet". Older code and data also spell bitcoin "cBTC". Every spelling of an
+// asset goes through here, so a comparison between two of them can never miss --
+// the dealer desk compared a "CBTC" request with "cBTC" holdings and reported
+// "Insufficient" to a dealer holding 1 CBTC.
+const dispSym = s => {
+  const k = String(s == null ? "" : s), l = k.toLowerCase();
+  if (l === "amulet" || l === "cc") return "CC";
+  if (l === "cbtc") return "CBTC";
+  if (l === "ceth") return "cETH";
+  return k;
+};
+// The inverse: the instrument id the registry actually issued. Only Canton Coin
+// differs from its display name.
+const ledgerSym = s => { const d = dispSym(s); return d === "CC" ? "Amulet" : d; };
+// Compare two asset names whatever their spelling. Holdings arrive under display
+// names, requests and quotes under ledger ids, so `===` between them misses.
+const sameSym = (a, b) => dispSym(a) === dispSym(b);
+// What a quote costs the dealer: the price plus the venue fee, both in the want asset.
+// The fee is max(bps of the price, the asset's floor) -- the same rule as feeFor() on
+// the server. A quote the dealer can pay but whose fee it cannot fails at settlement.
+const quoteCost = (fee, price, sym) => {
+  const px = Number(price);
+  if (!isFinite(px) || px <= 0) return 0;
+  if (!fee) return px;
+  const fl = (fee.floors && (fee.floors[dispSym(sym)] || fee.floors[ledgerSym(sym)])) || 0;
+  return px + Math.max(px * (fee.bps / 10000), fl);
+};
 
 const usdOf = (usd, sym, amt) => {
   const p = usd && usd[sym];
@@ -4200,10 +4259,10 @@ const ThemeBtn = ({ theme, flip }) => React.createElement("button", {
 
 const DEALER_NAMES = { dealer1: "Meridian Capital", dealer2: "Halcyon Markets" };
 const DEALER_NAME = p => DEALER_NAMES[cleanRole(p)] || cleanRole(p) || "Dealer";
-const ASSET_LONGS = { cBTC: "Bitcoin", cETH: "Ethereum", CC: "Canton Coin" };
+const ASSET_LONGS = { CBTC: "Bitcoin", cETH: "Ethereum", CC: "Canton Coin" };
 // Who actually ISSUES each real token on DevNet. These are the registries whose assets
 // Umbra settles atomically -- name them, don't just name the underlying.
-const ASSET_ISSUERS = { cBTC: "BitSafe", cETH: "onRails", CC: "Canton Foundation" };
+const ASSET_ISSUERS = { CBTC: "BitSafe", cETH: "onRails", CC: "Canton Foundation" };
 const ASSET_ISSUER = sym => ASSET_ISSUERS[dispSym(sym)] || "";
 const ASSET_LONG = sym => {
   const long = ASSET_LONGS[dispSym(sym)] || dispSym(sym);
@@ -4230,7 +4289,7 @@ function RequesterDesk(P) {
   const _liveRefs = rfqs.filter(r => new Date(r.payload.expiresAt).getTime() > Date.now());
   const _liveRef = _liveRefs.find(r => r.contractId === selRfqCid) || _liveRefs[0];
   const refPair = (composing || !_liveRef)
-    ? (composedPair || { base: "cBTC", quote: "cETH" })
+    ? (composedPair || { base: "CBTC", quote: "cETH" })
     : { base: _liveRef.payload.offerAsset.symbol, quote: _liveRef.payload.wantAsset.symbol };
   // Shown the way a person reads a price: the direction whose number is at least 1.
   // CC per cBTC as 0.0000128 needed subscript-zero notation to fit and read as noise.
@@ -4238,6 +4297,11 @@ function RequesterDesk(P) {
   const refView = (() => {
     const b = dispSym(refPair.base), q = dispSym(refPair.quote);
     if (rate == null || !(rate > 0)) return { v: null, one: b, per: q };
+    // The number must be for THIS pair. The rate is fetched a poll behind the pair on
+    // screen, and showed 31.56 (the CBTC/cETH mid) under a CC-per-CBTC label.
+    // A dash for one poll beats a wrong price.
+    if (ratePair && !(sameSym(ratePair.base, b) && sameSym(ratePair.quote, q)))
+      return { v: null, one: b, per: q };
     return rate < 1 ? { v: 1 / rate, one: q, per: b } : { v: rate, one: b, per: q };
   })();
   const [theme, flipTheme] = useTheme();
@@ -4295,7 +4359,7 @@ function RequesterDesk(P) {
   // only price bps when the loaded rate is actually for THIS request's pair;
   // otherwise (fresh login, rate still defaulting) show "\u2014" instead of a wrong bps.
   const _pairOk = ratePair && rfq &&
-    ratePair.base === rfq.payload.offerAsset.symbol && ratePair.quote === rfq.payload.wantAsset.symbol;
+    sameSym(ratePair.base, rfq.payload.offerAsset.symbol) && sameSym(ratePair.quote, rfq.payload.wantAsset.symbol);
   const mktTotal = (rate != null && offerAmt && _pairOk) ? rate * offerAmt : null;
   const bps = (px) => (mktTotal ? ((Number(px) - mktTotal) / mktTotal) * 10000 : null);
   const bestBps = ranked.length ? bps(ranked[0].payload.price) : null;
@@ -4354,7 +4418,7 @@ function RequesterDesk(P) {
           ? React.createElement("section", { className: "mod mod-focal" },
               React.createElement("div", { className: "mod-h" }, React.createElement("h2", null, "New request")),
               React.createElement("div", { className: "mod-b" },
-                React.createElement(SwapRfqForm, { onPair, holdings, role, wallet, onCreate: async (f) => { await onCreate(f); setComposing(false); } })))
+                React.createElement(SwapRfqForm, { bare: true, onPair, holdings, role, wallet, onCreate: async (f) => { await onCreate(f); setComposing(false); } })))
           : null,
 
         _liveRfqs.length > 1 ? React.createElement("section", { className: "mod" },
@@ -4378,10 +4442,10 @@ function RequesterDesk(P) {
               },
                 React.createElement("div", { className: "lrq-l" },
                   React.createElement(AssetIcon, { symbol: r.payload.offerAsset.symbol, size: "sm" }),
-                  React.createElement("span", { className: "m" }, fmtAmtStr(r.payload.offerAmount), " ", r.payload.offerAsset.symbol),
+                  React.createElement("span", { className: "m" }, fmtAmtStr(r.payload.offerAmount), " ", dispSym(r.payload.offerAsset.symbol)),
                   React.createElement("span", { className: "lrq-arr" }, "\u21c4"),
                   React.createElement(AssetIcon, { symbol: r.payload.wantAsset.symbol, size: "sm" }),
-                  React.createElement("span", { className: "m" }, r.payload.wantAsset.symbol)),
+                  React.createElement("span", { className: "m" }, dispSym(r.payload.wantAsset.symbol))),
                 React.createElement("span", { className: "lrq-q m" }, qn, qn === 1 ? " quote" : " quotes"));
             }))) : null,
 
@@ -4398,7 +4462,7 @@ function RequesterDesk(P) {
                 React.createElement("div", null,
                   React.createElement("div", { className: "rq-lab" }, "You offer"),
                   React.createElement("div", { className: "rq-amt m" }, fmtAmtStr(offerAmt),
-                    React.createElement("span", null, rfq.payload.offerAsset.symbol)))),
+                    React.createElement("span", null, dispSym(rfq.payload.offerAsset.symbol))))),
               React.createElement("div", { className: "rq-for" },
                 React.createElement("span", null, "for"),
                 React.createElement("span", { className: "rq-swap" }, "\u21c4")),
@@ -4406,7 +4470,7 @@ function RequesterDesk(P) {
                 React.createElement(AssetIcon, { symbol: rfq.payload.wantAsset.symbol, size: "lg" }),
                 React.createElement("div", null,
                   React.createElement("div", { className: "rq-lab" }, "You want"),
-                  React.createElement("div", { className: "rq-amt m big" }, rfq.payload.wantAsset.symbol))),
+                  React.createElement("div", { className: "rq-amt m big" }, dispSym(rfq.payload.wantAsset.symbol)))),
               React.createElement("div", { className: "rq-stats" },
                 React.createElement("div", { className: "rq-stat" },
                   React.createElement("div", { className: "rq-lab" }, "Responded"),
@@ -4451,10 +4515,10 @@ function RequesterDesk(P) {
                                    : React.createElement("div", { className: "rq-ds" }, "quoted")))),
                         React.createElement("td", null,
                           React.createElement("div", { className: "rq-px m" }, Number(p.price).toFixed(3)),
-                          React.createElement("div", { className: "rq-pu" }, p.wantAsset.symbol)),
+                          React.createElement("div", { className: "rq-pu" }, dispSym(p.wantAsset.symbol))),
                         React.createElement("td", null,
                           React.createElement("div", { className: "m" }, offerAmt ? (Number(p.price) / offerAmt).toFixed(4) : "\u2014"),
-                          React.createElement("div", { className: "rq-pu" }, p.wantAsset.symbol, " / ", p.offerAsset.symbol)),
+                          React.createElement("div", { className: "rq-pu" }, dispSym(p.wantAsset.symbol), " / ", dispSym(p.offerAsset.symbol))),
                         React.createElement("td", { className: "m " + (b == null ? "" : b >= 0 ? "up" : "dn") },
                           b == null ? "\u2014" : (b >= 0 ? "+" : "") + b.toFixed(1) + " bps"),
                         React.createElement("td", { className: "m " + (e.warn ? "warn" : "") }, e.txt),
@@ -4498,8 +4562,8 @@ function RequesterDesk(P) {
         // with no route to finish it from this side.
         P.openTrade ? (() => {
           const pl = P.openTrade.c.payload || {};
-          const off = (pl.offerAsset && pl.offerAsset.symbol) || "offer";
-          const wnt = (pl.wantAsset && pl.wantAsset.symbol) || "want";
+          const off = dispSym(pl.offerAsset && pl.offerAsset.symbol) || "offer";
+          const wnt = dispSym(pl.wantAsset && pl.wantAsset.symbol) || "want";
           // A RealSwapPending is always the DEALER's move (AcceptRealSwap). Offering the
           // buyer a button there would invite them to press something that can only
           // report back that it is not their turn.
@@ -4871,7 +4935,7 @@ function TradeBook({ settled }) {
 }
 
 function DealerDesk(P) {
-  const { meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, usd, price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid, role, deskSwitch, wallet, say } = P;
+  const { meta, pid, offset, signed, onExit, note, inv, history, holdings, usd, price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid, role, deskSwitch, wallet, say } = P;
   const [proof, setProof] = useState(null); // dealer ledger-proof modal cid
   // Failed-swap alert. The backend records one (GET /api/swap/alerts) when a swap this
   // dealer quoted on fails to settle. Dismissal is now recorded SERVER-side: the old
@@ -4913,6 +4977,12 @@ function DealerDesk(P) {
   const liveInv = inv.filter(_isLive).sort((a, b) => _expAt(a) - _expAt(b));
   const expiredInv = inv.filter(iv => !_isLive(iv)).sort((a, b) => _expAt(b) - _expAt(a));
   const active = liveInv.find(iv => iv.contractId === selInvCid) || liveInv[0] || null;
+  // The reference is used only if it was priced for THIS request's pair. It is fetched a
+  // poll behind the selection, and "Ref" fills the quote from it -- a rate for another
+  // pair would have priced the block wrong by orders of magnitude.
+  const rate = (P.rate != null && active && (!P.ratePair ||
+    (sameSym(P.ratePair.base, active.payload.offerAsset.symbol) &&
+     sameSym(P.ratePair.quote, active.payload.wantAsset.symbol)))) ? P.rate : null;
   const rest   = liveInv.filter(iv => !active || iv.contractId !== active.contractId);
   const settled = (history && history.settlements) || [];
   const pastRfqs = (history && history.rfqs) || [];
@@ -4931,7 +5001,7 @@ function DealerDesk(P) {
   const cd = fmtCountdown(active && active.payload && active.payload.expiresAt);
 
   const qItem = (iv, isOn, expired) => {
-    const o = iv.payload.offerAsset.symbol, w = iv.payload.wantAsset.symbol;
+    const o = dispSym(iv.payload.offerAsset.symbol), w = dispSym(iv.payload.wantAsset.symbol);
     const c = fmtCountdown(iv.payload.expiresAt);
     return React.createElement("button", {
         className: "dq-i" + (isOn ? " on" : "") + (expired ? " dq-past" : ""),
@@ -4999,8 +5069,9 @@ function DealerDesk(P) {
         active
           ? (rate != null
               ? React.createElement("span", { className: "dsk-ref tip-below tip-left", "data-tip": "Live mid-market reference for this pair (CoinGecko). A pricing anchor \u2014 not a quote." },
-                  "REF", React.createElement("b", null, "1 " + active.payload.offerAsset.symbol),
-                  React.createElement("span", { className: "dsk-ref-pair" }, " \u2248 " + Number(rate).toLocaleString(undefined, { maximumFractionDigits: 2 }) + " " + active.payload.wantAsset.symbol))
+                  "REF", React.createElement("b", null, "1 " + dispSym(rate < 1 ? active.payload.wantAsset.symbol : active.payload.offerAsset.symbol)),
+                  React.createElement("span", { className: "dsk-ref-pair" }, " \u2248 " + fmtNum(rate < 1 ? 1 / rate : rate) + " " +
+                    dispSym(rate < 1 ? active.payload.offerAsset.symbol : active.payload.wantAsset.symbol)))
               : React.createElement("span", { className: "dsk-ref na tip-below tip-left", "data-tip": "Live market reference is unavailable right now. Price using your own read \u2014 the ledger never requires a reference." }, "REF", React.createElement("b", null, "\u2014")))
           : null,
         active ? React.createElement("span", { className: "dsk-close" + (cd.warn ? " warn" : "") }, "Closes in ", React.createElement("b", null, cd.txt)) : null,
@@ -5034,10 +5105,10 @@ function DealerDesk(P) {
                 React.createElement("h2", null, "Active request"),
                 React.createElement("span", { className: "mod-c m" }, short(active.contractId).toUpperCase())),
               React.createElement("div", { className: "mod-b" }, (function () {
-                const o = active.payload.offerAsset.symbol, w = active.payload.wantAsset.symbol;
+                const o = dispSym(active.payload.offerAsset.symbol), w = dispSym(active.payload.wantAsset.symbol);
                 const amt = Number(active.payload.offerAmount);
-                const _wMax = holdings.filter(h => h.payload.asset.symbol === w).reduce((s, h) => s + Number(h.payload.amount), 0);
-                const _unbacked = Number(price[active.contractId]) > _wMax;
+                const _wMax = holdings.filter(h => sameSym(h.payload.asset.symbol, w)).reduce((s, h) => s + Number(h.payload.amount), 0);
+                const _unbacked = quoteCost(P.fee, price[active.contractId], w) > _wMax + 1e-12;
                 return React.createElement(React.Fragment, null,
                   React.createElement("div", { className: "ask-pair" },
                     React.createElement("div", { className: "ask-side" },
@@ -5119,8 +5190,8 @@ function DealerDesk(P) {
         // stalled, with the buyer's leg allocated and no way to complete from here.
         P.openTrade ? (() => {
           const pl = P.openTrade.c.payload || {};
-          const off = (pl.offerAsset && pl.offerAsset.symbol) || "offer";
-          const wnt = (pl.wantAsset && pl.wantAsset.symbol) || "want";
+          const off = dispSym(pl.offerAsset && pl.offerAsset.symbol) || "offer";
+          const wnt = dispSym(pl.wantAsset && pl.wantAsset.symbol) || "want";
           return React.createElement("section", { className: "mod mod-focal" },
             React.createElement("div", { className: "mod-h" },
               React.createElement("h2", null, "You won this block")),
@@ -5518,7 +5589,7 @@ function PartyPortal({ role, wallet, onExit }) {
   // raising its own requests, which is what a real desk does anyway.
   const [listed, setListed] = useState(null);
   const pairRef = useRef(null);
-  const [composedPair, setComposedPair] = useState({ base: "cBTC", quote: "cETH" });
+  const [composedPair, setComposedPair] = useState({ base: "CBTC", quote: "cETH" });
   const onPair = useCallback(p => { setComposedPair(p); }, []);
   const [selInvCid, setSelInvCid] = useState(null);  // dealer-selected invitation
   const [selRfqCid, setSelRfqCid] = useState(null);  // requester-selected live RFQ (drives REF fetch)
@@ -5535,7 +5606,10 @@ function PartyPortal({ role, wallet, onExit }) {
       // The old code priced rq.rfqs[0] for BOTH roles, unfiltered by expiry, so a
       // stale RFQ pinned the rate to the wrong pair (34 cBTC/cETH for a cBTC/CC deal).
       const pr = pairRef.current || composedPair;
-      const rateQ = pr ? ("?base=" + pr.base + "&quote=" + pr.quote) : "";
+      // Display names: an invitation carries ledger ids (CBTC, Amulet), and the price
+      // feed is keyed by ticker, so a dealer's REF came back empty and Ref/+/- stayed off.
+      const rateQ = pr ? ("?base=" + encodeURIComponent(dispSym(pr.base)) +
+                          "&quote=" + encodeURIComponent(dispSym(pr.quote))) : "";
       // PURE BYOW: when a wallet is connected, the party lives on the USER's validator,
       // which Umbra's participant cannot read. Take the party-scoped reads through the
       // wallet instead. Everything else (mode, ledger end, market rate, the RFQ board
@@ -5615,6 +5689,20 @@ function PartyPortal({ role, wallet, onExit }) {
         const _liveRfqs = ((rq && rq.rfqs) || []).filter(r => { const t = new Date(r.payload.expiresAt).getTime(); return isNaN(t) || t > Date.now(); });
         const _lrfq = _liveRfqs.find(r => r.contractId === selRfqCid) || _liveRfqs[0] || null;
         pairRef.current = (composing || !_lrfq) ? null : { base: _lrfq.payload.offerAsset.symbol, quote: _lrfq.payload.wantAsset.symbol };
+      }
+      // "One poll of lag, self-correcting" holds only where the page polls. A wallet
+      // session loads once and then on demand, so the next tick never came: opening an
+      // invitation kept the reference on the previous pair (the form's CBTC/cETH) --
+      // a price for the wrong pair under this pair's label, and Ref pricing off it.
+      // The pair is known now, so price it now.
+      const _want = pairRef.current || composedPair;
+      if (_want && !(pr && sameSym(_want.base, pr.base) && sameSym(_want.quote, pr.quote))) {
+        const rt2 = await api("/api/market/rate?base=" + encodeURIComponent(dispSym(_want.base)) +
+          "&quote=" + encodeURIComponent(dispSym(_want.quote))).catch(() => null);
+        if (rt2 && rt2.ok) {
+          setRate(rt2.mid); setRatePair(rt2.base && rt2.quote ? { base: rt2.base, quote: rt2.quote } : null);
+          setSeries(rt2.series || []); setUsd(rt2.usd || null); setRateNote(rt2.note || null);
+        }
       }
     } catch (e) {}
   }, [role, composedPair, selInvCid, selRfqCid, composing, wallet, isDealer]);
@@ -5737,7 +5825,7 @@ function PartyPortal({ role, wallet, onExit }) {
         throw e;
       }
       const e = new Error("Your side is signed and your " +
-        (pnd.payload.offerAsset && pnd.payload.offerAsset.symbol || "offer") +
+        (dispSym(pnd.payload.offerAsset && pnd.payload.offerAsset.symbol) || "offer") +
         " leg is allocated. Waiting for " + DEALER_NAME(pnd.payload.dealer) +
         " to accept — nothing has moved yet, and nothing is lost.");
       e.waiting = true;
@@ -5786,7 +5874,7 @@ function PartyPortal({ role, wallet, onExit }) {
         // Allocating LOCKS a holding, so take the smallest set that covers the
         // leg rather than offering up the whole balance.
         const mine = holdings
-          .filter(h => h.payload.asset.symbol === sym)
+          .filter(h => sameSym(h.payload.asset.symbol, sym))
           .sort((a2, b2) => Number(b2.payload.amount) - Number(a2.payload.amount));
         const cids = []; let got = 0;
         for (const h of mine) { if (got >= Number(al.amount)) break; cids.push(h.contractId); got += Number(h.payload.amount); }
@@ -5857,8 +5945,9 @@ function PartyPortal({ role, wallet, onExit }) {
     // A dealer cannot quote more than they can deliver: the swap needs ONE
     // holding of the want-asset >= the price, or it reverts at settlement and
     // wastes the requester\u2019s award. Block it here, not at the ledger.
-    const _wMax = holdings.filter(h => h.payload.asset.symbol === wantSym).reduce((s, h) => s + Number(h.payload.amount), 0);
-    if (Number(p) > _wMax) { say("You cannot back that: your largest " + wantSym + " holding is " + fmtAmtStr(_wMax) + ". Quote at or below it.", true); return; }
+    const _wMax = holdings.filter(h => sameSym(h.payload.asset.symbol, wantSym)).reduce((s, h) => s + Number(h.payload.amount), 0);
+    const _cost = quoteCost(fee, p, wantSym);
+    if (_cost > _wMax + 1e-12) { say("You cannot back that: with the venue fee it costs " + fmtAmtStr(_cost) + " " + dispSym(wantSym) + " and you hold " + fmtAmtStr(_wMax) + ". Quote lower, or fund your party first.", true); return; }
     setBusy(b => ({ ...b, [cid]: true }));
     try {
       const r = await post("/api/swap/invitations/" + cid + "/quote", { dealer: role, price: p });
@@ -5879,7 +5968,7 @@ function PartyPortal({ role, wallet, onExit }) {
     const offerSym = p.offerAsset.symbol, wantSym = p.wantAsset.symbol;
     const pick = (list, sym, need) => {
       const w = Number(need);
-      const m = (list || []).filter(h => h.payload.asset.symbol === sym && Number(h.payload.amount) >= w)
+      const m = (list || []).filter(h => sameSym(h.payload.asset.symbol, sym) && Number(h.payload.amount) >= w)
         .sort((a, b) => Number(a.payload.amount) - Number(b.payload.amount))[0];
       return m ? m.contractId : null;
     };
@@ -5985,7 +6074,7 @@ function PartyPortal({ role, wallet, onExit }) {
   // desks mid-session the hook count changes between renders and React throws
   // #311. As elements each desk owns its hooks and a switch remounts cleanly.
   if (isDealer) return React.createElement(DealerDesk, {
-    meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, usd,
+    meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, ratePair, usd,
     price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid, role, deskSwitch,
     openTrade, settling, settleStep, onSettle: settleAsDealer, readFailed, fee,
     listed, onToggleListing: toggleListing, wallet, say
@@ -6011,7 +6100,7 @@ function PartyPortal({ role, wallet, onExit }) {
       holdings.length === 0
         ? React.createElement("div", { className: "void" },
             React.createElement("div", { className: "void-t" }, "No assets yet"),
-            React.createElement("div", { className: "void-s" }, "Your cBTC, cETH and CC balances appear here once funded."))
+            React.createElement("div", { className: "void-s" }, "Your CBTC, cETH and CC balances appear here once funded."))
         : React.createElement("div", { className: "hl" },
             aggHoldings(holdings, usd).map(h => React.createElement("div", { className: "hl-r", key: h.symbol },
               React.createElement(AssetIcon, { symbol: h.symbol }),
@@ -6054,7 +6143,7 @@ function PartyPortal({ role, wallet, onExit }) {
                       React.createElement("p", null, "No one has asked you for a price."),
                       React.createElement("span", null, "A request appears here only if the buyer invites you. You will never see one sent to another dealer."))
                   : inv.map(iv => {
-                      const o = iv.payload.offerAsset.symbol, w = iv.payload.wantAsset.symbol;
+                      const o = dispSym(iv.payload.offerAsset.symbol), w = dispSym(iv.payload.wantAsset.symbol);
                       const amt = Number(iv.payload.offerAmount);
                       return React.createElement("div", { className: "ask" + (fresh ? " ask-new" : ""), key: iv.contractId },
                         React.createElement("div", { className: "ask-pair" },
@@ -6118,8 +6207,8 @@ function PartyPortal({ role, wallet, onExit }) {
                         React.createElement(AssetIcon, { symbol: p.offerAsset.symbol, size: "sm" }),
                         React.createElement("span", { style: { color: "var(--dim)" } }, "\u2192"),
                         React.createElement(AssetIcon, { symbol: p.wantAsset.symbol, size: "sm" }));
-                      const give = React.createElement("span", { className: "m" }, fmtAmtStr(p.offerAmount) + " " + p.offerAsset.symbol);
-                      const get = React.createElement("span", { className: "m" }, Number(p.price).toFixed(2) + " " + p.wantAsset.symbol);
+                      const give = React.createElement("span", { className: "m" }, fmtAmtStr(p.offerAmount) + " " + dispSym(p.offerAsset.symbol));
+                      const get = React.createElement("span", { className: "m" }, Number(p.price).toFixed(2) + " " + dispSym(p.wantAsset.symbol));
                       return isDealer
                         ? React.createElement("tr", { key: q.contractId },
                             React.createElement("td", null, pairCell),

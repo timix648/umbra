@@ -22,12 +22,15 @@
      Single source of truth for symbol → name → issuer. Anywhere an asset is
      named it renders through AssetTag, so identity is never partial.        */
   var ASSETS = {
-    cBTC: { sym: "cBTC", name: "Bitcoin", issuer: "BitSafe", dp: 7 },
+    CBTC: { sym: "CBTC", name: "Bitcoin", issuer: "BitSafe", dp: 7 },
     cETH: { sym: "cETH", name: "Ethereum", issuer: "onRails", dp: 7 },
     CC: { sym: "CC", name: "Canton Coin", issuer: "Canton Foundation", dp: 7 }
   };
+  // Any spelling of an asset (ledger id "Amulet", older "cBTC") finds its entry.
+  var ALIAS = { amulet: "CC", cc: "CC", cbtc: "CBTC", ceth: "cETH" };
   function meta(sym) {
-    return ASSETS[sym] || { sym: sym || "—", name: "", issuer: "Unlisted issuer", dp: 7 };
+    var k = ASSETS[sym] ? sym : ALIAS[String(sym || "").toLowerCase()];
+    return ASSETS[k] || { sym: sym || "—", name: "", issuer: "Unlisted issuer", dp: 7 };
   }
   function dpOf(sym) { return meta(sym).dp; }
 
@@ -537,7 +540,7 @@
     // One switch, two directions. The wallet only ever signs: a deposit is started
     // here and approved in the wallet, a withdrawal is built here and signed there.
     var md = Rx.useState(props.mode || "deposit"), mode = md[0], setMode = md[1];
-    var a = Rx.useState(props.asset || "cBTC"), asset = a[0], setAsset = a[1];
+    var a = Rx.useState(props.asset || "CBTC"), asset = a[0], setAsset = a[1];
     var v = Rx.useState(""), amt = v[0], setAmt = v[1];
     var d = Rx.useState(props.dest || homeParty), dest = d[0], setDest = d[1];
     var e = Rx.useState(false), editDest = e[0], setEditDest = e[1];

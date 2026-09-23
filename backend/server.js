@@ -122,6 +122,15 @@ app.get("/api/auth/whoami", (req, res) => {
 // The party a party-scoped read may use. Throws 401/403 rather than silently
 // falling back to someone else's view.
 const readParty = (req, requested) => auth.resolveReadParty(req, requested, isDemoRole);
+// Party-scoped reads: the signed-in party reads ITSELF; the operator token (or demo
+// mode) may name any party. Several /api/real/* reads used to take ?party= from
+// anyone, so a URL holder could read any party's balances and pending transfers.
+const readPartyOrOp = (req, requested) => {
+  if (auth.isOperator(req)) return requested || "requester";
+  return readParty(req, requested);
+};
+// Venue-wide lists (every RFQ, every wallet) are the operator's view, not a caller's.
+const venueView = (req) => auth.DEMO_ROLES || auth.isOperator(req);
 
 // --- AND THE WRITE PATH ------------------------------------------------------
 // Reads were the severe hole; writes are the lesser one, but they are a hole.
@@ -831,10 +840,12 @@ app.get("/api/dealers", async (req, res) => {
     // itself in order to opt in.
     const dir = await loadDealerDirectory();
     const optedIn = dir.dealers;
+    // ?all=1 lets a party find its OWN row to opt in; it no longer lists every wallet.
     const showAll = req.query.all === "1";
+    const caller = auth.callerParty(req);
     for (const w of Object.values(loadWallets())) {
       const listed = !!optedIn[w.partyId];
-      if (!listed && !showAll) continue;
+      if (!listed && !(showAll && (w.partyId === caller || venueView(req)))) continue;
       // A raw party hint ("wallet-1787041917018") is unreadable in a picker. Abbreviate
       // it the way an address is abbreviated everywhere else. `profileName` is the hook
       // for real desk names later; until a party can set one, this is what we have.
@@ -882,6 +893,7 @@ app.get("/api/parties", async (req, res) => {
 // --- list active RFQs as the requester (gives us contract IDs) ---
 app.get("/api/rfqs", async (req, res) => {
   try {
+    if (!venueView(req)) return res.status(403).json({ error: "operator view" });
     const rfqs = await queryActive(await partyIdFor("requester"), "Umbra:Rfq");
     res.json({ ok: true, count: rfqs.length, rfqs });
   } catch (e) {
@@ -1115,7 +1127,7 @@ async function queryRealHoldings(party) {
 
 app.get("/api/real/holdings", async (req, res) => {
   try {
-    const party = req.query.party || await partyIdFor(req.query.role || "requester");
+    const party = await partyIdFor(readPartyOrOp(req, req.query.party || req.query.role));
     const hs = await queryRealHoldings(party);
     const byInst = {};
     for (const h of hs) {
@@ -1172,7 +1184,7 @@ async function queryPendingTransfers(party) {
 
 app.get("/api/real/raw", async (req, res) => {
   try {
-    const party = req.query.party || await partyIdFor(req.query.role || "requester");
+    const party = await partyIdFor(readPartyOrOp(req, req.query.party || req.query.role));
     const offset = await ledgerEnd();
     const body = {
       filter: { filtersByParty: { [party]: { cumulative: [{
@@ -1205,7 +1217,7 @@ app.get("/api/real/raw", async (req, res) => {
 
 app.get("/api/real/pending", async (req, res) => {
   try {
-    const party = req.query.party || await partyIdFor(req.query.role || "requester");
+    const party = await partyIdFor(readPartyOrOp(req, req.query.party || req.query.role));
     const offers = await queryPendingTransfers(party);
     res.json({ ok: true, party, count: offers.length, offers });
   } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
@@ -1232,7 +1244,7 @@ async function acceptContext(registryUrl, registrar, offerCid) {
 
 app.post("/api/real/pending/:cid/accept", async (req, res) => {
   try {
-    const role = req.query.role || (req.body && req.body.role) || "requester";
+    const role = readPartyOrOp(req, req.query.role || (req.body && req.body.role));
     const party = await partyIdFor(role);
     const cid = req.params.cid;
     // Confirm the offer exists for this party and get its registrar (instrument admin).
@@ -1554,7 +1566,7 @@ async function queryAllocations(party) {
 
 app.get("/api/real/allocations", async (req, res) => {
   try {
-    const party = req.query.party || await partyIdFor(req.query.role || "requester");
+    const party = await partyIdFor(readPartyOrOp(req, req.query.party || req.query.role));
     const allocs = await queryAllocations(party);
     res.json({ ok: true, party, count: allocs.length, allocations: allocs });
   } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
@@ -2015,7 +2027,17 @@ app.get("/api/swap/history", async (req, res) => {
 
 app.get("/api/swap/rfqs", async (req, res) => {
   try {
-    const rfqs = await queryActive(await partyIdFor("requester"), "UmbraSwap:SwapRfq");
+    const all = await queryActive(await partyIdFor("requester"), "UmbraSwap:SwapRfq");
+    // Read as the venue (an observer on every RFQ), so filter to the CALLER. This
+    // returned every requester's blocks - party, assets, size, invited dealers - to
+    // anyone holding the URL, and each requester's desk showed other people's RFQs
+    // as its own.
+    let rfqs = all;
+    if (!venueView(req)) {
+      const me = auth.callerParty(req);
+      if (!me) return res.status(401).json({ error: "sign in to see your requests" });
+      rfqs = all.filter(r => r.payload && r.payload.requester === me);
+    }
     res.json({ ok: true, count: rfqs.length, rfqs });
   } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
@@ -2193,7 +2215,7 @@ app.post("/api/mandate", async (req, res) => {
 
 app.get("/api/mandate", async (req, res) => {
   try {
-    const party = await partyIdFor(req.query.role || "requester");
+    const party = await partyIdFor(readPartyOrOp(req, req.query.role));
     const m = await findMandate(party);
     res.json({ ok: true, mandate: m
       ? { contractId: m.contractId, expiresAt: m.payload.expiresAt } : null });
@@ -2372,7 +2394,7 @@ async function recoverFailedSwap(requester, proposalCid, dealerRole, offerAsset,
 // Dealer polls this to learn a swap it quoted on failed (and that it may re-quote).
 app.get("/api/swap/alerts", async (req, res) => {
   try {
-    const role = String(req.query.role || "").toLowerCase();
+    const role = String(readPartyOrOp(req, req.query.role) || "").toLowerCase();
     const since = req.query.since ? String(req.query.since) : null;
     let out = liveSwapAlerts(role);
     if (since) out = out.filter(a => a.at > since);
@@ -2546,8 +2568,14 @@ app.post("/api/dev/wallet/ledger", async (req, res) => {
 app.get("/api/ext/wallets", async (req, res) => {
   try {
     const s = loadWallets();
-    res.json({ ok: true, count: Object.keys(s).length,
-      wallets: Object.values(s).map(w => ({ partyId: w.partyId, fingerprint: w.fingerprint,
+    // A wallet asks "does MY key already have a party here?" - so answer that, by
+    // fingerprint. The full list (every participant's party id) is the operator's.
+    const fp = String(req.query.fingerprint || "");
+    let list = Object.values(s);
+    if (fp) list = list.filter(w => w.fingerprint === fp);
+    else if (!venueView(req)) return res.status(400).json({ error: "pass ?fingerprint=" });
+    res.json({ ok: true, count: list.length,
+      wallets: list.map(w => ({ partyId: w.partyId, fingerprint: w.fingerprint,
         onboardedAt: w.onboardedAt, privateKeyHeldByServer: false })) });
   } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
@@ -3674,7 +3702,7 @@ app.post("/api/real/award", async (req, res) => {
 // a private ledger, so this IS the proof: the record, as the ledger holds it.
 app.get("/api/ledger/contract/:cid", async (req, res) => {
   try {
-    const role = String(req.query.role || "requester").toLowerCase();
+    const role = String(readPartyOrOp(req, req.query.role) || "").toLowerCase();
     const party = await partyIdFor(role);
     const cid = req.params.cid;
 
@@ -3728,6 +3756,13 @@ app.get("/api/ledger/contract/:cid", async (req, res) => {
 const CG = "https://api.coingecko.com/api/v3/simple/price?ids=bitsafe-bridged-wrapped-bitcoin-canton,canton-network,ethereum,bitcoin&vs_currencies=usd";
 const mkt = { usd: null, at: 0, series: [] };
 
+// The feed prices tickers (CBTC, CC, cETH); the ledger names assets by instrument id
+// ("Amulet" for Canton Coin), and older code spells bitcoin "cBTC". Any of those
+// finds its price -- the dealer desk asked with ledger ids and got no reference at all,
+// and every settlement was stamped "no market reference" for the same reason.
+const FEED_TICKER = { amulet: "CC", cc: "CC", cbtc: "CBTC", ceth: "cETH" };
+const feedTicker = s => FEED_TICKER[String(s || "").toLowerCase()] || String(s || "");
+
 // The mid for a pair AT THIS MOMENT, as a Daml Decimal string -- or null (Daml
 // None) when there is no public price. Stamped onto a settlement so the book can
 // later show a TRUE mark. CoinGecko only ever gives us "now"; without recording
@@ -3740,7 +3775,7 @@ async function refMidFor(baseSym, quoteSym) {
     let usd;
     try { usd = await marketUsd(); }
     catch (e1) { await new Promise(r => setTimeout(r, 600)); usd = await marketUsd(); }
-    const b = usd[baseSym], q = usd[quoteSym];
+    const b = usd[feedTicker(baseSym)], q = usd[feedTicker(quoteSym)];
     if (!b || !q) return null;
     // Daml Decimal is Numeric 10 -- at most 10 decimal places. A raw float
     // ratio has ~14 and the ledger REFUSES it ("cannot represent ... without
@@ -3758,13 +3793,15 @@ async function marketUsd() {
   const j = await r.json();
   const CB = j["bitsafe-bridged-wrapped-bitcoin-canton"];
   const usd = {
-    cBTC: (CB && CB.usd) || (j.bitcoin && j.bitcoin.usd),   // real cBTC, else BTC
+    CBTC: (CB && CB.usd) || (j.bitcoin && j.bitcoin.usd),   // real CBTC, else BTC
     cETH: j.ethereum && j.ethereum.usd,                     // no cETH listing; 1:1 wrapped
     CC:   j["canton-network"] && j["canton-network"].usd,
   };
-  if (!usd.cBTC || !usd.cETH) throw new Error("incomplete price feed");
+  if (!usd.CBTC || !usd.cETH) throw new Error("incomplete price feed");
+  // Old spellings too, for any client or record that still uses them.
+  usd.cBTC = usd.CBTC; usd.Amulet = usd.CC;
   mkt.usd = usd; mkt.at = Date.now();
-  mkt.series.push(usd.cBTC / usd.cETH);
+  mkt.series.push(usd.CBTC / usd.cETH);
   if (mkt.series.length > 60) mkt.series.shift();
   return usd;
 }
@@ -3780,8 +3817,8 @@ function pushSeries(pair, v) {
 }
 
 app.get("/api/market/rate", async (req, res) => {
-  const base = String(req.query.base || "cBTC");
-  const quote = String(req.query.quote || "cETH");
+  const base = feedTicker(req.query.base || "CBTC");
+  const quote = feedTicker(req.query.quote || "cETH");
   const pair = base + "/" + quote;
   try {
     const usd = await marketUsd();
