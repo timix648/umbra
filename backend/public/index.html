@@ -5912,7 +5912,13 @@ function PartyPortal({ role, wallet, onExit }) {
   }, [role]);
 
   const settleWithWallet = useCallback(async (proposalCid, rfqCid, onStep) => {
-    for (let round = 0; round < 8; round++) {
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    // What this browser signed last round. The ledger records a signature a moment
+    // after the wallet returns, so the very next settle-real can still ask for the same
+    // step -- and the loop used to sign it AGAIN: a second allocation of a coin already
+    // locked ("unexpected holding lock state"), or of one already spent ("not found").
+    let justDid = null;
+    for (let round = 0; round < 20; round++) {
       let rr;
       try {
         rr = await post("/api/swap/proposals/" + proposalCid + "/settle-real", { rfqCid });
@@ -5934,8 +5940,10 @@ function PartyPortal({ role, wallet, onExit }) {
           e.waiting = true;
           throw e;
         }
+        if (justDid === "sig:" + a.step) { onStep("Waiting for the ledger to record " + a.step + "…"); await sleep(3000); continue; }
         onStep("Sign " + a.step + " in your wallet…");
         await WalletLink.submit({ commands: a.commands });
+        justDid = "sig:" + a.step;
         continue;
       }
 
@@ -5948,13 +5956,18 @@ function PartyPortal({ role, wallet, onExit }) {
           throw e;
         }
         const sym = dispSym(al.instrument);
+        const legKey = "alloc:" + (ins.legId || al.instrument);
+        if (justDid === legKey) { onStep("Waiting for the ledger to record your " + sym + " leg…"); await sleep(3000); continue; }
+        // FRESH, UNLOCKED holdings from the ledger -- not the page's copy, which can be
+        // a poll old and still list a coin this very loop just locked.
+        const hr = await api("/api/real/holdings?role=" + encodeURIComponent(role)).catch(() => ({}));
         // Allocating LOCKS a holding, so take the smallest set that covers the
         // leg rather than offering up the whole balance.
-        const mine = holdings
-          .filter(h => sameSym(h.payload.asset.symbol, sym))
-          .sort((a2, b2) => Number(b2.payload.amount) - Number(a2.payload.amount));
+        const mine = ((hr && hr.raw) || [])
+          .filter(x => !x.lock && sameSym(x.id, sym))
+          .sort((a2, b2) => Number(b2.amount) - Number(a2.amount));
         const cids = []; let got = 0;
-        for (const h of mine) { if (got >= Number(al.amount)) break; cids.push(h.contractId); got += Number(h.payload.amount); }
+        for (const h of mine) { if (got >= Number(al.amount)) break; cids.push(h.contractId); got += Number(h.amount); }
         if (!cids.length || got < Number(al.amount)) {
           throw new Error("not enough free " + sym + " to allocate " + al.amount + " (some may be locked in an earlier allocation)");
         }
@@ -5968,12 +5981,21 @@ function PartyPortal({ role, wallet, onExit }) {
           registry: al.registry
         });
         await WalletLink.submit({ commands: built.commands, disclosedContracts: built.disclosedContracts });
+        justDid = legKey;
+        // Hold until the coins we offered are spent into the allocation, so the next
+        // settle-real sees this leg as done instead of asking for it again.
+        for (let i = 0; i < 20; i++) {
+          const now = await api("/api/real/holdings?role=" + encodeURIComponent(role)).catch(() => null);
+          const still = ((now && now.raw) || []).some(x => !x.lock && cids.includes(x.contractId));
+          if (now && !still) break;
+          await sleep(1500);
+        }
         continue;
       }
 
       throw new Error(rr.error || ("settlement stopped at " + (rr.status || "an unknown step")));
     }
-    throw new Error("settlement did not finish after eight rounds");
+    throw new Error("settlement did not finish -- press Continue settlement to pick it up again");
   }, [role, holdings, afterProposalGone]);
 
   // The dealer's half of a won trade, driven from the dealer's own browser. Same loop
@@ -6121,6 +6143,8 @@ function PartyPortal({ role, wallet, onExit }) {
         say("Sign the request in your wallet…");
         await signBuilt(r);
         const rfqCid = await findRfqCid(r.party, r.expiresAt);
+        // One signature per dealer: external signing takes a single root action per
+        // transaction, so the invites cannot share one without a contract change.
         for (const dealer of (r.invited || [])) {
           const inv = await post("/api/swap/rfqs/" + rfqCid + "/invite?build=1",
             { dealer, requester: role });

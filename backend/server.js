@@ -1908,6 +1908,10 @@ app.post("/api/swap/rfq", async (req, res) => {
 
     // A wallet requester signs the create itself, then invites via
     // /api/swap/rfqs/:cid/invite?build=1 once it knows the rfq cid.
+    // (Batching was tried: CreateAndExercise, or several InviteDealer commands in one
+    // submission. Interactive submission REFUSES both -- "Transaction with multiple root
+    // nodes are not supported" -- so fewer signatures here needs a single-root choice in
+    // the Daml, e.g. one that creates every invitation at once.)
     if (req.query.build === "1" || req.body.build || isWalletParty(requester)) {
       return res.json({ ok: true, build: true, party: requester, commands: createCmd,
         invited, expiresAt,
