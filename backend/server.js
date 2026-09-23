@@ -45,6 +45,12 @@ require("dotenv").config();
 
 const app = express();
 app.use(express.json());
+// Who is asking, available anywhere in the request's async chain. act() and
+// realSubmit() - the only places the venue signs with its OWN keys - read it to decide
+// whether this request is entitled to that (see assertMayUseVenueKeys).
+const { AsyncLocalStorage } = require("async_hooks");
+const reqCtx = new AsyncLocalStorage();
+app.use((req, res, next) => reqCtx.run({ req }, next));
 
 // ---- humanize(): turn raw ledger error strings into clean user-facing text ----
 // Daml aborts and ledger rejections arrive as "400 {...insufficient cash...}" or
@@ -256,7 +262,39 @@ async function roleOfParty(pid) {
 // THE branch point. Same command set, two authorities:
 //  - signed mode  -> the party signs it with its own key (operator can't forge)
 //  - demo mode    -> operator submits via CanActAs (submit-and-wait)
-async function act(role, tag, commands) {
+// ---- WHO MAY MAKE THE VENUE SIGN ------------------------------------------------
+// The venue holds keys for its own parties: requester (which is also the operator),
+// dealer1 and dealer2. Before this, a signed-in WALLET could make the server sign as
+// any of them just by naming role=requester or dealer=dealer1 in a request. Now it
+// signs as a venue party only when:
+//   - demo roles are on (the sample walkthrough is exactly that), or
+//   - the operator token is presented, or
+//   - the call is an OPERATOR DUTY whose authority comes from signatures the parties
+//     already gave on-ledger - the final atomic execute, or exercising a mandate for a
+//     party that is in the trade - marked { duty: true } at the call site.
+// Outside an HTTP request (startup, timers) there is no caller to check.
+function assertMayUseVenueKeys(what) {
+  const st = reqCtx.getStore();
+  if (!st || !st.req) return;
+  if (auth.DEMO_ROLES || auth.isOperator(st.req)) return;
+  throw Object.assign(new Error(
+    "refused: this would sign as the venue's own party (" + what + "). Venue roles are " +
+    "demo-only or operator actions - a wallet trades as itself."), { status: 403 });
+}
+// A mandate lets the operator act for a party within limits the ledger enforces. That
+// is still not a licence for ANYONE to trigger it: the caller must be in the trade.
+function assertCallerIn(parties, what) {
+  const st = reqCtx.getStore();
+  if (!st || !st.req) return;
+  if (auth.DEMO_ROLES || auth.isOperator(st.req)) return;
+  const me = auth.callerParty(st.req);
+  if (me && (parties || []).filter(Boolean).includes(me)) return;
+  throw Object.assign(new Error(
+    "refused: only a party to this trade can trigger " + what), { status: 403 });
+}
+const actDuty = (role, tag, commands) => act(role, tag, commands, { duty: true });
+
+async function act(role, tag, commands, opts) {
   const r = String(role || "").toLowerCase();
   // Refuse loudly rather than fail somewhere deeper: we cannot sign for a party whose
   // key we deliberately do not have. The caller must route this through the wallet.
@@ -264,6 +302,7 @@ async function act(role, tag, commands) {
     throw new Error(`no signing key for wallet party ${String(role).slice(0, 28)}… - ` +
       `build the commands and have the wallet sign them via /api/ext/prepare + /api/ext/execute`);
   }
+  if (!(opts && opts.duty)) assertMayUseVenueKeys(r + " " + tag);
   if (SIGNED_MODE && SIGNING_ROLES.includes(r)) {
     const rec = await recFor(r);
     return prepareSignExecute(rec, commands, tag); // async-accepted ({} on success)
@@ -278,7 +317,8 @@ async function act(role, tag, commands) {
 // Real-token submit, routed by mode. Body shape: {commandId, actAs, commands,
 // disclosedContracts}. DEMO: operator submit-and-wait. SIGNED: each actAs party
 // signs its own leg with its key (operator signs nothing); disclosures forwarded.
-async function realSubmit(body, tag) {
+async function realSubmit(body, tag, opts) {
+  if (!(opts && opts.duty)) assertMayUseVenueKeys("real " + (tag || "rsub"));
   if (SIGNED_MODE) {
     const recs = [];
     for (const pid of (body.actAs || [])) {
@@ -536,6 +576,8 @@ async function submit(commandId, actAsParty, commands) {
 // SIGNED: every external party signs with its own key (operator signs nothing).
 // DEMO:   the operator actAs all of them (it holds CanActAs on the demo parties).
 async function actMulti(roles, tag, commands) {
+  // The third place the venue signs with its own keys (see assertMayUseVenueKeys).
+  assertMayUseVenueKeys("multi " + tag);
   const rs = [...new Set(roles.map((r) => String(r || "").toLowerCase()))];
   if (SIGNED_MODE && rs.every((r) => SIGNING_ROLES.includes(r))) {
     const recs = [];
@@ -805,6 +847,11 @@ app.get("/api/dealers", async (req, res) => {
 // toggle demo mode; that path is gone, so it only warms the keys now.
 app.post("/api/mode", async (req, res) => {
   try {
+    // recFor() CREATES the venue's parties and grants them rights when missing - an
+    // operator action, not something any signed-in wallet should be able to trigger.
+    if (!auth.DEMO_ROLES && !auth.isOperator(req)) {
+      return res.status(403).json({ error: "warming the venue's own parties is an operator action" });
+    }
     for (const r of SIGNING_ROLES) await recFor(r);
     res.json({ ok: true, signedMode: SIGNED_MODE, parties: await activePartyMap() });
   } catch (e) {
@@ -1821,8 +1868,9 @@ app.post("/api/swap/rfq", async (req, res) => {
     // transaction, so the requester signs nothing at all here, whatever N is.
     const mandate = await findMandate(requester);
     if (mandate) {
+      assertCallerIn([requester], "opening a request under this mandate");
       const before = await idSetSwap(requester, "UmbraSwap:SwapRfq");
-      await act("requester", "swap-rfq-mandate", [{
+      await actDuty("requester", "swap-rfq-mandate", [{
         ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:TradingMandate`,
           contractId: mandate.contractId, choice: "MandateOpenRfq",
           choiceArgument: {
@@ -2616,7 +2664,7 @@ async function executeRealSettlement(o) {
   };
   dbg("[CTXDBG] settlementCid:", (settlementCid || "").slice(0, 24));
   dbg("[CTXDBG] FINAL disclosed set:", JSON.stringify(disclosed.map(d => ({ t: (d.templateId || "").split(":").pop(), c: (d.contractId || "").slice(0, 20) }))));
-  await realSubmit(execCmd, "rexecreal");
+  await realSubmit(execCmd, "rexecreal", { duty: true });
 }
 
 // Accept a pending real swap. ProposeRealSwap is CONSUMING: it archives the
@@ -2635,8 +2683,9 @@ app.post("/api/swap/pending/:cid/accept-real", async (req, res) => {
       choice: "AcceptRealSwap", choiceArgument: {} } }];
     const dm = isWalletParty(dealerParty) ? await findMandate(dealerParty) : null;
     if (dm) {
+      assertCallerIn([pend.payload.requester, dealerParty], "a mandate accept");
       const before = await idSetSwap(operator, "UmbraSwap:SwapSettlement");
-      await act("requester", "swap-accept-mandate", [{
+      await actDuty("requester", "swap-accept-mandate", [{
         ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:TradingMandate`,
           contractId: dm.contractId, choice: "MandateAcceptRealSwap",
           choiceArgument: { mPendingCid: req.params.cid } } }]);
@@ -2878,7 +2927,8 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
         } else if (requesterIsWallet && await findMandate(requester)) {
           const rm = await findMandate(requester);
           const offBefore = await ledgerEnd();
-          const mRes = await act("requester", "swap-propose-mandate", [{
+          assertCallerIn([requester, dealerPartyId], "a mandate proposal");
+          const mRes = await actDuty("requester", "swap-propose-mandate", [{
             ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:TradingMandate`,
               contractId: rm.contractId, choice: "MandateProposeRealSwap",
               choiceArgument: {
@@ -2920,7 +2970,8 @@ app.post("/api/swap/proposals/:cid/settle-real", async (req, res) => {
           const dMand = dealerIsWallet ? await findMandate(dealerPartyId) : null;
           if (dMand) {
             const accBefore2 = await ledgerEnd();
-            const mAcc = await act("requester", "swap-accept-mandate", [{
+            assertCallerIn([requester, dealerPartyId], "a mandate accept");
+            const mAcc = await actDuty("requester", "swap-accept-mandate", [{
               ExerciseCommand: { templateId: `#${PKGN}:UmbraSwap:TradingMandate`,
                 contractId: dMand.contractId, choice: "MandateAcceptRealSwap",
                 choiceArgument: { mPendingCid: pendingCid } } }]);
