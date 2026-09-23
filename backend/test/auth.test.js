@@ -48,6 +48,28 @@ test("a party that signs the nonce with its own key gets a session", () => {
   assert.strictEqual(auth.callerParty(bearer(out.token)), p.partyId);
 });
 
+test("signing the readable message (what a wallet shows) also gets a session", () => {
+  const p = party("alice");
+  const { nonce, message } = auth.issueChallenge(p.partyId);
+  assert.match(message, /^Sign in to Umbra/);
+  assert.ok(message.includes(p.partyId), "the message names the party");
+  assert.ok(/^[\x20-\x7e\n]*$/.test(message), "plain ASCII, so a wallet shows it as written");
+  const sig = p.sign(Buffer.from(message, "utf8").toString("base64"));
+  const out = auth.verifyChallenge({ party: p.partyId, nonce, signature: sig }, store(p));
+  assert.strictEqual(out.party, p.partyId);
+});
+
+test("another party's readable message cannot be used to sign in", () => {
+  const alice = party("alice"), mallory = party("mallory");
+  const a = auth.issueChallenge(alice.partyId);
+  const m = auth.issueChallenge(mallory.partyId);
+  // mallory signs her OWN message and offers it against alice's challenge
+  assert.throws(() => auth.verifyChallenge(
+    { party: alice.partyId, nonce: a.nonce,
+      signature: mallory.sign(Buffer.from(m.message, "utf8").toString("base64")) },
+    store(alice, mallory)), /does not match/);
+});
+
 test("a signature from a DIFFERENT key is refused", () => {
   const alice = party("alice"), mallory = party("mallory");
   const { nonce } = auth.issueChallenge(alice.partyId);

@@ -17,8 +17,13 @@
 // nothing weaker is worth having -- and the wallet can already sign, since
 // signing is how it trades. No password, no shared secret, nothing to leak.
 //
-//   POST /api/auth/challenge { party }            -> { nonce }
+//   POST /api/auth/challenge { party }            -> { nonce, message }
 //   POST /api/auth/verify    { party, nonce, signature } -> { token }
+//
+// The wallet signs `message` (its UTF-8 bytes): plain text that names the party and
+// the nonce, so the wallet's approval window shows words a person can read instead
+// of 32 random bytes rendered as garbage. A signature over the raw nonce bytes is
+// still accepted, for clients built before the message existed.
 //   ... then: Authorization: Bearer <token>
 //
 // THE RULE THE REST OF THE SERVER MUST FOLLOW: the party comes from the TOKEN,
@@ -59,8 +64,19 @@ function issueChallenge(party) {
     throw Object.assign(new Error("need a full party id"), { status: 400 });
   }
   const nonce = crypto.randomBytes(32).toString("base64");
-  challenges.set(party, { nonce, expiresAt: Date.now() + CHALLENGE_TTL_MS });
-  return { nonce, expiresInMs: CHALLENGE_TTL_MS };
+  const expiresAt = Date.now() + CHALLENGE_TTL_MS;
+  // ASCII only: a wallet that shows the bytes it signs as text then shows it exactly.
+  const message = [
+    "Sign in to Umbra",
+    "",
+    "Party: " + party,
+    "Nonce: " + Buffer.from(nonce, "base64").toString("hex"),
+    "Expires: " + new Date(expiresAt).toISOString(),
+    "",
+    "This only proves you control this wallet. It does not move any funds.",
+  ].join("\n");
+  challenges.set(party, { nonce, message, expiresAt });
+  return { nonce, message, expiresInMs: CHALLENGE_TTL_MS };
 }
 
 // The party's public key, as recorded when it was onboarded. A party we have no
@@ -125,7 +141,8 @@ function verifyChallenge({ party, nonce, signature }, wallets) {
       "Parties onboarded before public keys were stored must re-onboard."),
       { status: 401 });
   }
-  if (!verifyRawEd25519(pk, nonce, signature)) {
+  const overText = verifyRawEd25519(pk, Buffer.from(c.message, "utf8").toString("base64"), signature);
+  if (!overText && !verifyRawEd25519(pk, nonce, signature)) {
     throw Object.assign(new Error("signature does not match this party's key"),
       { status: 401 });
   }

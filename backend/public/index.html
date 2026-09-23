@@ -14,6 +14,7 @@
     --accent:#9D74FF; --accent2:#C2A6FF; --accentbg:rgba(157,116,255,.12); --accentline:rgba(157,116,255,.45);
     --amber:#E0A33B; --amberbg:rgba(224,163,59,.12); --amberline:rgba(224,163,59,.45);
     --red:#F0616D; --redact:rgba(157,116,255,.22);
+    --ok:#3DD68C; --okbg:rgba(61,214,140,.12); --okline:rgba(61,214,140,.5);
     --glow:0 0 0 3px rgba(157,116,255,.16);
     --rad:2px;
   }
@@ -24,6 +25,7 @@
     --accent:#7C4DFF; --accent2:#5B2EE5; --accentbg:rgba(124,77,255,.1); --accentline:rgba(124,77,255,.45);
     --amber:#B5791A; --amberbg:rgba(181,121,26,.1); --amberline:rgba(181,121,26,.4);
     --red:#D63A47; --redact:rgba(124,77,255,.18);
+    --ok:#12A150; --okbg:rgba(18,161,80,.1); --okline:rgba(18,161,80,.45);
     --glow:0 0 0 3px rgba(124,77,255,.14);
   }
   *{box-sizing:border-box}
@@ -351,6 +353,14 @@
   .prt-out{background:none;border:1px solid var(--line2);border-radius:var(--rad);color:var(--mute);
     padding:6px 11px;font:600 10px/1 ui-monospace,monospace;letter-spacing:.1em;text-transform:uppercase;transition:.14s}
   .prt-out:hover{background:var(--hover);color:var(--text)}
+  /* dealer listing: a store icon, green when listed, grey when not */
+  .prt-ico{display:inline-flex;align-items:center;justify-content:center;width:30px;height:28px;padding:0;
+    background:none;border:1px solid var(--line2);border-radius:var(--rad);color:var(--dim);cursor:pointer;transition:.14s}
+  .prt-ico:hover{background:var(--hover);color:var(--mute)}
+  .prt-ico svg{width:16px;height:16px}
+  .prt-ico.on{color:var(--ok);border-color:var(--okline);background:var(--okbg)}
+  .prt-ico.on:hover{filter:brightness(1.1)}
+  .prt-ico[disabled]{opacity:.5;cursor:progress}
   .prt-note{padding:9px 20px;font:500 11.5px/1.4 ui-monospace,monospace;border-bottom:1px solid var(--line)}
   .prt-note.ok{color:var(--accent);background:var(--accentbg)}
   .prt-note.bad{color:var(--red);background:rgba(240,97,109,.09)}
@@ -1543,8 +1553,12 @@ function setSession(x) {
 }
 async function walletSignIn(party, sign) {
   REAUTH = () => walletSignIn(party, sign);
-  const { nonce } = await post("/api/auth/challenge", { party });
-  const signature = await sign(nonce);
+  const { nonce, message } = await post("/api/auth/challenge", { party });
+  // Sign the readable message when the server sends one, so the wallet's approval
+  // window shows words rather than random bytes. `sign` takes base64 of the bytes.
+  const signature = await sign(message
+    ? btoa(String.fromCharCode(...new TextEncoder().encode(message)))
+    : nonce);
   const v = await post("/api/auth/verify", { party, nonce, signature });
   setSession({ token: v.token, party, exp: Date.now() + (v.expiresInMs || 0) - 30000 });
 }
@@ -2228,6 +2242,19 @@ const WalletLink = (() => {
       if (!loopParty) throw new Error("Loop is not connected");
       return custodySubmit(loopParty, loopSign, params, "loop");
     },
+    // DEPOSIT, started here. Loop builds and submits the transfer on its OWN node,
+    // from the party Loop hosts, with its own approval window -- a plain token
+    // transfer, so no Umbra package is involved and nothing needs vetting. It lands
+    // under Incoming for the Umbra party to accept, like any other transfer.
+    canDeposit: () => !!(loopProvider && typeof loopProvider.transfer === "function"),
+    walletHoldings: async () =>
+      (loopProvider && typeof loopProvider.getHolding === "function")
+        ? loopProvider.getHolding() : null,
+    deposit: async (s, p) => {
+      if (!loopProvider) throw new Error("Loop is not connected - sign out and connect Loop again to deposit");
+      return loopProvider.transfer(p.recipient, String(p.amount),
+        { instrument_admin: p.admin, instrument_id: p.id });
+    },
   };
 
   // Loop leads only because its `get()` already refuses unless the user picked it;
@@ -2311,6 +2338,25 @@ const WalletLink = (() => {
     homeParty() {
       const a = pick();
       try { return (a && a.homeParty) ? a.homeParty() : null; } catch (e) { return null; }
+    },
+
+    // Deposit from the wallet's own party, started from this page. Only wallets that
+    // can build a transfer themselves answer yes (Loop today); the rest keep the
+    // "send it to your Umbra party" instructions.
+    canDeposit() {
+      const a = pick();
+      try { return !!(a && a.canDeposit && a.canDeposit()); } catch (e) { return false; }
+    },
+    async walletHoldings() {
+      const a = pick();
+      try { return (a && a.walletHoldings) ? await a.walletHoldings() : null; }
+      catch (e) { console.warn("[walletlink] wallet holdings:", e && e.message); return null; }
+    },
+    async deposit(p) {
+      const s = await ensure();
+      const a = pick();
+      if (!a || !a.deposit) throw new Error("this wallet cannot start a transfer from here - send it from the wallet instead");
+      return a.deposit(s, p);
     },
 
     async restore() {
@@ -4259,10 +4305,16 @@ function RequesterDesk(P) {
         // a wallet reaches that desk by opening an invitation, and nobody can invite it
         // until it is listed.
         wallet && listed != null ? React.createElement("button", {
-          className: "prt-out tip-below tip-left", onClick: onToggleListing,
-          "data-tip": listed ? "You are in the dealer directory: buyers can invite you to price blocks. Click to leave it."
-                             : "Join the dealer directory so buyers can invite you to price their blocks. You can still raise your own requests."
-        }, listed ? "Listed as dealer ✓" : "List me as a dealer") : null,
+          className: "prt-ico tip-below tip-left" + (listed ? " on" : ""), onClick: onToggleListing,
+          "aria-label": listed ? "Listed as a dealer - click to leave the directory" : "List me as a dealer",
+          "aria-pressed": !!listed,
+          "data-tip": listed ? "Listed as a dealer: buyers can invite you to price blocks. Click to leave the directory."
+                             : "Not a dealer. Click to join the dealer directory so buyers can invite you to price their blocks. You can still raise your own requests."
+        }, React.createElement("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor",
+            strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
+          React.createElement("path", { d: "M4 4h16l2 5H2z" }),
+          React.createElement("path", { d: "M4 9v11h16V9" }),
+          React.createElement("path", { d: "M10 20v-6h4v6" }))) : null,
         React.createElement(ThemeBtn, { theme, flip: flipTheme }),
         React.createElement("span", { className: "prt-trust " + (signed ? "sg" : "op") }, signed ? "self-signing" : "operator acts"),
         React.createElement("button", { className: "prt-out", onClick: onExit }, "Sign out"))),
@@ -5137,10 +5189,52 @@ function DealerDesk(P) {
 //
 // The chrome is UmbraRedesign.FundingPanel; this keeps the ledger reads, the symbol
 // translation and the two signing paths, and hands it plain data.
+// What the wallet itself holds, from whatever shape its SDK answers with. Loop does
+// not document the holding response, so read it defensively; null (not {}) means
+// "unknown", and the deposit form then leaves the amount check to the wallet.
+function walletBalancesOf(res) {
+  const top = Array.isArray(res) ? res
+    : (res && (res.holdings || res.data || res.items || res.payload || res.result)) || [];
+  const list = Array.isArray(top) ? top : (top && (top.holdings || top.items)) || [];
+  const out = {};
+  for (const x of list) {
+    if (!x) continue;
+    const inst = x.instrument || x.instrumentId || {};
+    const id = x.instrument_id || inst.id || inst.instrument_id ||
+               (typeof x.instrumentId === "string" ? x.instrumentId : null) || x.symbol || x.id;
+    const amt = [x.total_unlocked_coin, x.unlocked_amount, x.available, x.amount, x.balance, x.total]
+      .find(v => v != null && !isNaN(Number(v)));
+    if (!id || amt == null) continue;
+    const s = dispSym(String(id));
+    out[s] = (out[s] || 0) + Number(amt);
+  }
+  return Object.keys(out).length ? out : null;
+}
+
 function Funding({ party, say, onChanged }) {
   const [pending, setPending] = useState([]);
   const [raw, setRaw] = useState([]);
   const [busy, setBusy] = useState("");
+  const [regAssets, setRegAssets] = useState([]);
+  const [walletBal, setWalletBal] = useState(null);
+
+  useEffect(() => {
+    api("/api/swap/registry").then(r => setRegAssets((r && r.assets) || [])).catch(() => {});
+  }, []);
+  const loadWallet = useCallback(async () => {
+    if (!WalletLink.canDeposit()) return;
+    const res = await WalletLink.walletHoldings();
+    if (res != null && !window.__umbraLoggedHoldings) {
+      window.__umbraLoggedHoldings = true;
+      console.info("[funding] wallet holdings response:", res);
+    }
+    setWalletBal(walletBalancesOf(res));
+  }, []);
+  useEffect(() => {
+    loadWallet();
+    const t = setInterval(loadWallet, 30000);
+    return () => clearInterval(t);
+  }, [loadWallet]);
 
   const load = useCallback(async () => {
     const [p, h] = await Promise.all([
@@ -5200,6 +5294,23 @@ function Funding({ party, say, onChanged }) {
     setBusy("");
   };
 
+  // Deposit started here, approved in the wallet: the wallet sends from its own party
+  // to this Umbra party, then the transfer shows under Incoming to accept.
+  const deposit = async (w) => {
+    if (busy) return;
+    const id = ledgerSym(w.asset);
+    const inst = regAssets.find(a => a.symbol === id);
+    if (!inst) return say("Umbra does not list " + w.asset + " yet.", true);
+    setBusy("d");
+    try {
+      say("Approve the transfer in your wallet…");
+      await WalletLink.deposit({ recipient: party, amount: w.amount, admin: inst.admin, id });
+      say("Sent from your wallet. It shows under Incoming in a few seconds — press Accept to finish.");
+      setTimeout(load, 3000); setTimeout(load, 8000); setTimeout(loadWallet, 5000);
+    } catch (e) { say((e && e.message) || "the deposit did not go through", true); }
+    setBusy("");
+  };
+
   const U = window.UmbraRedesign;
 
   // /api/real/pending answers with every transfer this party is a leg of, in EITHER
@@ -5249,7 +5360,11 @@ function Funding({ party, say, onChanged }) {
       })),
       busy: busy,
       onAccept: accept,
-      onWithdraw: withdraw
+      onWithdraw: withdraw,
+      canDeposit: WalletLink.canDeposit(),
+      walletBalances: walletBal,
+      depositAssets: regAssets.map(a => dispSym(a.symbol)),
+      onDeposit: deposit
     }),
     // Accounts for the gap between the balance and what can be sent: a transfer the
     // far side has not accepted yet still holds its input locked here.

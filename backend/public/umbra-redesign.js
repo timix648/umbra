@@ -476,149 +476,199 @@
     var Rx = R();
     var homeParty = props.homeParty;          // the user's own wallet party
     var umbraParty = props.umbraParty;        // deposit target inside Umbra
-    var balances = props.balances || {};
+    var balances = props.balances || {};      // what Umbra holds for this party
     var transfers = props.transfers || [];
+    var canDeposit = !!props.canDeposit;      // the wallet can start a transfer itself
+    var walletBal = props.walletBalances || null;   // null = the wallet did not say
 
+    // One switch, two directions. The wallet only ever signs: a deposit is started
+    // here and approved in the wallet, a withdrawal is built here and signed there.
+    var md = Rx.useState(props.mode || "deposit"), mode = md[0], setMode = md[1];
     var a = Rx.useState(props.asset || "cBTC"), asset = a[0], setAsset = a[1];
     var v = Rx.useState(""), amt = v[0], setAmt = v[1];
     var d = Rx.useState(props.dest || homeParty), dest = d[0], setDest = d[1];
     var e = Rx.useState(false), editDest = e[0], setEditDest = e[1];
     var f = Rx.useState(false), showFull = f[0], setShowFull = f[1];
 
+    var dep = mode === "deposit";
+    var busy = props.busy === (dep ? "d" : "w");
+    // Deposit spends the WALLET's balance, withdraw spends Umbra's. When the wallet
+    // does not report its balance the cap is unknown, and the wallet itself refuses
+    // an amount it cannot cover.
+    var srcBal = dep ? walletBal : balances;
+    var known = !!srcBal;
     var dp = dpOf(asset);
-    var avail = parseAmt(balances[asset] || 0);
+    var avail = known ? parseAmt(srcBal[asset] || 0) : 0;
     var num = parseAmt(amt);
-    var pct = avail > 0 ? Math.min(100, Math.max(0, (num / avail) * 100)) : 0;
-    var over = num > avail + 1e-12;
+    var pct = known && avail > 0 ? Math.min(100, Math.max(0, (num / avail) * 100)) : 0;
+    var over = known && num > avail + 1e-12;
     /* BUG FIX: was `dest === homeParty` — see samePartyId above. */
     var toSelf = samePartyId(dest, homeParty);
-    var valid = num > 0 && !over && normParty(dest) !== "";
+    var valid = num > 0 && !over && (dep || normParty(dest) !== "");
 
     function setPct(p) {
       setAmt(avail > 0 ? (avail * p / 100).toFixed(dp).replace(/0+$/, "").replace(/\.$/, "") : "");
     }
+    function switchTo(m) { if (m !== mode) { setMode(m); setAmt(""); } }
 
-    return h("div", { className: "u-fund" },
+    var seg = h("div", { className: "u-seg", role: "tablist", "aria-label": "Move funds" },
+      [["deposit", "Deposit"], ["withdraw", "Withdraw"]].map(function (o) {
+        return h("button", {
+          key: o[0], type: "button", role: "tab", className: "u-seg-b",
+          "aria-selected": mode === o[0], "data-on": mode === o[0] ? "1" : "0",
+          onClick: function () { switchTo(o[0]); }
+        }, o[1]);
+      }));
 
-      /* deposit ------------------------------------------------------- */
-      h("div", { className: "u-sect" },
-        h("div", { className: "u-row" },
-          h("span", { className: "u-lab" }, "Deposit"),
-          h("span", { className: "u-sp" }),
-          h("button", {
-            type: "button", className: "u-btn u-btn-xs u-btn-gh",
-            onClick: function () { setShowFull(!showFull); }
-          }, showFull ? "Hide full id" : "Full id")),
-        h("div", { className: "u-party-box" },
-          h("span", { className: "u-dot" }),
-          h("span", { className: "u-col u-sp" },
-            h("span", { className: "u-party" }, h("b", null, abbrevParty(umbraParty))),
-            h("span", { className: "u-asset-iss" }, "Your Umbra trading party")),
-          h(CopyBtn, { text: umbraParty, what: "party id" })),
-        showFull ? h("div", { className: "u-party-full" }, umbraParty) : null,
-        h("p", { className: "u-note", style: { margin: 0 } },
-          "Send from your wallet party ",
-          h("span", { className: "u-party" }, abbrevParty(homeParty, 9, 4)),
-          " to this one. The transfer then appears below for you to accept.")),
-
-      /* incoming ----------------------------------------------------- */
-      h("div", { className: "u-sect" },
-        h("div", { className: "u-row" },
-          h("span", { className: "u-lab" }, "Incoming"),
-          h("span", { className: "u-sp" }),
-          h("span", { className: "u-lab u-lab-b" },
-            transfers.length ? transfers.length + " to accept" : "clear")),
-        transfers.length
-          ? h("div", null, transfers.map(function (t) {
-              return h("div", { className: "u-xfer", key: t.id, "data-new": t.fresh ? "1" : "0" },
-                h(AssetTag, { sym: t.asset }),
-                h("span", { className: "u-col", style: { alignItems: "flex-end", gap: 3 } },
-                  h(Amount, { v: t.amount, sym: t.asset }),
-                  h("span", { className: "u-asset-iss" }, "from " + partyTail(t.from))),
-                h("button", {
-                  type: "button", className: "u-btn u-btn-xs",
-                  onClick: function () { props.onAccept && props.onAccept(t); }
-                }, "Accept"));
-            }))
-          : h("div", { className: "u-empty u-lab" }, "No incoming transfers")),
-
-      /* withdraw ----------------------------------------------------- */
-      h("div", { className: "u-sect" },
-        h("span", { className: "u-lab" }, "Withdraw"),
-        h(AssetSelect, {
-          value: asset, balances: balances, ariaLabel: "Asset to withdraw",
-          assets: props.assets, onChange: function (s) { setAsset(s); setAmt(""); }
+    // Asset, amount, Max, slider, available: the same form in both directions.
+    var amountForm = [
+      h(AssetSelect, {
+        key: "as", value: asset, balances: srcBal,
+        ariaLabel: dep ? "Asset to deposit" : "Asset to withdraw",
+        assets: dep ? (props.depositAssets && props.depositAssets.length ? props.depositAssets : props.assets) : props.assets,
+        onChange: function (s) { setAsset(s); setAmt(""); }
+      }),
+      h("div", { key: "fld", className: "u-field" },
+        h("input", {
+          value: amt, inputMode: "decimal", placeholder: "0.0000000",
+          "aria-label": dep ? "Deposit amount" : "Withdraw amount",
+          onChange: function (ev) { setAmt(ev.target.value.replace(/[^\d.]/g, "")); }
         }),
-        h("div", { className: "u-field" },
-          h("input", {
-            value: amt, inputMode: "decimal", placeholder: "0.0000000",
-            "aria-label": "Withdraw amount",
-            onChange: function (ev) { setAmt(ev.target.value.replace(/[^\d.]/g, "")); }
-          }),
-          h("span", { className: "u-field-aff" }, asset),
-          h("button", {
-            type: "button", className: "u-btn u-btn-xs",
-            onClick: function () { setPct(100); }
-          }, "Max")),
-        h("div", { className: "u-slider" },
-          h("input", {
-            type: "range", min: 0, max: 100, step: 1, value: Math.round(pct),
-            "aria-label": "Percent of available balance",
-            onChange: function (ev) { setPct(parseAmt(ev.target.value)); }
-          }),
-          h("div", { className: "u-ticks" },
-            [25, 50, 75, 100].map(function (p) {
-              return h("button", {
-                key: p, type: "button", className: "u-tick",
-                "data-on": Math.round(pct) === p ? "1" : "0",
-                onClick: function () { setPct(p); }
-              }, p === 100 ? "MAX" : p + "%");
-            }))),
-        h("div", { className: "u-row", style: { justifyContent: "space-between" } },
-          h("span", { className: "u-lab" }, "Available"),
-          h(Amount, { v: avail, sym: asset, cls: "u-num-xs" })),
+        h("span", { className: "u-field-aff" }, asset),
+        known ? h("button", {
+          type: "button", className: "u-btn u-btn-xs",
+          onClick: function () { setPct(100); }
+        }, "Max") : null),
+      known ? h("div", { key: "sl", className: "u-slider" },
+        h("input", {
+          type: "range", min: 0, max: 100, step: 1, value: Math.round(pct),
+          "aria-label": "Percent of available balance",
+          onChange: function (ev) { setPct(parseAmt(ev.target.value)); }
+        }),
+        h("div", { className: "u-ticks" },
+          [25, 50, 75, 100].map(function (p) {
+            return h("button", {
+              key: p, type: "button", className: "u-tick",
+              "data-on": Math.round(pct) === p ? "1" : "0",
+              onClick: function () { setPct(p); }
+            }, p === 100 ? "MAX" : p + "%");
+          }))) : null,
+      h("div", { key: "av", className: "u-row", style: { justifyContent: "space-between" } },
+        h("span", { className: "u-lab" }, dep ? "In your wallet" : "Available"),
+        known ? h(Amount, { v: avail, sym: asset, cls: "u-num-xs" })
+              : h("span", { className: "u-lab u-lab-b" }, "shown in your wallet"))
+    ];
 
-        h("span", { className: "u-lab", style: { marginTop: 4 } }, "Destination"),
-        editDest
-          ? h("div", { className: "u-col", style: { gap: 7 } },
-              h("div", { className: "u-field" },
-                h("input", {
-                  value: dest || "", placeholder: "party id",
-                  "aria-label": "Destination party id",
-                  onChange: function (ev) { setDest(ev.target.value); }
-                })),
-              h("div", { className: "u-row", style: { gap: 6 } },
-                h("button", {
-                  type: "button", className: "u-btn u-btn-xs",
-                  onClick: function () { setDest(homeParty); }
-                }, "Use my wallet"),
-                h("button", {
-                  type: "button", className: "u-btn u-btn-xs",
-                  onClick: function () { setEditDest(false); }
-                }, "Done")))
-          : h("div", { className: "u-dest", "data-home": toSelf ? "1" : "0" },
-              h("span", { className: toSelf ? "u-dot" : "u-dot u-dot-m" }),
-              h("span", { className: "u-col u-sp" },
-                h("span", { style: { fontSize: 13, fontWeight: 600 } },
-                  toSelf ? "Your wallet" : "Another party"),
-                h("span", { className: "u-asset-iss" }, abbrevParty(dest, 9, 6))),
+    var umbraBox = [
+      h("div", { key: "pb", className: "u-party-box" },
+        h("span", { className: "u-dot" }),
+        h("span", { className: "u-col u-sp" },
+          h("span", { className: "u-party" }, h("b", null, abbrevParty(umbraParty))),
+          h("span", { className: "u-asset-iss" }, "Your Umbra trading party")),
+        h("button", {
+          type: "button", className: "u-btn u-btn-xs u-btn-gh",
+          onClick: function () { setShowFull(!showFull); }
+        }, showFull ? "Hide" : "Full id"),
+        h(CopyBtn, { text: umbraParty, what: "party id" })),
+      showFull ? h("div", { key: "pf", className: "u-party-full" }, umbraParty) : null
+    ];
+
+    /* deposit ------------------------------------------------------- */
+    var depositSect = canDeposit
+      ? h("div", { className: "u-sect" },
+          amountForm,
+          h("div", { className: "u-dest", "data-home": "1" },
+            h("span", { className: "u-dot" }),
+            h("span", { className: "u-col u-sp" },
+              h("span", { style: { fontSize: 13, fontWeight: 600 } }, "From your wallet"),
+              h("span", { className: "u-asset-iss" },
+                (homeParty ? abbrevParty(homeParty, 9, 6) : "your wallet") + "  →  your Umbra party"))),
+          over ? h("p", { className: "u-note u-note-w", style: { margin: 0 } },
+                   "Amount exceeds what your wallet holds.") : null,
+          h("button", {
+            type: "button", className: "u-btn u-btn-pri u-btn-blk", disabled: !valid || busy,
+            onClick: function () { props.onDeposit && props.onDeposit({ asset: asset, amount: num }); }
+          }, busy ? "Approve in your wallet…" : (over ? "Insufficient " + asset : "Deposit to Umbra")),
+          h("p", { className: "u-note", style: { margin: 0 } },
+            "Your wallet asks you to approve the transfer, then it arrives under Incoming for one more approval."),
+          h("span", { className: "u-lab", style: { marginTop: 6 } }, "Receiving from elsewhere"),
+          umbraBox)
+      : h("div", { className: "u-sect" },
+          umbraBox,
+          h("p", { className: "u-note", style: { margin: 0 } },
+            "Send from your wallet",
+            homeParty ? [" party ", h("span", { key: "hp", className: "u-party" }, abbrevParty(homeParty, 9, 4))] : "",
+            " to this one. The transfer then appears below for you to accept."));
+
+    /* withdraw ----------------------------------------------------- */
+    var withdrawSect = h("div", { className: "u-sect" },
+      amountForm,
+      h("span", { className: "u-lab", style: { marginTop: 4 } }, "Destination"),
+      editDest
+        ? h("div", { className: "u-col", style: { gap: 7 } },
+            h("div", { className: "u-field" },
+              h("input", {
+                value: dest || "", placeholder: "party id",
+                "aria-label": "Destination party id",
+                onChange: function (ev) { setDest(ev.target.value); }
+              })),
+            h("div", { className: "u-row", style: { gap: 6 } },
               h("button", {
                 type: "button", className: "u-btn u-btn-xs",
-                onClick: function () { setEditDest(true); }
-              }, "Change")),
-        !toSelf && normParty(dest) !== ""
-          ? h("p", { className: "u-note u-note-w", style: { margin: 0 } },
-              "Leaves Umbra to a party you do not control. Settlement is final.")
-          : null,
-        over
-          ? h("p", { className: "u-note u-note-w", style: { margin: 0 } },
-              "Amount exceeds available " + asset + ".")
-          : null,
-        h("button", {
-          type: "button", className: "u-btn u-btn-pri u-btn-blk", disabled: !valid,
-          onClick: function () { props.onWithdraw && props.onWithdraw({ asset: asset, amount: num, dest: dest }); }
-        }, over ? "Insufficient " + asset : "Send from Umbra"))
-    );
+                onClick: function () { setDest(homeParty); }
+              }, "Use my wallet"),
+              h("button", {
+                type: "button", className: "u-btn u-btn-xs",
+                onClick: function () { setEditDest(false); }
+              }, "Done")))
+        : h("div", { className: "u-dest", "data-home": toSelf ? "1" : "0" },
+            h("span", { className: toSelf ? "u-dot" : "u-dot u-dot-m" }),
+            h("span", { className: "u-col u-sp" },
+              h("span", { style: { fontSize: 13, fontWeight: 600 } },
+                toSelf ? "Your wallet" : "Another party"),
+              h("span", { className: "u-asset-iss" }, abbrevParty(dest, 9, 6))),
+            h("button", {
+              type: "button", className: "u-btn u-btn-xs",
+              onClick: function () { setEditDest(true); }
+            }, "Change")),
+      !toSelf && normParty(dest) !== ""
+        ? h("p", { className: "u-note u-note-w", style: { margin: 0 } },
+            "Leaves Umbra to a party you do not control. Settlement is final.")
+        : null,
+      over
+        ? h("p", { className: "u-note u-note-w", style: { margin: 0 } },
+            "Amount exceeds available " + asset + ".")
+        : null,
+      h("button", {
+        type: "button", className: "u-btn u-btn-pri u-btn-blk", disabled: !valid || busy,
+        onClick: function () { props.onWithdraw && props.onWithdraw({ asset: asset, amount: num, dest: dest }); }
+      }, busy ? "Approve in your wallet…" : (over ? "Insufficient " + asset : "Send from Umbra")));
+
+    /* incoming: where every deposit lands, whichever side is showing -- */
+    var incomingSect = h("div", { className: "u-sect" },
+      h("div", { className: "u-row" },
+        h("span", { className: "u-lab" }, "Incoming"),
+        h("span", { className: "u-sp" }),
+        h("span", { className: "u-lab u-lab-b" },
+          transfers.length ? transfers.length + " to accept" : "clear")),
+      transfers.length
+        ? h("div", null, transfers.map(function (t) {
+            return h("div", { className: "u-xfer", key: t.id, "data-new": t.fresh ? "1" : "0" },
+              h(AssetTag, { sym: t.asset }),
+              h("span", { className: "u-col", style: { alignItems: "flex-end", gap: 3 } },
+                h(Amount, { v: t.amount, sym: t.asset }),
+                h("span", { className: "u-asset-iss" }, "from " + partyTail(t.from))),
+              h("button", {
+                type: "button", className: "u-btn u-btn-xs",
+                onClick: function () { props.onAccept && props.onAccept(t); }
+              }, "Accept"));
+          }))
+        : h("div", { className: "u-empty u-lab" }, "No incoming transfers"));
+
+    return h("div", { className: "u-fund" },
+      h("div", { className: "u-sect" }, seg),
+      dep ? depositSect : withdrawSect,
+      incomingSect);
   }
 
   /* ══ Sign-in / landing ════════════════════════════════════════════════
