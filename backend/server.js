@@ -3238,7 +3238,11 @@ app.post("/api/swap/award", async (req, res) => {
 // = the 5North validator scan-proxy (auth'd). Extend here as new real assets arrive.
 const REAL_REGISTRY = {
   "cbtc-network": REGISTRY_URL_DEFAULT,
-  "DSO": "https://wallet.validator.devnet.sandbox.fivenorth.io/api/validator/v0/scan-proxy",
+  // Canton Coin's registry is a validator's scan-proxy. REGISTRY_URL_DSO points it at
+  // our OWN validator (http://127.0.0.1/api/validator/v0/scan-proxy); unset keeps the
+  // 5North proxy the S2 deployment was built against.
+  "DSO": process.env.REGISTRY_URL_DSO ||
+         "https://wallet.validator.devnet.sandbox.fivenorth.io/api/validator/v0/scan-proxy",
   "rails-cethMain-1-dev": REGISTRY_URL_DEFAULT,
 };
 function registryForAdmin(admin) {
