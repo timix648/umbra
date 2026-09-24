@@ -1,4 +1,5 @@
-const { ledgerFetch, userId: ledgerUser } = require("./token");
+const { ledgerFetch, ledgerFetchEach, userId: ledgerUser } = require("./token");
+const hosts = require("./hosts");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
@@ -202,6 +203,16 @@ async function onboardWalletPrepare(publicKeyB64, partyHint) {
     format: "CRYPTO_KEY_FORMAT_RAW", keyData: publicKeyB64,
     keySpec: "SIGNING_KEY_SPEC_EC_CURVE25519",
   };
+  // Hosted on several nodes from the start: every node prepares the same topology,
+  // the wallet signs it, and each node co-signs (hosts.js).
+  if (hosts.enabled()) {
+    const hint = partyHint || ("wallet-" + Date.now());
+    const p = await hosts.prepareOnboard(publicKeyB64, hint);
+    const fp = await fingerprintOf(publicKeyB64);
+    return { partyId: p.partyId, fingerprint: fp, publicKey: publicKeyB64,
+             multiHash: p.hashes[0], hashes: p.hashes, topologyTransactions: p.topologyTransactions,
+             hint, multiHost: true, hosts: hosts.hostNames(), participants: hosts.participantIds() };
+  }
   const g = await jpost("/v2/parties/external/generate-topology", {
     partyHint: partyHint || ("wallet-" + Date.now()), synchronizer: SYNC, publicKey,
   });
@@ -230,6 +241,16 @@ async function onboardWalletPrepare(publicKeyB64, partyHint) {
   };
 }
 
+// On EVERY node: whichever one the venue is using must be able to read the party and
+// submit what it has signed. A node where we are not admin refuses; that is logged.
+async function grantRights(partyId) {
+  const out = await ledgerFetchEach((n) => `/v2/users/${n.userId}/rights`, { method: "POST",
+    body: (n) => JSON.stringify({ userId: n.userId, rights: [
+      { kind: { CanActAs: { value: { party: partyId } } } },
+      { kind: { CanReadAs: { value: { party: partyId } } } } ] }) });
+  for (const r of out) if (!r.ok) console.log(`[wallet] rights on ${r.node} skipped: ${r.status} ${r.text}`);
+}
+
 async function onboardWalletConfirm(o) {
   // Verify the key BEFORE allocating, so a refusal leaves nothing half-done.
   if (!o.publicKey) {
@@ -251,14 +272,20 @@ async function onboardWalletConfirm(o) {
     if (!same.publicKey) { const s = loadWallets(); s[same.partyId].publicKey = o.publicKey; saveWallets(s); }
     return loadWallets()[same.partyId];
   }
-  await jpost("/v2/parties/external/allocate", {
-    synchronizer: SYNC,
-    onboardingTransactions: (o.topologyTransactions || []).map((t) => ({ transaction: t })),
-    multiHashSignatures: [{
-      format: "SIGNATURE_FORMAT_RAW", signature: o.multiHashSignature,
-      signedBy: o.fingerprint, signingAlgorithmSpec: "SIGNING_ALGORITHM_SPEC_ED25519",
-    }],
-  });
+  if (o.multiHost && hosts.enabled()) {
+    await hosts.confirmOnboard({ hint: o.hint, publicKey: o.publicKey, partyId: o.partyId,
+      topologyTransactions: o.topologyTransactions, fingerprint: o.fingerprint,
+      signatures: Array.isArray(o.signatures) && o.signatures.length ? o.signatures : [o.multiHashSignature] });
+  } else {
+    await jpost("/v2/parties/external/allocate", {
+      synchronizer: SYNC,
+      onboardingTransactions: (o.topologyTransactions || []).map((t) => ({ transaction: t })),
+      multiHashSignatures: [{
+        format: "SIGNATURE_FORMAT_RAW", signature: o.multiHashSignature,
+        signedBy: o.fingerprint, signingAlgorithmSpec: "SIGNING_ALGORITHM_SPEC_ED25519",
+      }],
+    });
+  }
   // CanReadAs lets the UI display the party. CanActAs is what lets this process
   // SUBMIT a transaction the wallet has already signed: /v2/interactive-submission/
   // execute refuses with 403 for a party the submitting user cannot act as, no matter
@@ -273,14 +300,7 @@ async function onboardWalletConfirm(o) {
   // withholding the grant. (A LOCAL party is the opposite case -- there the
   // participant signs, so CanActAs really is control. External parties are why this
   // is safe.)
-  try {
-    await jpost(`/v2/users/${userIdNow()}/rights`, {
-      userId: userIdNow(), rights: [
-        { kind: { CanActAs: { value: { party: o.partyId } } } },
-        { kind: { CanReadAs: { value: { party: o.partyId } } } },
-      ],
-    });
-  } catch (e) { console.log("[wallet] rights grant skipped:", e.message); }
+  await grantRights(o.partyId);
 
   const s = loadWallets();
   // The PUBLIC key is recorded so this party can later prove it is itself: it
@@ -296,4 +316,4 @@ async function onboardWalletConfirm(o) {
 
 module.exports = { onboardExternalParty, prepareSignExecute, prepareSignExecuteMulti,
                    prepareInteractive, executeSigned,
-                   onboardWalletPrepare, onboardWalletConfirm, loadWallets };
+                   onboardWalletPrepare, onboardWalletConfirm, loadWallets, grantRights };

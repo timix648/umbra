@@ -189,5 +189,34 @@
     return { ok: true, actions: roots.length, nodes: (t.nodes || []).length };
   }
 
-  return { verifyPrepared };
+  /* A topology change the wallet is about to sign (hosting a party on nodes).
+   * Each hash must be the hash of its transaction (Canton purpose 11), each must be a
+   * PartyToParticipant for THIS party, and it may name only the nodes the venue says
+   * it uses. */
+  async function verifyTopology(CT, party, hashes, txs, allowedParticipants) {
+    if (!CT || !CT.computeSha256CantonHash || !CT.decodeTopologyTransaction) throw Refusal("the topology checker did not load -- reload the page");
+    if (!Array.isArray(hashes) || !Array.isArray(txs) || !hashes.length || hashes.length !== txs.length) throw Refusal("the server sent an incomplete topology");
+    const allowed = new Set(allowedParticipants || []);
+    for (let i = 0; i < txs.length; i++) {
+      const bytes = Uint8Array.from(atobAny(txs[i]), (c) => c.charCodeAt(0));
+      const h = await CT.computeSha256CantonHash(11, bytes);
+      if (b64(h) !== hashes[i]) throw Refusal("a topology hash is not the hash of its transaction");
+      const d = CT.decodeTopologyTransaction(txs[i]);
+      const m = d && d.mapping && d.mapping.mapping;
+      if (!m || m.oneofKind !== "partyToParticipant") throw Refusal("it is not a hosting change");
+      const ptp = m.partyToParticipant;
+      if (ptp.party !== party) throw Refusal("it changes hosting for another party");
+      for (const p of ptp.participants || []) {
+        if (!allowed.has(p.participantUid)) throw Refusal("it names a node the venue did not list (" + String(p.participantUid).slice(0, 30) + ")");
+      }
+    }
+    return { ok: true };
+  }
+  const atobAny = (s) => (typeof atob === "function" ? atob(s) : Buffer.from(s, "base64").toString("binary"));
+  const b64 = (u8) => {
+    if (typeof btoa === "function") { let s = ""; u8.forEach((c) => { s += String.fromCharCode(c); }); return btoa(s); }
+    return Buffer.from(u8).toString("base64");
+  };
+
+  return { verifyPrepared, verifyTopology };
 });

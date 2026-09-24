@@ -24,7 +24,7 @@ const net = require("net");
 const fs = require("fs");
 const path = require("path");
 const { getSigner } = require("./signer");
-const { decodePreparedTransaction, hashPreparedTransaction } = require("@canton-network/core-tx-visualizer");
+const { decodePreparedTransaction, hashPreparedTransaction, decodeTopologyTransaction, computeSha256CantonHash } = require("@canton-network/core-tx-visualizer");
 
 const SOCK = process.env.UMBRA_SIGNER_SOCKET || "/run/umbra-signer/signer.sock";
 const RECORDS = process.env.UMBRA_SIGNER_RECORDS || path.join(path.dirname(SOCK), "records.json");
@@ -78,7 +78,38 @@ async function judge(role, hashB64, txB64) {
   return null;
 }
 
+// Nodes a venue party may be hosted on (participant ids, comma separated). A hosting
+// change naming any other node is refused: that is how a compromised app would try to
+// move the venue's party somewhere it controls.
+const HOSTS = new Set(String(process.env.UMBRA_SIGNER_HOSTS || "").split(",").map((x) => x.trim()).filter(Boolean));
+
+async function judgeTopology(role, hashB64, txB64) {
+  const rec = S().recordFor(role);
+  if (!rec) return "no key for role " + role;
+  if (!txB64) return "no topology sent";
+  const h = Buffer.from(await computeSha256CantonHash(11, new Uint8Array(Buffer.from(txB64, "base64")))).toString("base64");
+  if (h !== hashB64) return "the hash is not the hash of the topology sent";
+  const d = decodeTopologyTransaction(txB64);
+  const m = d && d.mapping && d.mapping.mapping;
+  if (!m || m.oneofKind !== "partyToParticipant") return "not a hosting change";
+  if (m.partyToParticipant.party !== rec.partyId) return "a hosting change for another party";
+  if (!HOSTS.size) return "no nodes are allowed (UMBRA_SIGNER_HOSTS is empty)";
+  for (const p of m.partyToParticipant.participants || []) {
+    if (!HOSTS.has(p.participantUid)) return "a node that is not allowed: " + String(p.participantUid).slice(0, 40);
+  }
+  return null;
+}
+
 async function handle(msg) {
+  if (msg.op === "signTopology") {
+    const why = await judgeTopology(msg.role, msg.hash, msg.tx).catch((e) => "could not check the topology: " + e.message);
+    if (why) {
+      console.error(`[signer] ${MODE === "enforce" ? "REFUSED" : "AUDIT (would refuse)"} topology ${msg.role}: ${why}`);
+      if (MODE === "enforce") return { error: "the venue signer refused: " + why };
+    }
+    console.log(`[signer] signed a hosting change for ${msg.role}`);
+    return { signature: await S().sign(msg.role, msg.hash) };
+  }
   if (msg.op === "records") { const r = {}; for (const x of S().roles()) r[x] = S().recordFor(x); return { records: r }; }
   if (msg.op !== "sign") return { error: "unknown op" };
   const why = await judge(msg.role, msg.hash, msg.tx).catch((e) => "could not check the transaction: " + e.message);
@@ -89,7 +120,7 @@ async function handle(msg) {
   return { signature: await S().sign(msg.role, msg.hash) };
 }
 
-module.exports = { judge, POLICY };
+module.exports = { judge, judgeTopology, POLICY };
 if (require.main === module) {
 try { fs.unlinkSync(SOCK); } catch (e) { /* not there */ }
 const server = net.createServer((c) => {

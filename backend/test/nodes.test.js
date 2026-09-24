@@ -10,7 +10,7 @@ function stubNode(name) {
   const srv = http.createServer((req, res) => {
     seen.push(req.method + " " + req.url);
     res.setHeader("Content-Type", "application/json");
-    res.end(JSON.stringify({ node: name, offset: 1 }));
+    res.end(JSON.stringify({ node: name, offset: 1, connectedSynchronizers: [{ synchronizerId: "s" }] }));
   });
   return new Promise((ok) => srv.listen(0, "127.0.0.1", () => ok({ srv, seen, port: srv.address().port })));
 }

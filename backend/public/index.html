@@ -2193,11 +2193,20 @@ const WalletLink = (() => {
     const known = (await api("/api/ext/wallets?fingerprint=" + encodeURIComponent(draft.fingerprint))).wallets || [];
     const existing = known.find(w => w.fingerprint === draft.fingerprint);
     if (existing) return existing.partyId;
-    const r = await post("/api/ext/onboard/confirm", {
+    let multi = {};
+    if (draft.multiHost) {
+      // Hosted on several nodes: check the topology before the wallet signs it.
+      await window.UmbraTxVerify.verifyTopology(window.CantonTx, draft.partyId, draft.hashes,
+        draft.topologyTransactions, draft.participants);
+      const signatures = [];
+      for (const h of draft.hashes) signatures.push(await sign(h));
+      multi = { multiHost: true, hint: draft.hint, hashes: draft.hashes, signatures };
+    }
+    const r = await post("/api/ext/onboard/confirm", Object.assign({
       partyId: draft.partyId, fingerprint: draft.fingerprint, publicKey: draft.publicKey,
       topologyTransactions: draft.topologyTransactions, multiHash: draft.multiHash,
-      multiHashSignature: await sign(draft.multiHash),
-    });
+      multiHashSignature: multi.signatures ? multi.signatures[0] : await sign(draft.multiHash),
+    }, multi));
     return r.party.partyId;
   }
   // Adopt only, never prompt -- for page reloads, where a wallet popup nobody asked
@@ -2318,6 +2327,10 @@ const WalletLink = (() => {
       if (!cust || cust.walletId !== base.id) throw new Error("wallet is not connected");
       return custodySubmit(cust.party, cust.sign, params, base.id);
     },
+    signRaw: async (s, b64) => {
+      if (!cust || cust.walletId !== base.id) throw new Error("wallet is not connected");
+      return cust.sign(b64);
+    },
   });
   // Every CIP-0103 route onto the one path. Loop, below, uses the same helpers.
   for (const id of ["canton", "console", "discovered", "partylayer"]) {
@@ -2428,6 +2441,10 @@ const WalletLink = (() => {
     submit: async (s, params) => {
       if (!loopParty) throw new Error("Loop is not connected");
       return custodySubmit(loopParty, loopSign, params, "loop");
+    },
+    signRaw: async (s, b64) => {
+      if (!loopParty) throw new Error("Loop is not connected");
+      return loopSign(b64);
     },
     // DEPOSIT, started here. Loop builds and submits the transfer on its OWN node,
     // from the party Loop hosts, with its own approval window -- a plain token
@@ -2564,6 +2581,14 @@ const WalletLink = (() => {
     canDeposit() {
       const a = pick();
       try { return !!(a && a.canDeposit && a.canDeposit()); } catch (e) { return false; }
+    },
+    // Sign raw bytes -- a topology hash the page has already checked.
+    async signRaw(b64) {
+      const s = await ensure();
+      const a = pick();
+      if (!a || !a.signRaw) throw new Error("this wallet cannot sign a hosting change here");
+      try { return await a.signRaw(s, b64); }
+      catch (e) { const d = new Error("Wallet closed \u2014 nothing was signed."); d.declined = true; throw d; }
     },
     async walletHoldings() {
       const a = pick();
@@ -6006,6 +6031,30 @@ function FaucetPage({ role, onBack, onExit, say }) {
 
 function SettingsDrawer({ open, onClose, role, say, onFaucet }) {
   const [m, setM] = useState(undefined);      // undefined = loading, null = none
+  // Backup node: the party hosted on a second node, so trading survives one going down.
+  const [hs, setHs] = useState(null);
+  const [hBusy, setHBusy] = useState(null);
+  const readHosts = useCallback(() => api("/api/ext/hosts?role=" + encodeURIComponent(role))
+    .then(setHs).catch(() => setHs(null)), [role]);
+  useEffect(() => { if (open) readHosts(); }, [open, readHosts]);
+  const addBackup = async () => {
+    if (hBusy) return;
+    setHBusy("Approve in your wallet\u2026");
+    try {
+      const p = await post("/api/ext/hosts/prepare", { party: role });
+      if (!p.nothingToDo) {
+        await window.UmbraTxVerify.verifyTopology(window.CantonTx, role, p.hashes, p.topologyTransactions, p.participants);
+        const signatures = [];
+        for (const h of p.hashes) signatures.push(await WalletLink.signRaw(h));
+        setHBusy("Copying your account to the backup node\u2026");
+        await post("/api/ext/hosts/confirm", { party: role, baseSerial: p.baseSerial,
+          topologyTransactions: p.topologyTransactions, hashes: p.hashes, signatures });
+      }
+      await readHosts();
+      say("Backup node added.");
+    } catch (e) { say((e && e.message) || "could not add a backup node", !(e && e.declined)); }
+    setHBusy(null);
+  };
   const [hours, setHours] = useState(24);
   const [busy, setBusy] = useState(false);
   const panel = React.useRef(null);
@@ -6092,6 +6141,15 @@ function SettingsDrawer({ open, onClose, role, say, onFaucet }) {
                 }, h === 1 ? "1 hour" : h + " hours"))),
               React.createElement("button", { className: "drw-b", disabled: busy || m === undefined, onClick: turnOn },
                 busy ? "Waiting for your wallet\u2026" : "Turn on \u2014 one signature"))),
+      hs && hs.enabled ? React.createElement("section", { className: "drw-s" },
+        React.createElement("div", { className: "drw-t" },
+          React.createElement("h3", null, "Backup node"),
+          React.createElement("span", { className: "drw-st" + (hs.backup ? " on" : "") }, hs.backup ? "On" : "Off")),
+        React.createElement("p", { className: "drw-d" },
+          hs.backup ? "Your account runs on " + hs.hosts.filter((h) => h.hosted).length + " nodes. One can go down and you keep trading."
+                    : "Your account is on one node. Add a second so trading continues if it goes down."),
+        hs.backup ? null : React.createElement("button", { className: "drw-b", disabled: !!hBusy, onClick: addBackup },
+          hBusy || "Add backup node \u2014 one approval")) : null,
       onFaucet ? React.createElement("section", { className: "drw-s" },
         React.createElement("div", { className: "drw-t" },
           React.createElement("h3", null, "Test CC"),

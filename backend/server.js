@@ -40,7 +40,8 @@ async function regFetch(registryUrl, url, opts) {
 }
 const { onboardExternalParty, prepareSignExecute, prepareSignExecuteMulti,
         prepareInteractive, executeSigned,
-        onboardWalletPrepare, onboardWalletConfirm, loadWallets } = require("./external");
+        onboardWalletPrepare, onboardWalletConfirm, loadWallets, grantRights } = require("./external");
+const hostsMod = require("./hosts");
 require("dotenv").config();
 
 const app = express();
@@ -2691,8 +2692,73 @@ app.post("/api/ext/onboard/confirm", async (req, res) => {
         "This wallet did not sign the raw bytes it was given, so Canton would reject its " +
         "signature. It cannot hold an Umbra party yet." });
     }
+    // Several topology hashes (a party hosted on several nodes): check every one.
+    if (Array.isArray(b.hashes) && Array.isArray(b.signatures) && b.publicKey) {
+      if (b.hashes.length !== b.signatures.length ||
+          !b.hashes.every((h, i) => auth.verifyRawEd25519(b.publicKey, h, b.signatures[i]))) {
+        return res.status(400).json({ error: "a topology signature does not verify against this wallet's key" });
+      }
+    }
     const rec = await onboardWalletConfirm(b);
     res.json({ ok: true, party: rec, privateKeyHeldByServer: false });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
+// ---- BACKUP HOSTS -----------------------------------------------------------------
+// A party on one node stops when that node does. These put the caller's own party on
+// every configured node (hosts.js): one approval in their wallet for the topology,
+// then the server copies the party's contracts to the new node. Only the party itself
+// can ask; the key never comes here.
+// The venue's own party signs settlement, so it needs a backup node as much as any
+// user does. Operator only; the venue key signs inside the signer daemon, which checks
+// the hosting change names only the nodes it allows.
+app.post("/api/admin/venue-hosts", async (req, res) => {
+  try {
+    if (!auth.isOperator(req)) return res.status(403).json({ error: "operator only" });
+    if (!hostsMod.enabled()) return res.status(409).json({ error: "no backup node configured (DECMAN_HOSTS)" });
+    const role = (req.body && req.body.role) || "requester";
+    const party = await partyIdFor(role);
+    const p = await hostsMod.prepareAddHosts(party);
+    if (p.nothingToDo) return res.json(Object.assign({ ok: true, nothingToDo: true }, await hostsMod.status(party)));
+    const signer = require("./signer").getSigner();
+    const rec = signer.recordFor(role);
+    const signatures = [];
+    for (let i = 0; i < p.hashes.length; i++) signatures.push(await signer.signTopology(role, p.hashes[i], p.topologyTransactions[i]));
+    const out = await hostsMod.confirmAddHosts({ partyId: party, baseSerial: p.baseSerial,
+      topologyTransactions: p.topologyTransactions, signatures, fingerprint: rec.fingerprint });
+    await grantRights(party);
+    res.json(Object.assign({ ok: true, party }, out));
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
+app.get("/api/ext/hosts", async (req, res) => {
+  try {
+    const party = await partyIdFor(readParty(req, req.query.role));
+    res.json(Object.assign({ ok: true }, await hostsMod.status(party)));
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+app.post("/api/ext/hosts/prepare", async (req, res) => {
+  try {
+    const party = await partyIdFor(readParty(req, (req.body || {}).party));
+    if (!hostsMod.enabled()) return res.status(409).json({ error: "this venue has no backup node configured" });
+    if (!loadWallets()[party]) return res.status(404).json({ error: "only a wallet party can add hosts for itself" });
+    res.json(Object.assign({ ok: true, participants: hostsMod.participantIds() }, await hostsMod.prepareAddHosts(party)));
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+app.post("/api/ext/hosts/confirm", async (req, res) => {
+  try {
+    const b = req.body || {};
+    const party = await partyIdFor(readParty(req, b.party));
+    const rec = loadWallets()[party];
+    if (!rec || !rec.publicKey) return res.status(404).json({ error: "only a wallet party can add hosts for itself" });
+    const hs = b.hashes || [], sigs = b.signatures || [];
+    if (!hs.length || hs.length !== sigs.length || !hs.every((h, i) => auth.verifyRawEd25519(rec.publicKey, h, sigs[i]))) {
+      return res.status(400).json({ error: "the signatures do not verify against this wallet's key" });
+    }
+    const out = await hostsMod.confirmAddHosts({ partyId: party, baseSerial: b.baseSerial,
+      topologyTransactions: b.topologyTransactions, signatures: sigs, fingerprint: rec.fingerprint });
+    await grantRights(party);
+    res.json(Object.assign({ ok: true }, out));
   } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 

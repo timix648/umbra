@@ -300,6 +300,9 @@ function remoteBackend() {
     commit: noKeys,
     // async: callers await it. `tx` is the prepared transaction the hash belongs to.
     sign: async (role, bytesB64, tx) => (await ask({ op: "sign", role, hash: bytesB64, tx })).signature,
+    // A hosting change (topology) for a venue role: the daemon checks it names only
+    // the nodes it allows before signing.
+    signTopology: async (role, bytesB64, topoTx) => (await ask({ op: "signTopology", role, hash: bytesB64, tx: topoTx })).signature,
   };
 }
 
@@ -309,6 +312,8 @@ function getSigner() {
   const make = { file: fileBackend, env: envBackend, kms: kmsBackend, plaintext: plaintextBackend, remote: remoteBackend }[MODE];
   if (!make) throw new Error(`unknown UMBRA_KEYSTORE '${MODE}' (file|env|kms|plaintext|remote)`);
   cached = make();
+  // Local backends hold the key in this process, so there is nothing further to check.
+  if (!cached.signTopology) cached.signTopology = async (role, bytesB64) => cached.sign(role, bytesB64);
   return cached;
 }
 

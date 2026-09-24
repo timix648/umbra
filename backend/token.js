@@ -213,8 +213,13 @@ async function probe(n) {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), 4000);
   try {
-    const res = await doFetch(n, "/v2/state/ledger-end", { signal: ctl.signal }, await tokenFor(n));
-    if (res.ok) markUp(n); else markDown(n, new Error("ledger-end " + res.status));
+    // Up means connected to a synchronizer, not merely answering: a participant cut off
+    // from the network still serves reads, but nothing submitted through it commits.
+    const res = await doFetch(n, "/v2/state/connected-synchronizers", { signal: ctl.signal }, await tokenFor(n));
+    if (!res.ok) { markDown(n, new Error("connected-synchronizers " + res.status)); return; }
+    const j = await res.json().catch(() => ({}));
+    if ((j.connectedSynchronizers || []).length) markUp(n);
+    else markDown(n, new Error("not connected to any synchronizer"));
   } catch (e) {
     markDown(n, e);
   } finally { clearTimeout(t); }
@@ -281,6 +286,19 @@ function doFetch(n, path, options, token) {
   });
 }
 
+// Run one call on EVERY node -- for things each participant keeps for itself, like a
+// ledger user's rights. Never throws; reports per node.
+async function ledgerFetchEach(pathFor, options) {
+  return Promise.all(NODES.map(async (n) => {
+    try {
+      const p = typeof pathFor === "function" ? pathFor(n) : pathFor;
+      const body = typeof options.body === "function" ? options.body(n) : options.body;
+      const res = await ledgerFetchOn(n, p, Object.assign({}, options, { body }));
+      return { node: n.name, ok: res.ok, status: res.status, text: res.ok ? "" : (await res.text()).slice(0, 200) };
+    } catch (e) { return { node: n.name, ok: false, status: 0, text: e.message }; }
+  }));
+}
+
 // The active node's token and ledger user -- both are per participant.
 async function getToken() { return tokenFor(pickActive()); }
 function userId() { return pickActive().userId; }
@@ -291,4 +309,4 @@ function nodesStatus() {
     since: new Date(n.since).toISOString(), lastError: n.lastError }));
 }
 
-module.exports = { getToken, ledgerFetch, userId, nodesStatus };
+module.exports = { getToken, ledgerFetch, ledgerFetchEach, userId, nodesStatus };
