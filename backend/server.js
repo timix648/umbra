@@ -3565,7 +3565,9 @@ function faucetUsage(party, ip) {
   const used = list.reduce((t, x) => t + Number(x.amount), 0);
   const ipUsed = ipList.reduce((t, x) => t + Number(x.amount), 0);
   const oldest = list.length ? Math.min(...list.map(x => x.at)) : null;
-  const last = Math.max(0, ...list.map(x => x.at), ...ipList.map(x => x.at));
+  // The cooldown is per party: counting the address too put a person on cooldown for
+  // someone else's tap on the same network. The address keeps its daily cap.
+  const last = Math.max(0, ...list.filter(x => x.amount > 0).map(x => x.at));
   const remaining = Math.max(0, Math.min(FAUCET_CAP - used, FAUCET_IP_CAP - ipUsed));
   return { used, remaining,
            resetAt: oldest ? new Date(oldest + FAUCET_WINDOW_MS).toISOString() : null, taps: list.length,

@@ -645,8 +645,7 @@
             type: "button", className: "u-btn u-btn-pri u-btn-blk", disabled: !valid || busy,
             onClick: function () { props.onDeposit && props.onDeposit({ asset: asset, amount: num }); }
           }, busy ? "Approve in your wallet…" : (over ? "Insufficient " + asset : "Deposit to Umbra")),
-          h("p", { className: "u-note", style: { margin: 0 } },
-            "Your wallet asks you to approve the transfer, then it arrives under Incoming for one more approval."),
+          null,
           h("span", { className: "u-lab", style: { marginTop: 6 } }, "Receiving from elsewhere"),
           umbraBox)
       : h("div", { className: "u-sect" },
@@ -654,7 +653,7 @@
           h("p", { className: "u-note", style: { margin: 0 } },
             "Send from your wallet",
             homeParty ? [" party ", h("span", { key: "hp", className: "u-party" }, abbrevParty(homeParty, 9, 4))] : "",
-            " to this one. It then shows under Incoming for you to accept."));
+            " to this one, then accept it under Incoming."));
 
     /* withdraw ----------------------------------------------------- */
     var withdrawSect = h("div", { className: "u-sect" },
@@ -689,7 +688,7 @@
             }, "Change")),
       !toSelf && normParty(dest) !== ""
         ? h("p", { className: "u-note u-note-w", style: { margin: 0 } },
-            "Leaves Umbra to a party you do not control. Settlement is final.")
+            "Sending to another party. This is final.")
         : null,
       over
         ? h("p", { className: "u-note u-note-w", style: { margin: 0 } },
