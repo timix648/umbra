@@ -758,6 +758,11 @@
   .rq-ds{margin-top:3px;font:500 9.5px/1 var(--sans);color:var(--dim)}
   .rq-bp{margin-top:3px;font:600 9px/1 var(--sans);letter-spacing:.08em;color:var(--accent)}
   .rq-px{font:650 17px/1 var(--sans);color:var(--text)}
+  .rq-hr{display:flex;align-items:center;gap:12px}
+  .rq-x{padding:5px 10px;border:1px solid var(--line2);border-radius:5px;background:transparent;color:var(--mute);font:600 11px var(--sans);letter-spacing:.04em;cursor:pointer}
+  .rq-x:hover{color:var(--text);border-color:var(--mute)}
+  .rq-x.arm{color:var(--red);border-color:var(--red);background:rgba(240,97,109,.08)}
+  .rq-x:disabled{opacity:.5;cursor:default}
   .rq-fill{font-size:13px;color:var(--text);white-space:nowrap}
   .rq-fbar{margin-top:6px;width:84px;height:4px;border-radius:2px;background:var(--bg3);overflow:hidden}
   .rq-fbar span{display:block;height:100%;background:var(--accent);border-radius:2px}
@@ -4626,6 +4631,8 @@ function RequesterDesk(P) {
   React.useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
   const [holdOn, setHoldOn] = React.useState(null);   // contractId being held
   const [holdPct, setHoldPct] = React.useState(0);
+  // Closing a request takes two clicks: the first arms the button for a few seconds.
+  const [closeArm, setCloseArm] = React.useState(null);
   const holdRef = React.useRef(null);
 
   const HOLD_MS = 1500;
@@ -4783,8 +4790,21 @@ function RequesterDesk(P) {
           React.createElement("div", { className: "mod-h" },
             React.createElement("h2", null,
               React.createElement("span", { className: "rq-live" }), "Request for quote \u00b7 live"),
-            React.createElement("span", { className: "rq-close" + (cd.warn ? " warn" : "") },
-              "Responses close ", React.createElement("b", { className: "m" }, cd.txt))),
+            React.createElement("div", { className: "rq-hr" },
+              React.createElement("span", { className: "rq-close" + (cd.warn ? " warn" : "") },
+                "Responses close ", React.createElement("b", { className: "m" }, cd.txt)),
+              // End the request early: after a partial fill that kept the rest open, or
+              // when the quotes are not good enough. Dealers' locked funds go home with it.
+              P.onCloseRfq ? React.createElement("button", {
+                className: "rq-x" + (closeArm === rfq.contractId ? " arm" : ""), disabled: awarding,
+                title: "End this request. Every dealer's locked funds go back to them.",
+                onClick: () => {
+                  if (closeArm === rfq.contractId) { setCloseArm(null); P.onCloseRfq(rfq.contractId); return; }
+                  const cid = rfq.contractId;
+                  setCloseArm(cid);
+                  setTimeout(() => setCloseArm(c => c === cid ? null : c), 4000);
+                }
+              }, closeArm === rfq.contractId ? "Confirm close" : "Close request") : null)),
           React.createElement("div", { className: "mod-b" },
             React.createElement("div", { className: "rq-legs" },
               React.createElement("div", { className: "rq-leg" },
@@ -7017,6 +7037,24 @@ function PartyPortal({ role, wallet, onExit }) {
     } finally { setAwarding(false); setAwardStep(null); }
   }
 
+  // End a live request: one signature archives it and sends every firm quote's locked
+  // funds back to its dealer (SwapRfq.CancelFirm). The requester's own side was never
+  // locked -- that only happens at award.
+  async function closeRfq(rfqCid) {
+    if (awarding) return;
+    setAwarding(true);
+    try {
+      setAwardStep("Approve once in your wallet: close this request…");
+      const a = await post("/api/swap/rfqs/" + rfqCid + "/cancel-firm", { requester: role });
+      await signBuilt(a);
+      say("Request closed." + (a && a.released ? " " + a.released + (a.released === 1 ? " dealer's" : " dealers'") +
+          " locked funds go back to them." : ""), false, 8000);
+      load();
+    } catch (e) {
+      say((e && e.message) || "the request was not closed", !(e && e.declined), 9000);
+    } finally { setAwarding(false); setAwardStep(null); }
+  }
+
   async function awardQuote(q) {
     if (awarding) return;
     if (q.kind === "firm") {
@@ -7222,7 +7260,7 @@ function PartyPortal({ role, wallet, onExit }) {
     React.createElement(RequesterDesk, {
       meta, signed, onExit, note, deskSwitch, role,
       rfqs, quotes: myQuotes, holdings, rate, series, usd, rateNote, onPair, history, composedPair,
-      onCreate: createRfq, onAward: awardQuote, awarding, awardStep,
+      onCreate: createRfq, onAward: awardQuote, onCloseRfq: wallet ? closeRfq : null, awarding, awardStep,
       composing, setComposing, ratePair, selRfqCid, setSelRfqCid,
       openTrade, settling, settleStep, onSettle: settleAsDealer, readFailed, fee,
       wallet, say, listed, onToggleListing: toggleListing,
