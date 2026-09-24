@@ -1,0 +1,9 @@
+{
+  "name": "umbra-decman-demo",
+  "private": true,
+  "description": "Reproduce Umbra's two-node hosting and failover on the DecMan LocalNet sandbox",
+  "dependencies": {
+    "@grpc/grpc-js": "^1.14.0",
+    "@grpc/proto-loader": "^0.7.15"
+  }
+}

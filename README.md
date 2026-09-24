@@ -345,6 +345,14 @@ reads the record back off Canton.
 
 ---
 
+## Staying up when a node goes down
+
+Umbra hosts the venue's party and its users' parties on more than one node through
+BitSafe's Decentralization Manager, and its server fails over between nodes. How it works
+and how to reproduce it: [docs/DECENTRALIZATION.md](docs/DECENTRALIZATION.md). What is
+proven on DevNet, what ran on one machine, and what is still to do:
+[docs/HONESTY.md](docs/HONESTY.md).
+
 ## Running locally
 
 **Prerequisites:** Node.js 20+, Daml SDK 3.4.11, credentials for a Canton DevNet validator.
