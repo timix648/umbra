@@ -94,6 +94,8 @@ app.use((req, res, next) => {
 const noStore = (res) => res.set("Cache-Control", "no-store, must-revalidate");
 app.get("/", (req, res) => { noStore(res); res.sendFile(path.join(__dirname, "public", "landing.html")); });
 app.get("/app", (req, res) => { noStore(res); res.sendFile(path.join(__dirname, "public", "index.html")); });
+// The DevNet faucet is a page of the app: it needs the same signed-in wallet.
+app.get("/faucet", (req, res) => { noStore(res); res.sendFile(path.join(__dirname, "public", "index.html")); });
 app.use(express.static(path.join(__dirname, "public"), { index: false }));
 
 // --- WHO IS ASKING -----------------------------------------------------------
@@ -1901,7 +1903,9 @@ app.post("/api/swap/rfq", async (req, res) => {
     // With a mandate the venue opens the request itself -- MandateOpenRfq is
     // `controller operator` and creates the RFQ plus every invitation in ONE
     // transaction, so the requester signs nothing at all here, whatever N is.
-    const mandate = await findMandate(requester);
+    // Retired with firm quotes: a mandate now only saved the one signature that opens a
+    // request, and the desk's own signature also sends dead quote locks home.
+    const mandate = /^(1|true|yes)$/i.test(String(process.env.UMBRA_MANDATES || "")) ? await findMandate(requester) : null;
     if (mandate) {
       assertCallerIn([requester], "opening a request under this mandate");
       const before = await idSetSwap(requester, "UmbraSwap:SwapRfq");
@@ -2281,6 +2285,10 @@ async function findMandate(party) {
 // Build (or submit) the one signature that grants the mandate.
 app.post("/api/mandate", async (req, res) => {
   try {
+    if (!/^(1|true|yes)$/i.test(String(process.env.UMBRA_MANDATES || ""))) {
+      return res.status(410).json({ error: "Fewer signatures is no longer offered: with firm quotes a trade already " +
+        "takes one approval from each side, and locking funds always needs your own." });
+    }
     const party = await partyIdFor(req.body.party || req.body.role || "requester");
     const operator = await partyIdFor("requester");
     const hours = Number(req.body.hours || 24);
@@ -2746,6 +2754,10 @@ app.post("/api/ext/prepare", async (req, res) => {
       ? b.party : await partyIdFor(b.role || "requester");
     if (!Array.isArray(b.commands) || !b.commands.length) {
       return res.status(400).json({ error: "need commands[] (JSON Ledger API command objects)" });
+    }
+    if (!auth.isOperator(req)) {
+      const noTap = takeFaucetTicket(party, b.commands);
+      if (noTap) return res.status(403).json({ error: noTap });
     }
     const out = await prepareInteractive(party, b.commands, b.tag || "wallet",
       b.disclosedContracts || []);
@@ -3516,6 +3528,207 @@ app.post("/api/swap/deals/kick", async (req, res) => {
     relockWorker().then(() => dealWorker()).catch(() => {});
   }
   res.json({ ok: true });
+});
+
+// ---- DEVNET CC FAUCET ---------------------------------------------------------
+//
+// Canton Coin on DevNet has a tap (AmuletRules_DevNet_Tap): any party can mint test
+// CC to ITSELF. This builds that tap for the signed-in party, which approves it once
+// in its own wallet -- the coins are minted straight into its Umbra party. The venue
+// neither holds nor sends anything.
+//
+// The rules contract says whether this network is DevNet; anywhere else the choice
+// does not exist and the faucet reports itself off. The per-party cap is Umbra's own
+// courtesy limit (the tap itself has none), counted over a rolling 24 hours.
+const FAUCET_CAP = Number(process.env.UMBRA_FAUCET_CC || 5000);
+const FAUCET_WINDOW_MS = 24 * 3600 * 1000;
+// *.local.txt: the deploy carries these over to the next build (and never ships them),
+// so the daily limits survive a redeploy.
+const FAUCET_FILE = process.env.UMBRA_FAUCET_FILE || path.join(process.cwd(), "faucet_usage.local.txt");
+let faucetLog = {};
+try { faucetLog = JSON.parse(require("fs").readFileSync(FAUCET_FILE, "utf8")) || {}; } catch (e) { faucetLog = {}; }
+function faucetSave() {
+  try { require("fs").writeFileSync(FAUCET_FILE, JSON.stringify(faucetLog)); }
+  catch (e) { console.error("[faucet] could not save usage:", e.message); }
+}
+// Abuse limits. Every tap is a transaction OUR node submits and pays traffic for, and
+// a party costs nothing to create -- so the cap alone would let a script farm it with
+// fresh parties. Hence a cooldown per party, a daily cap per network address, and a
+// proof-of-work captcha on each tap.
+const FAUCET_COOLDOWN_MS = Number(process.env.UMBRA_FAUCET_COOLDOWN_MIN || 10) * 60000;
+const FAUCET_IP_CAP = Number(process.env.UMBRA_FAUCET_IP_CC || 10000);
+function faucetUsage(party, ip) {
+  const now = Date.now();
+  const keep = k => { faucetLog[k] = (faucetLog[k] || []).filter(x => now - x.at < FAUCET_WINDOW_MS); return faucetLog[k]; };
+  const list = keep(party);
+  const ipList = ip ? keep("ip:" + ip) : [];
+  const used = list.reduce((t, x) => t + Number(x.amount), 0);
+  const ipUsed = ipList.reduce((t, x) => t + Number(x.amount), 0);
+  const oldest = list.length ? Math.min(...list.map(x => x.at)) : null;
+  const last = Math.max(0, ...list.map(x => x.at), ...ipList.map(x => x.at));
+  const remaining = Math.max(0, Math.min(FAUCET_CAP - used, FAUCET_IP_CAP - ipUsed));
+  return { used, remaining,
+           resetAt: oldest ? new Date(oldest + FAUCET_WINDOW_MS).toISOString() : null, taps: list.length,
+           nextTapAt: last && now - last < FAUCET_COOLDOWN_MS ? new Date(last + FAUCET_COOLDOWN_MS).toISOString() : null,
+           cooldownMin: FAUCET_COOLDOWN_MS / 60000 };
+}
+// The caller's address. Behind the tunnel every request arrives from loopback, and
+// the public proxy (Caddy) sets X-Forwarded-For to the real client.
+function clientIp(req) {
+  const ra = String((req.socket && req.socket.remoteAddress) || "");
+  const xf = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return (xf && /^(::ffff:)?127\.|^::1$/.test(ra)) ? xf : ra;
+}
+
+// CAPTCHA: proof of work, self-hosted (no third party, nothing to sign up for). The
+// server picks a secret number n and hands out sha256(salt + n); the browser finds n
+// by brute force, a few seconds of work each tap, which is what makes farming costly.
+// The salt binds the challenge to the party and an expiry, the HMAC stops forgery,
+// and each solved challenge works once.
+const crypto_ = require("crypto");
+const FAUCET_POW_KEY = process.env.UMBRA_FAUCET_POW_KEY || crypto_.randomBytes(32).toString("hex");
+const FAUCET_POW_MAX = Number(process.env.UMBRA_FAUCET_POW_MAX || 250000);
+const powSeen = new Map();
+const sha256hex = t => crypto_.createHash("sha256").update(t).digest("hex");
+const powSign = t => crypto_.createHmac("sha256", FAUCET_POW_KEY).update(t).digest("hex");
+function powChallenge(party) {
+  const expires = Math.floor(Date.now() / 1000) + 300;
+  const salt = crypto_.randomBytes(12).toString("hex") + "?expires=" + expires + "&p=" + sha256hex(party).slice(0, 16);
+  const challenge = sha256hex(salt + crypto_.randomInt(FAUCET_POW_MAX));
+  return { algorithm: "SHA-256", salt, challenge, maxnumber: FAUCET_POW_MAX, signature: powSign(challenge) };
+}
+function powCheck(party, pow) {
+  if (!pow || !pow.salt || pow.number == null || !pow.challenge || !pow.signature) return "complete the check first";
+  const m = /\?expires=(\d+)&p=([0-9a-f]{16})$/.exec(String(pow.salt));
+  if (!m) return "that check is not ours";
+  if (Number(m[1]) * 1000 < Date.now()) return "that check expired -- run it again";
+  if (m[2] !== sha256hex(party).slice(0, 16)) return "that check was for another party";
+  if (powSign(String(pow.challenge)) !== String(pow.signature)) return "that check is not ours";
+  if (sha256hex(String(pow.salt) + String(pow.number)) !== String(pow.challenge)) return "that check was not solved";
+  if (powSeen.has(pow.salt)) return "that check was already used -- run it again";
+  powSeen.set(pow.salt, Number(m[1]) * 1000);
+  for (const [k, v] of powSeen) if (v < Date.now()) powSeen.delete(k);
+  return null;
+}
+
+// A tap is only accepted by /api/ext/prepare against a ticket issued here: the
+// ledger's tap has no limit of its own, so without this anyone could skip the page
+// and mint any amount through our node.
+const faucetTickets = new Map();   // tapId -> { party, amount, expires, used, before }
+function takeFaucetTicket(party, commands) {
+  for (const c of commands || []) {
+    const ex = c && c.ExerciseCommand;
+    if (!ex || ex.choice !== "AmuletRules_DevNet_Tap") continue;
+    const a = ex.choiceArgument || {};
+    const hit = [...faucetTickets.entries()].find(([, t]) => !t.used && t.expires > Date.now() &&
+      t.party === party && a.receiver === party && Math.abs(Number(a.amount) - t.amount) < 1e-9);
+    if (!hit) return "DevNet taps go through the faucet page";
+    hit[1].used = true;
+  }
+  return null;
+}
+async function ccTotal(party) {
+  return (await queryRealHoldings(party)).filter(h => h.id === "Amulet").reduce((t, h) => t + Number(h.amount), 0);
+}
+let devnetCache = { at: 0, v: null };
+async function devnetTapContracts() {
+  if (devnetCache.v && Date.now() - devnetCache.at < 20000) return devnetCache.v;
+  const base = (REAL_REGISTRY.DSO || "").replace(/\/$/, "");
+  const get = async (rest) => {
+    const r = await regFetch(base, base + "/" + rest, { headers: { accept: "application/json" } });
+    if (!r.ok) throw new Error("scan " + r.status + ": " + (await r.text()).slice(0, 200));
+    return r.json();
+  };
+  const [ar, rounds] = await Promise.all([get("amulet-rules"), get("open-and-issuing-mining-rounds")]);
+  const rules = ar.amulet_rules;
+  const now = Date.now();
+  const open = (rounds.open_mining_rounds || [])
+    .filter(x => Date.parse(x.contract.payload.opensAt) <= now)
+    .sort((a, b) => Date.parse(b.contract.payload.opensAt) - Date.parse(a.contract.payload.opensAt))[0];
+  const v = { rules, open, devnet: !!(rules && rules.contract.payload.isDevNet) };
+  devnetCache = { at: now, v };
+  return v;
+}
+
+app.get("/api/faucet", async (req, res) => {
+  try {
+    const party = await partyIdFor(readParty(req, req.query.role));
+    let devnet = false;
+    try { devnet = (await devnetTapContracts()).devnet; } catch (e) { /* unreachable scan: off */ }
+    res.json(Object.assign({ ok: true, devnet, cap: FAUCET_CAP, symbol: "CC" }, faucetUsage(party, clientIp(req))));
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
+app.get("/api/faucet/challenge", async (req, res) => {
+  try {
+    const party = await partyIdFor(readParty(req, req.query.role));
+    res.json(Object.assign({ ok: true }, powChallenge(party)));
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
+// Build a tap for the caller's own party. The amount counts against the cap as soon
+// as it is built; /api/faucet/cancel gives it back if the wallet says no.
+app.post("/api/faucet/tap", async (req, res) => {
+  try {
+    const b = req.body || {};
+    const party = await partyIdFor(readParty(req, b.party));
+    const t = await devnetTapContracts();
+    if (!t.devnet) return res.status(403).json({ error: "the faucet only exists on DevNet" });
+    if (!t.open) return res.status(503).json({ error: "no mining round is open right now -- try again in a minute" });
+    const amount = Number(b.amount);
+    if (!(amount > 0)) return res.status(400).json({ error: "enter an amount above 0" });
+    const ip = clientIp(req);
+    const u = faucetUsage(party, ip);
+    if (u.nextTapAt) {
+      return res.status(429).json({ error: "One tap every " + u.cooldownMin + " minutes. The next one opens at " +
+        new Date(u.nextTapAt).toISOString().slice(11, 16) + " UTC.", nextTapAt: u.nextTapAt });
+    }
+    const bad = powCheck(party, b.pow);
+    if (bad) return res.status(400).json({ error: bad, captcha: true });
+    if (amount > u.remaining + 1e-9) {
+      return res.status(429).json({ error: u.remaining > 0
+        ? "You can take " + u.remaining + " CC more today."
+        : "You have taken today's " + FAUCET_CAP + " CC. More opens up " +
+          (u.resetAt ? "at " + new Date(u.resetAt).toISOString().slice(11, 16) + " UTC." : "tomorrow.") });
+    }
+    const id = "tap-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7);
+    const at = Date.now();
+    faucetLog[party] = (faucetLog[party] || []).concat([{ id, amount, at }]);
+    faucetLog["ip:" + ip] = (faucetLog["ip:" + ip] || []).concat([{ id, amount, at }]);
+    faucetSave();
+    faucetTickets.set(id, { party, amount: Number(dec10(amount)), expires: at + 5 * 60000, used: false,
+      before: await ccTotal(party).catch(() => null) });
+    for (const [k, t] of faucetTickets) if (t.expires < at - 3600000) faucetTickets.delete(k);
+    const sync = t.rules.domain_id || "";
+    const disc = [t.rules.contract, t.open.contract].map(c => ({ templateId: c.template_id,
+      contractId: c.contract_id, createdEventBlob: c.created_event_blob, synchronizerId: sync }));
+    res.json({ ok: true, build: true, party, tapId: id, amount: dec10(amount),
+      commands: [{ ExerciseCommand: { templateId: t.rules.contract.template_id,
+        contractId: t.rules.contract.contract_id, choice: "AmuletRules_DevNet_Tap",
+        choiceArgument: { receiver: party, amount: dec10(amount), openRound: t.open.contract.contract_id } } }],
+      disclosedContracts: disc,
+      note: "one approval mints the CC straight into your Umbra party" });
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+});
+
+app.post("/api/faucet/cancel", async (req, res) => {
+  try {
+    const b = req.body || {};
+    const party = await partyIdFor(readParty(req, b.party));
+    // Give the amount back only if nothing was minted: the wallet said no, or the
+    // submission failed. The cooldown stays either way.
+    const t = faucetTickets.get(b.tapId);
+    if (t && t.party === party && t.before != null) {
+      const now = await ccTotal(party).catch(() => null);
+      if (now != null && now < t.before + t.amount - 1e-6) {
+        t.used = true;
+        const give = k => { faucetLog[k] = (faucetLog[k] || []).map(x => x.id === b.tapId ? Object.assign({}, x, { amount: 0 }) : x); };
+        give(party); give("ip:" + clientIp(req));
+        faucetSave();
+      }
+    }
+    res.json(Object.assign({ ok: true }, faucetUsage(party, clientIp(req))));
+  } catch (e) { res.status(e.status || 500).json({ error: e.message }); }
 });
 
 app.post("/api/swap/pending/:cid/accept-real", async (req, res) => {

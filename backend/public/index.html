@@ -755,6 +755,78 @@
   .hold-fill{position:absolute;left:0;top:0;bottom:0;width:0;
     background:linear-gradient(90deg,#A883FF,#8B5CF6);transition:width .05s linear;z-index:0}
   .hold-t{position:relative;z-index:1}
+
+  /* ---------- DevNet faucet ---------- */
+  .fct{max-width:600px;margin:0 auto;padding:44px 20px 64px;display:flex;flex-direction:column;gap:18px}
+  .fct-eb{display:inline-flex;align-items:center;gap:8px;font:600 10.5px/1 var(--sans);letter-spacing:.09em;
+    text-transform:uppercase;color:var(--accent2)}
+  .fct-eb i{width:7px;height:7px;border-radius:50%;background:var(--green,#3FB68B);box-shadow:0 0 0 3px rgba(63,182,139,.18)}
+  .fct h1{margin:0;font:700 30px/1.15 var(--sans);letter-spacing:-.01em;color:var(--text)}
+  .fct-sub{margin:0;font-size:14.5px;line-height:1.6;color:var(--mute);max-width:52ch}
+  .fct-card{border:1px solid var(--line);border-radius:10px;background:var(--bg2);padding:22px;display:flex;
+    flex-direction:column;gap:16px}
+  .fct-row{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+  .fct-lb{font:600 10.5px/1 var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+  .fct-bal{font:600 13px/1 var(--sans);color:var(--mute)}
+  .fct-bal b{color:var(--text);font-variant-numeric:tabular-nums}
+  .fct-in{display:flex;align-items:center;gap:10px;border:1px solid var(--line2);border-radius:8px;
+    background:var(--bg);padding:6px 8px 6px 16px;transition:border-color .15s,box-shadow .15s}
+  .fct-in:focus-within{border-color:var(--accentline);box-shadow:0 0 0 3px var(--accentbg)}
+  .fct-in input{flex:1;min-width:0;border:0;outline:0;background:transparent;color:var(--text);
+    font:600 30px/1.2 var(--sans);font-variant-numeric:tabular-nums;padding:8px 0}
+  .fct-cc{display:flex;align-items:center;gap:7px;font:600 13px/1 var(--sans);color:var(--mute);padding-right:6px}
+  .fct-chips{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+  .fct-chips button{font:600 12px/1 var(--sans);padding:10px 0;border-radius:6px;border:1px solid var(--line2);
+    background:transparent;color:var(--mute);cursor:pointer;transition:all .15s;font-variant-numeric:tabular-nums}
+  .fct-chips button:hover:not(:disabled){border-color:var(--accentline);color:var(--text)}
+  .fct-chips button[data-on="1"]{border-color:var(--accent);background:var(--accentbg);color:var(--accent2)}
+  .fct-chips button:disabled{opacity:.4;cursor:not-allowed}
+  .fct-meter{display:flex;flex-direction:column;gap:8px}
+  .fct-bar{height:6px;border-radius:99px;background:var(--bg3);overflow:hidden}
+  .fct-bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--accent),var(--accent2));
+    transition:width .5s cubic-bezier(.2,.7,.2,1)}
+  .fct-mt{display:flex;justify-content:space-between;font-size:12px;color:var(--dim);font-variant-numeric:tabular-nums}
+  .fct-go{font:700 14px/1 var(--sans);padding:16px;border-radius:8px;border:0;cursor:pointer;color:#0B0E13;
+    background:var(--accent);box-shadow:0 8px 22px rgba(157,116,255,.28);transition:background .15s,transform .08s}
+  .fct-go:hover:not(:disabled){background:#B08FFF}
+  .fct-go:active:not(:disabled){transform:translateY(1px)}
+  .fct-go:disabled{opacity:.45;cursor:not-allowed;box-shadow:none}
+  .fct-msg{font-size:13px;line-height:1.5;padding:11px 14px;border-radius:7px;border:1px solid var(--line2);color:var(--mute)}
+  .fct-msg.ok{border-color:rgba(63,182,139,.45);background:rgba(63,182,139,.08);color:var(--text)}
+  .fct-msg.bad{border-color:rgba(207,106,98,.45);background:rgba(207,106,98,.08);color:var(--text)}
+  .fct-msg a{color:var(--accent2);font-weight:600;cursor:pointer}
+  .fct-how{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .fct-how div{border:1px solid var(--line);border-radius:8px;padding:14px;display:flex;flex-direction:column;gap:6px}
+  .fct-how b{font:700 11px/1 var(--sans);color:var(--accent2);font-variant-numeric:tabular-nums}
+  .fct-how span{font-size:12.5px;line-height:1.5;color:var(--mute)}
+  .fct-fine{margin:0;font-size:12px;line-height:1.55;color:var(--dim)}
+  .fct-hc{display:flex;align-items:center;gap:12px;border:1px solid var(--line2);border-radius:8px;
+    padding:12px 14px;background:var(--bg);cursor:pointer;text-align:left;width:100%;color:var(--text);
+    font:500 13.5px/1.3 var(--sans);transition:border-color .15s}
+  .fct-hc:hover:not(:disabled){border-color:var(--accentline)}
+  .fct-hc:disabled{cursor:default}
+  .fct-hc-box{width:22px;height:22px;flex:0 0 auto;border-radius:5px;border:1.5px solid var(--line2);
+    display:grid;place-items:center;color:#0B0E13;transition:all .2s}
+  .fct-hc[data-state="done"] .fct-hc-box{background:var(--green,#3FB68B);border-color:var(--green,#3FB68B)}
+  .fct-hc[data-state="work"] .fct-hc-box{border-color:var(--accent);border-top-color:transparent;border-radius:50%;
+    animation:fctSpin .8s linear infinite}
+  @keyframes fctSpin{to{transform:rotate(360deg)}}
+  .fct-hc-t{flex:1;display:flex;flex-direction:column;gap:3px}
+  .fct-hc-t small{font-size:11.5px;color:var(--dim)}
+  .fct-hc-pb{height:3px;border-radius:99px;background:var(--bg3);overflow:hidden;margin-top:2px}
+  .fct-hc-pb i{display:block;height:100%;background:var(--accent);transition:width .2s}
+  .fct-hc-tag{font:600 10px/1 var(--sans);letter-spacing:.07em;text-transform:uppercase;color:var(--dim)}
+  @media(prefers-reduced-motion:reduce){ .fct-hc[data-state="work"] .fct-hc-box{animation:none} }
+  .fct-back{align-self:flex-start;font:600 12.5px/1 var(--sans);color:var(--mute);background:none;border:0;
+    cursor:pointer;padding:4px 0}
+  .fct-back:hover{color:var(--text)}
+  @media(max-width:560px){
+    .fct{padding:28px 16px 48px}
+    .fct h1{font-size:25px}
+    .fct-in input{font-size:26px}
+    .fct-how{grid-template-columns:1fr}
+  }
+  @media(prefers-reduced-motion:reduce){ .fct-bar i{transition:none} }
   .rq-step{padding:10px 14px;border-top:1px solid var(--line);font-size:12px;line-height:1.45;color:var(--accent2)}
   .btn.hold:active{transform:none}
 
@@ -5728,7 +5800,219 @@ function Funding({ party, say, onChanged }) {
 // each invitation is its own signature), accepts the quote the user picks and proposes
 // or accepts settlement. It can never move funds: locking a coin always needs the
 // wallet's own key.
-function SettingsDrawer({ open, onClose, role, say }) {
+// ---- DEVNET FAUCET ----
+//
+// Test Canton Coin, minted straight into the signed-in party by the network's own
+// DevNet tap: one approval in the wallet, no transfer to accept, nothing held by
+// Umbra. The server caps it per party per day and turns it off off DevNet.
+// "Verify you're human": a proof-of-work puzzle solved in a background worker. The
+// server hides a number n and publishes sha256(salt + n); finding n takes the browser
+// a few seconds, which costs a person nothing and a script farming the faucet a lot.
+const POW_WORKER = `
+self.onmessage = async (e) => {
+  const { salt, challenge, maxnumber } = e.data;
+  const enc = new TextEncoder();
+  const hex = b => Array.from(new Uint8Array(b)).map(x => x.toString(16).padStart(2, "0")).join("");
+  const step = 2000;
+  for (let base = 0; base <= maxnumber; base += step) {
+    const hs = [];
+    for (let n = base; n < Math.min(base + step, maxnumber + 1); n++) hs.push(crypto.subtle.digest("SHA-256", enc.encode(salt + n)));
+    const out = await Promise.all(hs);
+    for (let i = 0; i < out.length; i++) if (hex(out[i]) === challenge) { self.postMessage({ done: true, number: base + i }); return; }
+    self.postMessage({ progress: Math.min(1, (base + step) / maxnumber) });
+  }
+  self.postMessage({ failed: true });
+};`;
+function HumanCheck({ role, pow, setPow, disabled }) {
+  const [state, setState] = useState("idle");   // idle | work | done | failed
+  const [prog, setProg] = useState(0);
+  const wk = React.useRef(null);
+  useEffect(() => { if (!pow && state === "done") setState("idle"); }, [pow]);
+  useEffect(() => () => { if (wk.current) wk.current.terminate(); }, []);
+  const run = async () => {
+    if (state === "work" || state === "done" || disabled) return;
+    setState("work"); setProg(0);
+    try {
+      const c = await api("/api/faucet/challenge?role=" + encodeURIComponent(role));
+      const url = URL.createObjectURL(new Blob([POW_WORKER], { type: "text/javascript" }));
+      const w = new Worker(url); wk.current = w;
+      w.onmessage = (e) => {
+        const d = e.data || {};
+        if (d.progress != null) setProg(d.progress);
+        if (d.done) {
+          setPow({ salt: c.salt, challenge: c.challenge, signature: c.signature, number: d.number });
+          setState("done"); w.terminate(); URL.revokeObjectURL(url);
+        }
+        if (d.failed) { setState("failed"); w.terminate(); URL.revokeObjectURL(url); }
+      };
+      w.postMessage({ salt: c.salt, challenge: c.challenge, maxnumber: c.maxnumber });
+    } catch (e) { setState("failed"); }
+  };
+  return React.createElement("button", { type: "button", className: "fct-hc", "data-state": state,
+      onClick: run, disabled: disabled || state === "work" || state === "done", "aria-live": "polite" },
+    React.createElement("span", { className: "fct-hc-box", "aria-hidden": "true" },
+      state === "done" ? React.createElement("svg", { width: 13, height: 13, viewBox: "0 0 24 24", fill: "none",
+        stroke: "currentColor", strokeWidth: 3.2, strokeLinecap: "round", strokeLinejoin: "round" },
+        React.createElement("path", { d: "M5 12.5l4.5 4.5L19 7.5" })) : null),
+    React.createElement("span", { className: "fct-hc-t" },
+      state === "done" ? "Verified — you can tap"
+        : state === "work" ? "Checking you're human…"
+        : state === "failed" ? "The check did not finish — click to try again"
+        : "Verify you're human",
+      state === "work"
+        ? React.createElement("span", { className: "fct-hc-pb" }, React.createElement("i", { style: { width: Math.round(prog * 100) + "%" } }))
+        : React.createElement("small", null, state === "done" ? "Good for one tap, for 5 minutes." : "Takes a few seconds. No puzzles, no tracking.")),
+    React.createElement("span", { className: "fct-hc-tag" }, "Proof of work"));
+}
+
+function FaucetPage({ role, onBack, onExit, say }) {
+  const [theme, flipTheme] = useTheme();
+  const [info, setInfo] = useState(null);       // { devnet, cap, used, remaining, resetAt }
+  const [bal, setBal] = useState(null);
+  const [amt, setAmt] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);         // { kind, text }
+  const [pow, setPow] = useState(null);         // a solved check, good for one tap
+  const [tick, setTick] = useState(Date.now());
+  useEffect(() => { const t = setInterval(() => setTick(Date.now()), 1000); return () => clearInterval(t); }, []);
+  const enc = encodeURIComponent;
+  const ccOf = (h) => ((h && h.raw) || []).filter(x => x.id === "Amulet" && !x.lock)
+    .reduce((t, x) => t + Number(x.amount), 0);
+  const refresh = useCallback(async () => {
+    const [f, h] = await Promise.all([
+      api("/api/faucet?role=" + enc(role)).catch(e => ({ error: e.message })),
+      api("/api/real/holdings?role=" + enc(role)).catch(() => null)]);
+    setInfo(f);
+    if (h) setBal(ccOf(h));
+    return f;
+  }, [role]);
+  useEffect(() => { refresh().then(f => { if (f && f.remaining) setAmt(String(f.remaining)); }); }, [refresh]);
+
+  const cap = (info && info.cap) || 5000;
+  const remaining = info && info.remaining != null ? info.remaining : cap;
+  const used = cap - remaining;
+  const n = Number(amt);
+  const valid = n > 0 && n <= remaining + 1e-9;
+  const off = info && info.devnet === false;
+  const waitMs = info && info.nextTapAt ? Date.parse(info.nextTapAt) - tick : 0;
+  const cooling = waitMs > 0;
+  const mmss = ms => { const t = Math.ceil(ms / 1000); return Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0"); };
+  useEffect(() => { if (info && info.nextTapAt && !cooling) refresh(); }, [cooling]);
+  const resetTxt = info && info.resetAt
+    ? new Date(info.resetAt).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" }) : null;
+  const fmtCC = v => Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 });
+
+  const tap = async () => {
+    if (busy || !valid) return;
+    setBusy(true); setMsg({ kind: "", text: "Approve the tap in your wallet…" });
+    let b = null;
+    try {
+      const proof = pow; setPow(null);           // each check is good for one tap
+      b = await post("/api/faucet/tap", { party: role, amount: n, pow: proof });
+      const before = bal || 0;
+      await WalletLink.submit({ commands: b.commands, disclosedContracts: b.disclosedContracts });
+      setMsg({ kind: "", text: "Minting on the ledger…" });
+      let now = before;
+      for (let i = 0; i < 12; i++) {
+        const h = await api("/api/real/holdings?role=" + enc(role)).catch(() => null);
+        now = h ? ccOf(h) : now;
+        if (now >= before + n - 1e-6) break;
+        await new Promise(r => setTimeout(r, 1500));
+      }
+      setBal(now);
+      const f = await refresh();
+      setAmt(f && f.remaining ? String(f.remaining) : "");
+      setMsg({ kind: "ok", text: fmtCC(n) + " CC is in your Umbra party — ready to trade." });
+    } catch (e) {
+      if (b && b.tapId) await post("/api/faucet/cancel", { party: role, tapId: b.tapId }).catch(() => {});
+      await refresh();
+      setMsg({ kind: e && e.declined ? "" : "bad",
+               text: e && e.declined ? "Nothing was minted — the wallet window was closed. Tap again when you're ready."
+                                     : ((e && e.message) || "the tap did not go through") });
+    }
+    setBusy(false);
+  };
+
+  const chips = [500, 1000, 2500].map(v => ({ v, label: fmtCC(v) })).concat([{ v: remaining, label: "Max" }]);
+  const pct = cap ? Math.min(100, (used / cap) * 100) : 0;
+
+  return React.createElement("div", { className: "prt" },
+    React.createElement("header", { className: "prt-bar" },
+      React.createElement("div", { className: "prt-id" },
+        React.createElement("a", { className: "dsk-brand", href: "/", title: "Back to umbra" },
+          React.createElement(Umbrella, null),
+          React.createElement("b", null, "UMBRA"),
+          React.createElement("span", { className: "cx" }, "Test CC faucet · DevNet"))),
+      React.createElement("div", { className: "prt-right" },
+        React.createElement("button", { className: "btn sm", onClick: onBack }, "Back to trading"),
+        React.createElement(ThemeBtn, { theme, flip: flipTheme }),
+        React.createElement("button", { className: "prt-out", onClick: onExit }, "Sign out"))),
+
+    React.createElement("main", { className: "fct" },
+      React.createElement("span", { className: "fct-eb" }, React.createElement("i", null), "DevNet · Canton Coin"),
+      React.createElement("h1", null, "Get test CC"),
+      React.createElement("p", { className: "fct-sub" },
+        "Mint test Canton Coin straight into your Umbra party to try a trade end to end. Up to ",
+        React.createElement("b", null, fmtCC(cap) + " CC"), " a day, one approval, nothing to accept after."),
+
+      off
+        ? React.createElement("div", { className: "fct-msg bad" },
+            "The faucet only exists on DevNet. This network has no tap, so there is nothing to mint here.")
+        : React.createElement("section", { className: "fct-card", "aria-label": "Tap test CC" },
+            React.createElement("div", { className: "fct-row" },
+              React.createElement("span", { className: "fct-lb" }, "Amount"),
+              React.createElement("span", { className: "fct-bal" }, "In your party: ",
+                React.createElement("b", null, bal == null ? "…" : fmtCC(bal) + " CC"))),
+            React.createElement("label", { className: "fct-in" },
+              React.createElement("input", { inputMode: "decimal", value: amt, placeholder: "0", "aria-label": "CC to tap",
+                disabled: busy || remaining <= 0,
+                onChange: e => { const v = e.target.value.replace(/[^0-9.]/g, ""); setAmt(v); setMsg(null); } }),
+              React.createElement("span", { className: "fct-cc" },
+                React.createElement(AssetIcon, { symbol: "CC", size: "sm" }), "CC")),
+            React.createElement("div", { className: "fct-chips" },
+              chips.map(c => React.createElement("button", { key: c.label,
+                disabled: busy || c.v <= 0 || c.v > remaining + 1e-9,
+                "data-on": Number(amt) === c.v ? "1" : "0",
+                onClick: () => { setAmt(String(c.v)); setMsg(null); } }, c.label))),
+            React.createElement("div", { className: "fct-meter" },
+              React.createElement("div", { className: "fct-bar", role: "progressbar", "aria-valuemin": 0,
+                "aria-valuemax": cap, "aria-valuenow": used, "aria-label": "Used today" },
+                React.createElement("i", { style: { width: pct + "%" } })),
+              React.createElement("div", { className: "fct-mt" },
+                React.createElement("span", null, fmtCC(used) + " of " + fmtCC(cap) + " CC used today"),
+                React.createElement("span", null, remaining <= 0 && resetTxt ? "More from " + resetTxt : fmtCC(remaining) + " left"))),
+            remaining > 0 && !cooling
+              ? React.createElement(HumanCheck, { role, pow, setPow, disabled: busy || !info || !!info.error })
+              : null,
+            React.createElement("button", { className: "fct-go",
+                disabled: busy || !valid || !info || !!info.error || cooling || !pow, onClick: tap },
+              busy ? "Waiting for your wallet…"
+                : remaining <= 0 ? "Today's " + fmtCC(cap) + " CC is used"
+                : cooling ? "Next tap in " + mmss(waitMs)
+                : !amt ? "Enter an amount"
+                : !valid ? "At most " + fmtCC(remaining) + " CC today"
+                : !pow ? "Verify you're human first"
+                : "Tap " + fmtCC(n) + " CC — one approval"),
+            msg ? React.createElement("div", { className: "fct-msg " + (msg.kind || ""), role: "status" },
+              msg.text, msg.kind === "ok"
+                ? React.createElement(React.Fragment, null, " ", React.createElement("a", { onClick: onBack }, "Start trading →"))
+                : null) : null,
+            info && info.error ? React.createElement("div", { className: "fct-msg bad" }, info.error) : null),
+
+      React.createElement("div", { className: "fct-how" },
+        React.createElement("div", null, React.createElement("b", null, "01"),
+          React.createElement("span", null, "You approve the tap once in your own wallet.")),
+        React.createElement("div", null, React.createElement("b", null, "02"),
+          React.createElement("span", null, "Canton mints the CC straight into your Umbra party.")),
+        React.createElement("div", null, React.createElement("b", null, "03"),
+          React.createElement("span", null, "It is yours to quote or trade with right away."))),
+      React.createElement("p", { className: "fct-fine" },
+        "Test coins only: DevNet CC has no value and never leaves DevNet. Umbra never holds it — the network mints it to you directly. One tap every " +
+        ((info && info.cooldownMin) || 10) + " minutes; the daily limit resets 24 hours after your first tap."),
+      React.createElement("button", { className: "fct-back", onClick: onBack }, "← Back to trading")));
+}
+
+function SettingsDrawer({ open, onClose, role, say, onFaucet }) {
   const [m, setM] = useState(undefined);      // undefined = loading, null = none
   const [hours, setHours] = useState(24);
   const [busy, setBusy] = useState(false);
@@ -5790,7 +6074,10 @@ function SettingsDrawer({ open, onClose, role, say }) {
       React.createElement("div", { className: "drw-h" },
         React.createElement("h2", null, "Settings"),
         React.createElement("button", { className: "prt-ico", onClick: onClose, "aria-label": "Close settings" }, "\u2715")),
-      React.createElement("section", { className: "drw-s" },
+      // Retired: with firm quotes each side approves once per trade, and locking funds
+      // always needs its own key. Shown only while an earlier one is still running,
+      // so it can be ended.
+      !m ? null : React.createElement("section", { className: "drw-s" },
         React.createElement("div", { className: "drw-t" },
           React.createElement("h3", null, "Fewer signatures"),
           React.createElement("span", { className: "drw-st" + (m ? " on" : "") },
@@ -5812,7 +6099,15 @@ function SettingsDrawer({ open, onClose, role, say }) {
                   onClick: () => setHours(h)
                 }, h === 1 ? "1 hour" : h + " hours"))),
               React.createElement("button", { className: "drw-b", disabled: busy || m === undefined, onClick: turnOn },
-                busy ? "Waiting for your wallet\u2026" : "Turn on \u2014 one signature")))));
+                busy ? "Waiting for your wallet\u2026" : "Turn on \u2014 one signature"))),
+      onFaucet ? React.createElement("section", { className: "drw-s" },
+        React.createElement("div", { className: "drw-t" },
+          React.createElement("h3", null, "Test CC"),
+          React.createElement("span", { className: "drw-st on" }, "DevNet")),
+        React.createElement("p", { className: "drw-d" },
+          "Mint up to 5,000 test Canton Coin a day straight into your Umbra party, to try a trade end to end. One approval."),
+        React.createElement("button", { className: "drw-b", onClick: () => { onClose(); onFaucet(); } },
+          "Open the faucet")) : null));
 }
 
 // ---- DEALER QUEUE ----
@@ -5884,6 +6179,22 @@ function DealerQueue({ inv, desk, selCid, onOpen, onHome }) {
 }
 
 function PartyPortal({ role, wallet, onExit }) {
+  // /faucet opens the DevNet faucet page; /app the desks. Same session either way.
+  const [view, setView] = useState(() =>
+    (typeof location !== "undefined" && location.pathname === "/faucet") ? "faucet" : "desk");
+  const goFaucet = useCallback(() => {
+    try { history.pushState(null, "", "/faucet"); } catch (e) {}
+    setView("faucet"); window.scrollTo(0, 0);
+  }, []);
+  const goDesk = useCallback(() => {
+    try { history.pushState(null, "", "/app"); } catch (e) {}
+    setView("desk"); window.scrollTo(0, 0);
+  }, []);
+  useEffect(() => {
+    const f = () => setView(location.pathname === "/faucet" ? "faucet" : "desk");
+    window.addEventListener("popstate", f);
+    return () => window.removeEventListener("popstate", f);
+  }, []);
   const meta = metaFor(role, wallet);
   // Requester and dealer are POSITIONS IN A TRADE, not account types -- the same
   // party is routinely both. The demo desks are fixed because each one exists to
@@ -6771,7 +7082,10 @@ function PartyPortal({ role, wallet, onExit }) {
   // desks mid-session the hook count changes between renders and React throws
   // #311. As elements each desk owns its hooks and a switch remounts cleanly.
   const drawer = wallet ? React.createElement(SettingsDrawer, {
-    open: settingsOpen, onClose: () => setSettingsOpen(false), role, say }) : null;
+    open: settingsOpen, onClose: () => setSettingsOpen(false), role, say, onFaucet: goFaucet }) : null;
+  if (view === "faucet" && wallet) return React.createElement(React.Fragment, null,
+    React.createElement(FaucetPage, { role, onExit, say,
+      onBack: () => { goDesk(); load(); } }));
   if (isDealer) return React.createElement(React.Fragment, null, drawer, React.createElement(DealerDesk, {
     meta, pid, offset, signed, onExit, note, inv, history, holdings, rate, ratePair, usd,
     price, setPrice, busy, sendQuote, fresh, selInvCid, setSelInvCid, role, deskSwitch,
