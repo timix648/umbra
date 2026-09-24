@@ -263,11 +263,51 @@ function signWithDer(privDerB64, bytesB64) {
   return crypto.sign(null, Buffer.from(bytesB64, "base64"), key).toString("base64");
 }
 
+// ---------------------------------------------------------------------------
+// the remote backend -- the keys live in signer-daemon.js, another OS user
+// ---------------------------------------------------------------------------
+// The app keeps no key and no passphrase. It sends the daemon the whole prepared
+// transaction, which the daemon checks against its policy before signing. Public
+// metadata (party id, fingerprint) comes from the file the daemon publishes.
+
+function remoteBackend() {
+  const net = require("net");
+  const SOCK = process.env.UMBRA_SIGNER_SOCKET || "/run/umbra-signer/signer.sock";
+  const RECORDS = process.env.UMBRA_SIGNER_RECORDS || path.join(path.dirname(SOCK), "records.json");
+  const records = () => { try { return JSON.parse(fs.readFileSync(RECORDS, "utf8")); } catch { return {}; } };
+  let seq = 0;
+  const ask = (msg) => new Promise((resolve, reject) => {
+    const id = ++seq;
+    const c = net.createConnection(SOCK);
+    let buf = "";
+    const t = setTimeout(() => { c.destroy(); reject(new Error("the venue signer did not answer")); }, 15000);
+    c.on("connect", () => c.write(JSON.stringify(Object.assign({ id }, msg)) + "\n"));
+    c.on("data", (d) => {
+      buf += d;
+      const i = buf.indexOf("\n");
+      if (i < 0) return;
+      clearTimeout(t); c.end();
+      let out; try { out = JSON.parse(buf.slice(0, i)); } catch (e) { return reject(new Error("bad answer from the venue signer")); }
+      if (out.error) reject(new Error(out.error)); else resolve(out);
+    });
+    c.on("error", (e) => { clearTimeout(t); reject(new Error("the venue signer is unreachable: " + e.message)); });
+  });
+  const noKeys = () => { throw new Error("UMBRA_KEYSTORE=remote: venue keys are created in the signer, not the app"); };
+  return {
+    kind: "remote",
+    roles: () => Object.keys(records()),
+    recordFor: (role) => { const r = records()[role]; return r ? { role, partyId: r.partyId, fingerprint: r.fingerprint } : null; },
+    commit: noKeys,
+    // async: callers await it. `tx` is the prepared transaction the hash belongs to.
+    sign: async (role, bytesB64, tx) => (await ask({ op: "sign", role, hash: bytesB64, tx })).signature,
+  };
+}
+
 let cached = null;
 function getSigner() {
   if (cached) return cached;
-  const make = { file: fileBackend, env: envBackend, kms: kmsBackend, plaintext: plaintextBackend }[MODE];
-  if (!make) throw new Error(`unknown UMBRA_KEYSTORE '${MODE}' (file|env|kms|plaintext)`);
+  const make = { file: fileBackend, env: envBackend, kms: kmsBackend, plaintext: plaintextBackend, remote: remoteBackend }[MODE];
+  if (!make) throw new Error(`unknown UMBRA_KEYSTORE '${MODE}' (file|env|kms|plaintext|remote)`);
   cached = make();
   return cached;
 }

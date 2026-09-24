@@ -12,6 +12,7 @@
   "dependencies": {
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "node-fetch": "2"
+    "node-fetch": "2",
+    "@canton-network/core-tx-visualizer": "1.11.1"
   }
 }

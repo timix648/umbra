@@ -16,7 +16,8 @@ const signer = getSigner();
 
 // Sign `hashB64` as `rec`'s party. rec carries no key -- only the role that
 // names one inside the keystore.
-const signAs = (rec, hashB64) => signer.sign(rec.role, hashB64);
+// The transaction goes with the hash: a remote signer checks what it signs.
+const signAs = async (rec, hashB64, tx) => signer.sign(rec.role, hashB64, tx);
 
 // POST helper: returns parsed JSON, throws on non-2xx with the body text
 async function jpost(p, body) {
@@ -72,7 +73,7 @@ async function prepareSignExecute(rec, commands, tag = "ext", disclosed = []) {
     synchronizerId: SYNC, packageIdSelectionPreference: [], commands,
     disclosedContracts: disclosed,
   });
-  const sig = signAs(rec, prep.preparedTransactionHash);
+  const sig = await signAs(rec, prep.preparedTransactionHash, prep.preparedTransaction);
   const out = await jpost("/v2/interactive-submission/execute", {
     preparedTransaction: prep.preparedTransaction,
     hashingSchemeVersion: prep.hashingSchemeVersion,
@@ -96,12 +97,12 @@ async function prepareSignExecuteMulti(recs, commands, tag = "extm", disclosed =
     synchronizerId: SYNC, packageIdSelectionPreference: [], commands,
     disclosedContracts: disclosed,
   });
-  const signatures = recs.map((rec) => {
-    const sig = signAs(rec, prep.preparedTransactionHash);
+  const signatures = await Promise.all(recs.map(async (rec) => {
+    const sig = await signAs(rec, prep.preparedTransactionHash, prep.preparedTransaction);
     return { party: rec.partyId, signatures: [{
       format: "SIGNATURE_FORMAT_RAW", signature: sig, signedBy: rec.fingerprint,
       signingAlgorithmSpec: "SIGNING_ALGORITHM_SPEC_ED25519" }] };
-  });
+  }));
   const out = await jpost("/v2/interactive-submission/execute", {
     preparedTransaction: prep.preparedTransaction,
     hashingSchemeVersion: prep.hashingSchemeVersion,
