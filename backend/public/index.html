@@ -6849,8 +6849,11 @@ function PartyPortal({ role, wallet, onExit }) {
   function planSplit(q) {
     const p = q.payload, total = Number(p.offerAmount);
     const capOf = x => x.payload.maxFillAmount != null ? Number(x.payload.maxFillAmount) : total;
-    const first = { q, fill: Math.min(capOf(q), total) };
-    let rest = total - first.fill;
+    // Fills are ledger Numeric 10. In floats 0.015 - 0.005 is 0.009999999999999998,
+    // which the wallet check then refused against the ledger's 0.0100000000.
+    const d10 = x => Number(Number(x).toFixed(10));
+    const first = { q, fill: d10(Math.min(capOf(q), total)) };
+    let rest = d10(total - first.fill);
     const extra = [];
     const others = myQuotes
       .filter(x => x.contractId !== q.contractId && x.payload.rfqCid === p.rfqCid &&
@@ -6859,8 +6862,8 @@ function PartyPortal({ role, wallet, onExit }) {
       .sort((a, b) => Number(b.payload.price) - Number(a.payload.price));   // most for the offer first
     for (const o of others) {
       if (rest <= 1e-12) break;
-      const f = Math.min(capOf(o), rest);
-      if (f > 1e-12) { extra.push({ q: o, fill: f }); rest -= f; }
+      const f = d10(Math.min(capOf(o), rest));
+      if (f > 1e-12) { extra.push({ q: o, fill: f }); rest = d10(rest - f); }
     }
     return { q, total, first, extra, rest: Math.max(0, rest) };
   }

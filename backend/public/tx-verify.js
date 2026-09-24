@@ -180,8 +180,11 @@
       const arg = r0.kind === "exercise" ? r0.node.chosenValue : r0.node.argument;
       for (const [p, want] of Object.entries(expect)) {
         const got = at(arg, p);
+        // Numbers compare at the ledger's own precision (Numeric 10): the page's float
+        // arithmetic can differ from the ledger's decimal in digits the ledger cannot hold.
         const ok = want === null ? got == null
-          : (typeof want === "number" || /^-?[0-9.]+$/.test(String(want))) ? Number(got) === Number(want)
+          : (typeof want === "number" || /^-?[0-9.]+$/.test(String(want)))
+            ? got != null && Number(got).toFixed(10) === Number(want).toFixed(10)
           : String(got) === String(want);
         if (!ok) throw Refusal(p + " is " + (got == null ? "missing" : got) + ", not " + want);
       }
