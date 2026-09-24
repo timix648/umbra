@@ -1591,6 +1591,8 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
      call that makes Loop usable here. One layer fewer, and nothing in between to
      mistranslate what the wallet actually supports. -->
 <script src="/loop-sdk.js"></script>
+<script src="/canton-tx.js"></script>
+<script src="/tx-verify.js"></script>
 <script>
 // ---- BLOCKED WALLET WINDOWS --------------------------------------------------
 // Chrome lets a page open a window only for a few seconds after a click. Loop's SDK
@@ -2221,6 +2223,10 @@ const WalletLink = (() => {
       party, commands: params.commands,
       disclosedContracts: params.disclosedContracts || [], tag,
     });
+    // Check the transaction before the wallet sees it: that the hash is the hash of
+    // this transaction, that it acts only for this party, that its actions are the
+    // ones asked for, and that the user's own numbers are in it (tx-verify.js).
+    await window.UmbraTxVerify.verifyPrepared(window.CantonTx, party, params.commands, prep, params.expect);
     // Anything thrown while SIGNING is the wallet declining or its window being
     // closed -- the transaction was never sent, so nothing was refused and nothing
     // moved. Mark it, so the page says "not signed, press again", not "reverted".
@@ -2610,9 +2616,12 @@ const WalletLink = (() => {
     // way that on Canton a submission being ACCEPTED is not the same as it being
     // COMMITTED, and that guessing from a poll window is a coin flip. Wait for
     // the wallet's verdict and let a rejection surface as a real error.
-    async submit({ commands, disclosedContracts, commandId, packageId }) {
+    // `expect`: the numbers the user chose, as { "path.in.arguments": value }. The
+    // transaction is refused unless it carries them.
+    async submit({ commands, disclosedContracts, commandId, packageId, expect }) {
       const s = await ensure();
       const params = { commands };
+      if (expect) params.expect = expect;
       if (disclosedContracts && disclosedContracts.length) params.disclosedContracts = disclosedContracts;
       if (commandId) params.commandId = commandId;
       // Pin our package when the provider supports it, so a wallet holding several
@@ -5685,7 +5694,8 @@ function Funding({ party, say, onChanged }) {
       const b = await post("/api/real/send", {
         sender: party, senderRole: party, receiver: dest, admin: pick.admin,
         id: id, amount: String(amount), holdingCids: [pick.contractId], build: true });
-      await WalletLink.submit({ commands: b.commands, disclosedContracts: b.disclosedContracts });
+      await WalletLink.submit({ commands: b.commands, disclosedContracts: b.disclosedContracts,
+        expect: { "transfer.amount": String(amount), "transfer.receiver": dest } });
       say("Sent. Accept it in your wallet to finish the transfer.");
       await load(); onChanged && onChanged();
     } catch (e) { say(e.message || "could not send", true); }
@@ -5902,7 +5912,8 @@ function FaucetPage({ role, onBack, onExit, say }) {
       const proof = pow; setPow(null);           // each check is good for one tap
       b = await post("/api/faucet/tap", { party: role, amount: n, pow: proof });
       const before = bal || 0;
-      await WalletLink.submit({ commands: b.commands, disclosedContracts: b.disclosedContracts });
+      await WalletLink.submit({ commands: b.commands, disclosedContracts: b.disclosedContracts,
+        expect: { amount: String(n), receiver: role } });
       setMsg({ kind: "", text: "Minting on the ledger…" });
       let now = before;
       for (let i = 0; i < 12; i++) {
@@ -6418,10 +6429,10 @@ function PartyPortal({ role, wallet, onExit }) {
   // endpoints hand the assembled commands back instead (`build: true`), and the
   // half below is the other side of that bargain: push them to the wallet, then
   // let the server pick the trade back up from ledger state.
-  const signBuilt = useCallback(async (r) => {
+  const signBuilt = useCallback(async (r, expect) => {
     if (!r || !r.build) return r;
     if (!wallet) throw new Error("this party signs for itself, but no wallet is connected");
-    await WalletLink.submit({ commands: r.commands, disclosedContracts: r.disclosedContracts });
+    await WalletLink.submit({ commands: r.commands, disclosedContracts: r.disclosedContracts, expect });
     return r;
   }, [wallet]);
 
@@ -6571,7 +6582,8 @@ function PartyPortal({ role, wallet, onExit }) {
       build: true, senderRole: ins.party, receiver: al.receiver,
       admin: al.admin, id: al.instrument, amount: al.amount,
       holdingCids: cids, settleId: al.settlementRef, legId: ins.legId, registry: al.registry });
-    await WalletLink.submit({ commands: built.commands, disclosedContracts: built.disclosedContracts });
+    await WalletLink.submit({ commands: built.commands, disclosedContracts: built.disclosedContracts,
+      expect: { "allocation.transferLeg.amount": String(al.amount), "allocation.transferLeg.receiver": al.receiver } });
     for (let i = 0; i < 20; i++) {
       const now = await api("/api/real/holdings?role=" + encodeURIComponent(role)).catch(() => null);
       if (now && !((now.raw) || []).some(x => !x.lock && cids.includes(x.contractId))) break;
@@ -6755,10 +6767,11 @@ function PartyPortal({ role, wallet, onExit }) {
       const capN = Number(maxFill[cid] || 0);
       const cap = capN > 0 && (!whole || capN < whole) ? String(capN) : null;
       const r = await post("/api/swap/invitations/" + cid + "/quote", { dealer: role, price: p, maxFillAmount: cap });
+      const quoteExpect = { price: String(p), maxFillAmount: cap };
       if (r.build) {
         say(r.firm ? "Sign once in your wallet: your quote, and the " + fmtAmtStr(r.locks.amount) + " " +
           dispSym(r.locks.symbol) + (r.locks.fee ? " + fee" : "") + " that backs it…" : "Sign your quote in your wallet…", false, 60000);
-        await signBuilt(r);
+        await signBuilt(r, quoteExpect);
       }
       say(r.firm
         ? "Quote sent, backed by your locked " + dispSym(r.locks.symbol) + ". If the buyer takes it, it settles by itself; " +
@@ -6855,7 +6868,9 @@ function PartyPortal({ role, wallet, onExit }) {
       const before = new Set((((await api("/api/swap/deals?role=" + enc(role)).catch(() => ({}))).deals) || []).map(d => d.contractId));
       const a = await post("/api/swap/rfqs/" + p.rfqCid + "/award-firm",
         { requester: role, parts: parts.map(x => ({ quoteCid: x.q.contractId, fill: x.fill })), keepRest: !!keepRest });
-      await signBuilt(a);
+      const awardExpect = {};
+      parts.forEach((x, i) => { awardExpect["parts." + i + ".quoteCid"] = x.q.contractId; awardExpect["parts." + i + ".fill"] = String(x.fill); });
+      await signBuilt(a, awardExpect);
       post("/api/swap/deals/kick", {}).catch(() => {});
       setAwardStep("Settling…");
       let fresh = [];
@@ -7013,7 +7028,7 @@ function PartyPortal({ role, wallet, onExit }) {
       }
       if (r2.build && r2.viaDesk) {
         say("Sign once to open the request and invite every dealer…");
-        await signBuilt(r2);
+        await signBuilt(r2, { offerAmount: String(f.offerAmount) });
       } else if (r2.build) {
         const r = r2;
         say("Sign the request in your wallet…");

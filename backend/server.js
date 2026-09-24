@@ -463,7 +463,8 @@ const ALLOC_COMPLETION_TIMEOUT_MS = Number(process.env.ALLOC_COMPLETION_TIMEOUT_
 // settlement path is byte-identical to before. Turn it on to get real rejection
 // reasons instead of a bare timeout -- ideally on a run you expect to fail.
 const COMPLETIONS_ENABLED = /^(1|true|yes)$/i.test(String(process.env.UMBRA_COMPLETIONS || ""));
-const LEDGER_USER_ID = process.env.LEDGER_USER_ID || "6";
+// The ledger user is per participant: it follows the active node (token.js).
+const ledgerUserId = () => __tok.userId();
 
 async function pollNewCid(party, templateModuleEntity, beforeSet, tries = POLL_TRIES) {
   // Time to CONTRACT VISIBILITY, which is a different quantity from time to commit:
@@ -499,7 +500,7 @@ async function readCompletions(party, beginExclusive, idleMs = 3000) {
   const r = await ledgerFetch(
     `/v2/commands/completions?limit=200&stream_idle_timeout_ms=${idleMs}`,
     { method: "POST", body: JSON.stringify({
-        userId: LEDGER_USER_ID, parties: [party], beginExclusive }) });
+        userId: ledgerUserId(), parties: [party], beginExclusive }) });
   const text = await r.text();
   if (!r.ok) throw new Error(`${r.status} ${text.slice(0, 200)}`);
   let rows;

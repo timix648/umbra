@@ -1,4 +1,4 @@
-const { ledgerFetch } = require("./token");
+const { ledgerFetch, userId: ledgerUser } = require("./token");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
@@ -6,7 +6,8 @@ require("dotenv").config();
 
 const SYNC = process.env.SYNCHRONIZER_ID ||
   "global-domain::1220be58c29e65de40bf273be1dc2b266d43a9a002ea5b18955aeef7aac881bb471a";
-const USER_ID = process.env.LEDGER_USER_ID || "6";
+// The ledger user is per participant, so it follows whichever node is active.
+const userIdNow = () => ledgerUser();
 // The venue's own party keys live behind signer.js and never come back out of it:
 // callers ask it to sign and receive a signature. That is what makes a KMS
 // backend droppable later without touching a single call site here.
@@ -48,8 +49,8 @@ async function onboardExternalParty(role) {
 
   // Let the operator READ this party (display only; cannot transact without the key).
   try {
-    await jpost(`/v2/users/${USER_ID}/rights`, {
-      userId: USER_ID, rights: [{ kind: { CanReadAs: { value: { party: g.partyId } } } }],
+    await jpost(`/v2/users/${userIdNow()}/rights`, {
+      userId: userIdNow(), rights: [{ kind: { CanReadAs: { value: { party: g.partyId } } } }],
     });
   } catch (e) { console.log("[ext] readAs grant skipped:", e.message); }
 
@@ -67,7 +68,7 @@ async function prepareSignExecute(rec, commands, tag = "ext", disclosed = []) {
   // it back rather than burning it inline.
   const commandId = `${tag}-${Date.now()}`;
   const prep = await jpost("/v2/interactive-submission/prepare", {
-    userId: USER_ID, actAs: [rec.partyId], commandId,
+    userId: userIdNow(), actAs: [rec.partyId], commandId,
     synchronizerId: SYNC, packageIdSelectionPreference: [], commands,
     disclosedContracts: disclosed,
   });
@@ -75,7 +76,7 @@ async function prepareSignExecute(rec, commands, tag = "ext", disclosed = []) {
   const out = await jpost("/v2/interactive-submission/execute", {
     preparedTransaction: prep.preparedTransaction,
     hashingSchemeVersion: prep.hashingSchemeVersion,
-    submissionId: `${tag}-${Date.now()}`, userId: USER_ID,
+    submissionId: `${tag}-${Date.now()}`, userId: userIdNow(),
     deduplicationPeriod: { Empty: {} },
     partySignatures: { signatures: [{ party: rec.partyId, signatures: [{
       format: "SIGNATURE_FORMAT_RAW", signature: sig, signedBy: rec.fingerprint,
@@ -91,7 +92,7 @@ async function prepareSignExecuteMulti(recs, commands, tag = "extm", disclosed =
   const parties = recs.map((r) => r.partyId);
   const commandId = `${tag}-${Date.now()}`;   // see note in prepareSignExecute
   const prep = await jpost("/v2/interactive-submission/prepare", {
-    userId: USER_ID, actAs: parties, commandId,
+    userId: userIdNow(), actAs: parties, commandId,
     synchronizerId: SYNC, packageIdSelectionPreference: [], commands,
     disclosedContracts: disclosed,
   });
@@ -104,7 +105,7 @@ async function prepareSignExecuteMulti(recs, commands, tag = "extm", disclosed =
   const out = await jpost("/v2/interactive-submission/execute", {
     preparedTransaction: prep.preparedTransaction,
     hashingSchemeVersion: prep.hashingSchemeVersion,
-    submissionId: `${tag}-${Date.now()}`, userId: USER_ID,
+    submissionId: `${tag}-${Date.now()}`, userId: userIdNow(),
     deduplicationPeriod: { Empty: {} },
     partySignatures: { signatures },
   });
@@ -126,7 +127,7 @@ async function prepareSignExecuteMulti(recs, commands, tag = "extm", disclosed =
 async function prepareInteractive(partyId, commands, tag = "wallet", disclosed = []) {
   const commandId = `${tag}-${Date.now()}`;
   const prep = await jpost("/v2/interactive-submission/prepare", {
-    userId: USER_ID, actAs: [partyId], commandId,
+    userId: userIdNow(), actAs: [partyId], commandId,
     synchronizerId: SYNC, packageIdSelectionPreference: [], commands,
     disclosedContracts: disclosed,
   });
@@ -146,7 +147,7 @@ async function executeSigned(o) {
     preparedTransaction: o.preparedTransaction,
     hashingSchemeVersion: o.hashingSchemeVersion,
     submissionId: o.submissionId || `${o.commandId || "wallet"}-${Date.now()}`,
-    userId: USER_ID,
+    userId: userIdNow(),
     deduplicationPeriod: { Empty: {} },
     partySignatures: { signatures: [{ party: o.partyId, signatures: [{
       format: "SIGNATURE_FORMAT_RAW", signature: o.signature, signedBy: o.signedBy,
@@ -272,8 +273,8 @@ async function onboardWalletConfirm(o) {
   // participant signs, so CanActAs really is control. External parties are why this
   // is safe.)
   try {
-    await jpost(`/v2/users/${USER_ID}/rights`, {
-      userId: USER_ID, rights: [
+    await jpost(`/v2/users/${userIdNow()}/rights`, {
+      userId: userIdNow(), rights: [
         { kind: { CanActAs: { value: { party: o.partyId } } } },
         { kind: { CanReadAs: { value: { party: o.partyId } } } },
       ],
