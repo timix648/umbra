@@ -195,6 +195,24 @@ async function fingerprintOf(publicKeyB64) {
 const ownsParty = (fingerprint, partyId) =>
   !!fingerprint && String(partyId || "").endsWith("::" + fingerprint);
 
+// The same key always gets the same party name. It was "wallet-" + Date.now(), so a
+// retry after a slow node answered 503 founded a SECOND party for one key: the node had
+// finished the first allocation seconds after giving up on the request.
+const walletHint = (fingerprint) => "wallet-" + String(fingerprint).slice(-16);
+
+// Whether the node knows the party yet, polled for up to `ms`.
+async function awaitParty(partyId, ms) {
+  const until = Date.now() + ms;
+  for (;;) {
+    try {
+      const r = await ledgerFetch(`/v2/parties/${encodeURIComponent(partyId)}`, { method: "GET" });
+      if (r.ok && ((await r.json()).partyDetails || []).some((d) => d.party === partyId)) return true;
+    } catch (e) { /* node busy: keep polling */ }
+    if (Date.now() >= until) return false;
+    await new Promise((res) => setTimeout(res, 3000));
+  }
+}
+
 async function onboardWalletPrepare(publicKeyB64, partyHint) {
   if (!publicKeyB64) throw new Error("need the wallet's raw ed25519 public key (base64)");
   const raw = Buffer.from(publicKeyB64, "base64");
@@ -205,16 +223,16 @@ async function onboardWalletPrepare(publicKeyB64, partyHint) {
   };
   // Hosted on several nodes from the start: every node prepares the same topology,
   // the wallet signs it, and each node co-signs (hosts.js).
+  const fp = await fingerprintOf(publicKeyB64);
   if (hosts.enabled()) {
-    const hint = partyHint || ("wallet-" + Date.now());
+    const hint = partyHint || walletHint(fp);
     const p = await hosts.prepareOnboard(publicKeyB64, hint);
-    const fp = await fingerprintOf(publicKeyB64);
     return { partyId: p.partyId, fingerprint: fp, publicKey: publicKeyB64,
              multiHash: p.hashes[0], hashes: p.hashes, topologyTransactions: p.topologyTransactions,
              hint, multiHost: true, hosts: hosts.hostNames(), participants: hosts.participantIds() };
   }
   const g = await jpost("/v2/parties/external/generate-topology", {
-    partyHint: partyHint || ("wallet-" + Date.now()), synchronizer: SYNC, publicKey,
+    partyHint: partyHint || walletHint(fp), synchronizer: SYNC, publicKey,
   });
   // Backfill. Wallets onboarded before confirm recorded the key have publicKey null
   // and can never sign in. g.publicKeyFingerprint was computed by the participant
@@ -277,14 +295,23 @@ async function onboardWalletConfirm(o) {
       topologyTransactions: o.topologyTransactions, fingerprint: o.fingerprint,
       signatures: Array.isArray(o.signatures) && o.signatures.length ? o.signatures : [o.multiHashSignature] });
   } else {
-    await jpost("/v2/parties/external/allocate", {
-      synchronizer: SYNC,
-      onboardingTransactions: (o.topologyTransactions || []).map((t) => ({ transaction: t })),
-      multiHashSignatures: [{
-        format: "SIGNATURE_FORMAT_RAW", signature: o.multiHashSignature,
-        signedBy: o.fingerprint, signingAlgorithmSpec: "SIGNING_ALGORITHM_SPEC_ED25519",
-      }],
-    });
+    try {
+      await jpost("/v2/parties/external/allocate", {
+        synchronizer: SYNC,
+        onboardingTransactions: (o.topologyTransactions || []).map((t) => ({ transaction: t })),
+        multiHashSignatures: [{
+          format: "SIGNATURE_FORMAT_RAW", signature: o.multiHashSignature,
+          signedBy: o.fingerprint, signingAlgorithmSpec: "SIGNING_ALGORITHM_SPEC_ED25519",
+        }],
+      });
+    } catch (e) {
+      // A busy node answers 503 and finishes the allocation anyway, and a retry of an
+      // allocated key is refused as a duplicate. Either way the party may exist, and
+      // only this key could have created it (its id carries the key's fingerprint,
+      // checked above), so carry on if it does.
+      if (!(await awaitParty(o.partyId, 45000))) throw e;
+      console.log("[wallet] allocate answered", e.message.slice(0, 80), "- but", o.partyId, "exists; carrying on");
+    }
   }
   // CanReadAs lets the UI display the party. CanActAs is what lets this process
   // SUBMIT a transaction the wallet has already signed: /v2/interactive-submission/
