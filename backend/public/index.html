@@ -4489,11 +4489,11 @@ const fmtNum = (v) => {
   if (abs >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
   if (abs >= 1)    return n.toLocaleString(undefined, { maximumFractionDigits: 4 });
   if (abs >= 0.001) return n.toLocaleString(undefined, { maximumFractionDigits: 6 });
-  // subscript-zero notation for < 0.001
-  const s = abs.toFixed(20);                 // plenty of precision
-  const dec = s.split(".")[1] || "";
-  let zeros = 0; while (dec[zeros] === "0") zeros++;
-  const sig = dec.slice(zeros).replace(/0+$/, "").slice(0, 4) || "0";
+  // subscript-zero notation for < 0.001. Round to 4 significant digits: slicing
+  // toFixed(20) showed 0.00013 (really 0.000129999...) as 0.0₃1299.
+  const [mant, exp] = abs.toExponential(3).split("e");
+  const zeros = -Number(exp) - 1;
+  const sig = mant.replace(".", "").replace(/0+$/, "") || "0";
   return React.createElement("span", { className: "fnum" },
     (n < 0 ? "-" : ""), "0.0",
     React.createElement("sub", null, zeros),
@@ -4793,10 +4793,10 @@ function RequesterDesk(P) {
                               best ? React.createElement("div", { className: "rq-bp" }, "\u2605 Best price")
                                    : React.createElement("div", { className: "rq-ds" }, "quoted")))),
                         React.createElement("td", null,
-                          React.createElement("div", { className: "rq-px m" }, Number(p.price).toFixed(3)),
+                          React.createElement("div", { className: "rq-px m" }, fmtNum(p.price)),
                           React.createElement("div", { className: "rq-pu" }, dispSym(p.wantAsset.symbol))),
                         React.createElement("td", null,
-                          React.createElement("div", { className: "m" }, offerAmt ? (Number(p.price) / offerAmt).toFixed(4) : "\u2014"),
+                          React.createElement("div", { className: "m" }, offerAmt ? fmtNum(Number(p.price) / offerAmt) : "\u2014"),
                           React.createElement("div", { className: "rq-pu" }, dispSym(p.wantAsset.symbol), " / ", dispSym(p.offerAsset.symbol))),
                         React.createElement("td", { className: "m " + (b == null ? "" : b >= 0 ? "up" : "dn") },
                           fmtVsMkt(b)),
@@ -5466,7 +5466,9 @@ function DealerDesk(P) {
                     const cid = active.contractId;
                     const cur = Number(price[cid]);
                     const mid = rate != null ? Number(rate) * amt : null;   // total in want-asset at spot
-                    const set = v => setPrice(x => ({ ...x, [cid]: v == null ? "" : v.toFixed(4).replace(/0+$/,"").replace(/\.$/,"") }));
+                    // 6 significant digits: toFixed(4) turned a 0.00013 CBTC price into 0.0001
+                    const set = v => setPrice(x => ({ ...x, [cid]: v == null ? "" :
+                      v.toFixed(Math.min(10, Math.max(4, 5 - Math.floor(Math.log10(Math.abs(v) || 1))))).replace(/0+$/,"").replace(/\.$/,"") }));
                     const nudge = bps => { const base = isFinite(cur) && cur > 0 ? cur : mid; if (base) set(base * (1 + bps / 10000)); };
                     const implied = isFinite(cur) && cur > 0 && amt > 0 ? cur / amt : null;
                     return React.createElement("div", { className: "qf" },
