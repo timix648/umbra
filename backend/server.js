@@ -361,6 +361,63 @@ async function realSubmit(body, tag, opts) {
 
 app.get("/health", (req, res) => res.json({ ok: true }));
 
+// ---- STATUS AND METRICS ---------------------------------------------------------
+// What an operator, a watchdog or a judge needs to see the venue is alive: whether
+// its ledger node answers, and whether the settlement worker is still running.
+const STARTED_AT = Date.now();
+const METRICS = {
+  deals_settled: 0, deals_cancelled: 0, deal_failures: 0,
+  relocks_done: 0, relock_failures: 0, faucet_taps: 0,
+  worker_last_run: 0, worker_last_ok: 0, http_requests: 0, http_errors: 0,
+};
+app.use((req, res, next) => {
+  METRICS.http_requests += 1;
+  res.on("finish", () => { if (res.statusCode >= 500) METRICS.http_errors += 1; });
+  next();
+});
+const nodeView = (full) => __tok.nodesStatus().map((n) => full ? n
+  : { name: n.name, active: n.active, healthy: n.healthy, since: n.since });
+
+// Public: nothing here is private (no parties, no trades, no errors).
+app.get("/api/status", (req, res) => {
+  const now = Date.now();
+  const nodes = nodeView(auth.isOperator(req));
+  const worker = SIGNED_MODE ? {
+    lastRunAt: METRICS.worker_last_run ? new Date(METRICS.worker_last_run).toISOString() : null,
+    stale: !METRICS.worker_last_run || now - METRICS.worker_last_run > 90000 } : null;
+  const ok = nodes.some((n) => n.active && n.healthy) && !(worker && worker.stale && now - STARTED_AT > 90000);
+  res.status(ok ? 200 : 503).json({ ok, uptimeSec: Math.round((now - STARTED_AT) / 1000), nodes, worker });
+});
+
+// Prometheus text. Only from the machine itself (a scraper or the watchdog), or
+// with the operator token -- never through the public proxy.
+app.get("/metrics", (req, res) => {
+  const ra = String((req.socket && req.socket.remoteAddress) || "");
+  const local = /^(::ffff:)?127\.|^::1$/.test(ra) && !req.headers["x-forwarded-for"];
+  if (!local && !auth.isOperator(req)) return res.status(404).end();
+  const L = [];
+  const g = (name, help, type, v, labels) => {
+    L.push(`# HELP umbra_${name} ${help}`, `# TYPE umbra_${name} ${type}`);
+    (Array.isArray(v) ? v : [[labels || "", v]]).forEach(([lab, val]) => L.push(`umbra_${name}${lab} ${val}`));
+  };
+  g("up", "The Umbra backend is running.", "gauge", 1);
+  g("uptime_seconds", "Seconds since the backend started.", "gauge", Math.round((Date.now() - STARTED_AT) / 1000));
+  g("ledger_node_healthy", "1 if the ledger node answers.", "gauge",
+    __tok.nodesStatus().map((n) => [`{node="${n.name}"}`, n.healthy ? 1 : 0]));
+  g("ledger_node_active", "1 for the node requests go to.", "gauge",
+    __tok.nodesStatus().map((n) => [`{node="${n.name}"}`, n.active ? 1 : 0]));
+  g("deals_settled_total", "Deals the venue settled.", "counter", METRICS.deals_settled);
+  g("deals_cancelled_total", "Deals cancelled past their lock deadline, every lock returned.", "counter", METRICS.deals_cancelled);
+  g("deal_failures_total", "Failed settle or cancel attempts (retried).", "counter", METRICS.deal_failures);
+  g("relocks_total", "Partial fills resized.", "counter", METRICS.relocks_done);
+  g("relock_failures_total", "Failed resize attempts (retried).", "counter", METRICS.relock_failures);
+  g("faucet_taps_total", "DevNet faucet taps built.", "counter", METRICS.faucet_taps);
+  g("worker_last_run_timestamp_seconds", "When the settlement worker last ran.", "gauge", Math.round(METRICS.worker_last_run / 1000));
+  g("http_requests_total", "HTTP requests served.", "counter", METRICS.http_requests);
+  g("http_errors_total", "HTTP 5xx responses.", "counter", METRICS.http_errors);
+  res.type("text/plain; version=0.0.4").send(L.join("\n") + "\n");
+});
+
 // --- helper: read the current ledger end (needed as the query offset) ---
 async function ledgerEnd() {
   const r = await ledgerFetch("/v2/state/ledger-end");
@@ -3098,19 +3155,23 @@ async function dealWorker() {
       const now = Date.now();
       if (L.complete && now < Date.parse(L.p.settleBefore) - 30000) {
         await settleDeal(deal, L);
+        METRICS.deals_settled += 1;
         console.log("[deal] settled", L.p.tradeId);
       } else if (now >= Date.parse(L.p.allocateBefore)) {
         await cancelDeal(deal, L);
+        METRICS.deals_cancelled += 1;
         console.log("[deal] cancelled past the lock deadline, locks returned:", L.p.tradeId);
       }
       delete dealFails[deal.contractId];
     } catch (e) {
+      METRICS.deal_failures += 1;
       const n = (dealFails[deal.contractId] = (dealFails[deal.contractId] || 0) + 1);
       if (n <= 3 || n % 20 === 0) console.error("[deal] " + deal.contractId.slice(0, 16) + " attempt " + n + ": " + e.message);
     } finally { dealBusy.delete(deal.contractId); }
   }
 }
 if (SIGNED_MODE) setInterval(() => {
+  METRICS.worker_last_run = Date.now();
   relockWorker().catch(() => {}).then(() => dealWorker()).catch(() => {});
 }, 15000);
 
@@ -3503,6 +3564,7 @@ async function relockWorker() {
               choiceArgument: { want: w.call, fee: f ? Object.assign({}, f.call, { inputs: [] }) : null } } }],
             disclosedContracts: mergeDisc(w.disclosed, f && f.disclosed, await holdingDisclosure(p.dealer, cids)) },
             "relock-lock", { duty: true });
+          METRICS.relocks_done += 1;
           console.log("[firm] locked the awarded part for", p.tradeId);
         } else {
           await realSubmit({ commandId: "relock-drop-" + Date.now(), actAs: [operator],
@@ -3513,6 +3575,7 @@ async function relockWorker() {
       }
       delete relockFails[r.contractId];
     } catch (e) {
+      METRICS.relock_failures += 1;
       const n = (relockFails[r.contractId] = (relockFails[r.contractId] || 0) + 1);
       if (n <= 3 || n % 20 === 0) console.error("[firm] relock " + r.contractId.slice(0, 16) + " attempt " + n + ": " + e.message);
     } finally { relockBusy.delete(r.contractId); }
@@ -3694,6 +3757,7 @@ app.post("/api/faucet/tap", async (req, res) => {
         : "You have taken today's " + FAUCET_CAP + " CC. More opens up " +
           (u.resetAt ? "at " + new Date(u.resetAt).toISOString().slice(11, 16) + " UTC." : "tomorrow.") });
     }
+    METRICS.faucet_taps += 1;
     const id = "tap-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7);
     const at = Date.now();
     faucetLog[party] = (faucetLog[party] || []).concat([{ id, amount, at }]);
