@@ -85,6 +85,12 @@ jobs:
           echo "parsed $n files"
         working-directory: backend
 
-      - name: Keystore tests
-        run: node --test test/*.test.js
+      # The tests load the backend's own dependencies (the ledger client, and Canton's
+      # transaction decoder for the venue signer's policy), so install them first.
+      - name: Install
+        run: npm install --no-audit --no-fund
+        working-directory: backend
+
+      - name: Tests
+        run: npm test
         working-directory: backend
