@@ -390,11 +390,28 @@
   .prt-ico.on:hover{filter:brightness(1.1)}
   .prt-ico[disabled]{opacity:.5;cursor:progress}
   /* split award plan */
-  .spl{max-width:520px}
-  .spl-row{display:grid;grid-template-columns:1.2fr 1fr 1.3fr;gap:10px;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:7px;margin-top:8px;font-size:13px}
+  .spl{max-width:540px}
   .spl-d{font-weight:600;color:var(--text)}
-  .spl-r{color:var(--mute);text-align:right}
-  .spl-b{display:flex;flex-direction:column;gap:8px;margin-top:16px}
+  .spl-r{color:var(--text);text-align:right}
+  .spl-b{display:flex;flex-direction:column;gap:8px;margin-top:18px}
+  .spl-tg{display:flex;gap:4px;padding:4px;margin:14px 0 16px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+  .spl-tg button{flex:1;padding:8px 10px;border:0;border-radius:6px;background:transparent;color:var(--mute);font:600 13px var(--sans);cursor:pointer}
+  .spl-tg button.on{background:var(--accentbg);color:var(--text);box-shadow:inset 0 0 0 1px var(--accentline)}
+  .spl-bar{display:flex;height:14px;border-radius:7px;overflow:hidden;background:repeating-linear-gradient(135deg,var(--bg3) 0 6px,var(--bg2) 6px 12px);border:1px solid var(--line)}
+  .spl-seg{height:100%;transform-origin:left center;animation:splGrow .55s cubic-bezier(.2,.8,.2,1) both}
+  .spl-seg + .spl-seg{box-shadow:inset 2px 0 0 var(--bg)}
+  .s0{background:var(--accent)} .s1{background:var(--ok)} .s2{background:var(--amber)}
+  @keyframes splGrow{from{transform:scaleX(0);opacity:.4}to{transform:scaleX(1);opacity:1}}
+  @media (prefers-reduced-motion: reduce){.spl-seg{animation:none}}
+  .spl-scale{display:flex;justify-content:space-between;margin-top:6px;font-size:11px;color:var(--dim)}
+  .spl-lns{margin-top:12px;display:flex;flex-direction:column;gap:6px}
+  .spl-ln{display:grid;grid-template-columns:10px 1.2fr 1fr 1fr 1.2fr;gap:10px;align-items:center;font-size:13px;color:var(--mute)}
+  .spl-dot{width:10px;height:10px;border-radius:3px}
+  .spl-at{color:var(--dim)}
+  .spl-keep{display:flex;gap:8px;align-items:center;justify-content:flex-start;text-align:left;margin-top:14px;font-size:13px;color:var(--mute);cursor:pointer}
+  .spl-keep input{width:auto;height:auto;margin:0;padding:0;flex:0 0 auto;accent-color:var(--accent)}
+  .spl-sum{display:flex;justify-content:space-between;margin-top:16px;padding-top:12px;border-top:1px solid var(--line);font-size:13px;color:var(--mute)}
+  .spl-sum b{color:var(--text);font-size:15px;margin-left:4px}
   .ask-cap{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12.5px;color:var(--mute);flex-wrap:wrap}
   .ask-cap input{width:120px;padding:7px 9px;background:var(--bg);border:1px solid var(--line2);border-radius:var(--rad);color:var(--text);font:500 13px/1 var(--sans);font-variant-numeric:tabular-nums}
   /* settings drawer: slides in from the right */
@@ -741,6 +758,9 @@
   .rq-ds{margin-top:3px;font:500 9.5px/1 var(--sans);color:var(--dim)}
   .rq-bp{margin-top:3px;font:600 9px/1 var(--sans);letter-spacing:.08em;color:var(--accent)}
   .rq-px{font:650 17px/1 var(--sans);color:var(--text)}
+  .rq-fill{font-size:13px;color:var(--text);white-space:nowrap}
+  .rq-fbar{margin-top:6px;width:84px;height:4px;border-radius:2px;background:var(--bg3);overflow:hidden}
+  .rq-fbar span{display:block;height:100%;background:var(--accent);border-radius:2px}
   .rq-pu{margin-top:3px;font:500 9px/1 var(--sans);color:var(--dim)}
   .qm .up{color:#4ADE80} .qm .dn{color:var(--red)} .qm .warn{color:var(--amber)}
 
@@ -4116,45 +4136,62 @@ function LoopMark({ size }) {
 
 // The best quote takes only part of the request. Show exactly who would fill what, at
 // which price, and let the requester choose; nothing is locked until they do.
+// One bar is the whole request; each dealer's part fills it in turn. The requester
+// picks "all dealers" or "best price only" and watches the bar change, then confirms
+// once. It replaced four stacked buttons that read as four different trades.
 function SplitPlan({ plan, onPick }) {
   const p = plan.q.payload;
   const off = dispSym(p.offerAsset.symbol), wnt = dispSym(p.wantAsset.symbol);
   const total = plan.total;
   const recv = (x) => Number(x.q.payload.price) * x.fill / total;   // pro-rata, the dealer's own price
-  const row = (x, i) => React.createElement("div", { key: i, className: "spl-row" },
-    React.createElement("span", { className: "spl-d" }, DEALER_NAME(x.q.payload.dealer)),
-    React.createElement("span", null, fmtAmtStr(x.fill) + " " + off),
-    React.createElement("span", { className: "spl-r" }, "you get " + fmtNum(recv(x)) + " " + wnt));
-  const allFill = plan.first.fill + plan.extra.reduce((s, x) => s + x.fill, 0);
-  const restAfterAll = total - allFill;
+  const canAll = plan.extra.length > 0;
+  const [mode, setMode] = useState(canAll ? "all" : "best");
+  const [keepOpen, setKeepOpen] = useState(true);
+  const parts = mode === "all" ? [plan.first].concat(plan.extra) : [plan.first];
+  const filled = parts.reduce((s, x) => s + x.fill, 0);
+  const left = Math.max(0, total - filled);
+  const get = parts.reduce((s, x) => s + recv(x), 0);
   useEffect(() => {
     const k = e => { if (e.key === "Escape") onPick(null); };
     document.addEventListener("keydown", k);
     return () => document.removeEventListener("keydown", k);
   }, []);
+  const seg = (x, i) => React.createElement("span", {
+    key: x.q.contractId + mode, className: "spl-seg s" + (i % 3),
+    style: { width: (x.fill / total * 100) + "%", animationDelay: (i * 0.22) + "s" } });
+  const line = (x, i) => React.createElement("div", { key: x.q.contractId, className: "spl-ln" },
+    React.createElement("span", { className: "spl-dot s" + (i % 3) }),
+    React.createElement("span", { className: "spl-d" }, DEALER_NAME(x.q.payload.dealer)),
+    React.createElement("span", { className: "m" }, fmtAmtStr(x.fill) + " " + off),
+    React.createElement("span", { className: "spl-at m" }, "@ " + fmtNum(Number(x.q.payload.price) / total)),
+    React.createElement("span", { className: "spl-r m" }, fmtNum(recv(x)) + " " + wnt));
   return React.createElement("div", { className: "ovl", onClick: () => onPick(null) },
     React.createElement("div", { className: "ovlcard spl", role: "dialog", "aria-modal": "true",
-      "aria-label": "Fill the rest of your request", onClick: e => e.stopPropagation() },
-      React.createElement("div", { className: "eyb" }, "Best price covers part of your request"),
+      "aria-label": "How to fill your request", onClick: e => e.stopPropagation() },
+      React.createElement("div", { className: "eyb" }, "Fill " + fmtAmtStr(total) + " " + off),
       React.createElement("h3", { className: "wpk-h" },
-        DEALER_NAME(p.dealer) + " takes " + fmtAmtStr(plan.first.fill) + " of your " + fmtAmtStr(total) + " " + off + "."),
-      row(plan.first, "first"),
-      plan.extra.length
-        ? React.createElement(React.Fragment, null,
-            React.createElement("div", { className: "wpk-lab" }, "The rest, at the next best prices"),
-            plan.extra.map(row))
-        : React.createElement("p", { className: "drw-d" }, "No other live quote can take the remaining " +
-            fmtAmtStr(total - plan.first.fill) + " " + off + "."),
+        canAll ? "The best price takes " + fmtAmtStr(plan.first.fill) + ". Others can take the rest."
+               : "The best price takes " + fmtAmtStr(plan.first.fill) + " of " + fmtAmtStr(total) + "."),
+      canAll ? React.createElement("div", { className: "spl-tg", role: "tablist" },
+        React.createElement("button", { className: mode === "all" ? "on" : "", role: "tab", "aria-selected": mode === "all",
+          onClick: () => setMode("all") }, "All " + (plan.extra.length + 1) + " dealers"),
+        React.createElement("button", { className: mode === "best" ? "on" : "", role: "tab", "aria-selected": mode === "best",
+          onClick: () => setMode("best") }, "Best price only")) : null,
+      React.createElement("div", { className: "spl-bar", "aria-hidden": "true" }, parts.map(seg)),
+      React.createElement("div", { className: "spl-scale m" },
+        React.createElement("span", null, fmtAmtStr(filled) + " " + off + " filled"),
+        React.createElement("span", null, left > 1e-12 ? fmtAmtStr(left) + " left" : "complete")),
+      React.createElement("div", { className: "spl-lns" }, parts.map(line)),
+      left > 1e-12 ? React.createElement("label", { className: "spl-keep" },
+        React.createElement("input", { type: "checkbox", checked: keepOpen, onChange: e => setKeepOpen(e.target.checked) }),
+        "Keep the other " + fmtAmtStr(left) + " " + off + " open for new quotes") : null,
+      React.createElement("div", { className: "spl-sum" },
+        React.createElement("span", null, "You give ", React.createElement("b", { className: "m" }, fmtAmtStr(filled) + " " + off)),
+        React.createElement("span", null, "You get ", React.createElement("b", { className: "m" }, fmtNum(get) + " " + wnt))),
       React.createElement("div", { className: "spl-b" },
-        plan.extra.length ? React.createElement("button", { className: "drw-b", onClick: () => onPick("all") },
-          "Fill it this way" + (restAfterAll > 1e-12 ? " (" + fmtAmtStr(restAfterAll) + " " + off + " left unfilled)" : "")) : null,
-        React.createElement("button", { className: "drw-b ghost", onClick: () => onPick("keep") },
-          "Only " + DEALER_NAME(p.dealer) + " — keep the rest open for new quotes"),
-        React.createElement("button", { className: "drw-b ghost", onClick: () => onPick("close") },
-          "Only " + DEALER_NAME(p.dealer) + " — close the rest"),
-        React.createElement("button", { className: "wpk-x", onClick: () => onPick(null) }, "Cancel")),
-      React.createElement("p", { className: "drw-d", style: { marginTop: 10 } },
-        "One signature accepts every part you choose, then one lock per dealer. Nothing is locked until you choose, and the unfilled part never leaves your wallet.")));
+        React.createElement("button", { className: "drw-b",
+          onClick: () => onPick(mode === "all" ? "all" : (keepOpen ? "keep" : "close")) }, "Continue — sign once"),
+        React.createElement("button", { className: "wpk-x", onClick: () => onPick(null) }, "Cancel"))));
 }
 
 function WalletPicker({ busy, onPick, onClose }) {
@@ -4531,7 +4568,13 @@ const ThemeBtn = ({ theme, flip }) => React.createElement("button", {
 }, theme === "dark" ? "\u2600" : "\u263e");
 
 const DEALER_NAMES = { dealer1: "Meridian Capital", dealer2: "Halcyon Markets" };
-const DEALER_NAME = p => DEALER_NAMES[cleanRole(p)] || cleanRole(p) || "Dealer";
+// Wallet dealers all clean to "wallet"; keep the tail of the hint so two of them can be
+// told apart -- the same "…5108" the invite chip shows.
+const DEALER_NAME = p => {
+  if (DEALER_NAMES[cleanRole(p)]) return DEALER_NAMES[cleanRole(p)];
+  const m = String(p || "").split("::")[0].match(/^(.*)-([0-9a-f]{4,})$/i);
+  return m ? m[1] + " …" + m[2].slice(-4) : (cleanRole(p) || "Dealer");
+};
 const ASSET_LONGS = { CBTC: "Bitcoin", cETH: "Ethereum", CC: "Canton Coin" };
 // Who actually ISSUES each real token on DevNet. These are the registries whose assets
 // Umbra settles atomically -- name them, don't just name the underlying.
@@ -4625,7 +4668,14 @@ function RequesterDesk(P) {
   const live = mine.filter(q => !fmt(q.payload.validUntil).dead);
   const ranked = live.slice().sort((a, b) => Number(b.payload.price) - Number(a.payload.price));
   const invited = rfq ? (rfq.payload.invited || []) : [];
-  const quotedBy = new Set(live.map(q => cleanRole(q.payload.dealer)));
+  // By full party id: every wallet dealer cleans to "wallet", so one wallet's quote
+  // marked every invited wallet as having quoted.
+  const quotedBy = new Set(live.map(q => q.payload.dealer));
+  // How much of the request a quote takes: a firm quote is backed for fundedFill, a
+  // capped one takes at most maxFillAmount.
+  const takeOf = q => Math.min(offerAmt || Infinity,
+    q.payload.fundedFill != null ? Number(q.payload.fundedFill)
+      : q.payload.maxFillAmount != null ? Number(q.payload.maxFillAmount) : (offerAmt || Infinity));
 
   // real market maths — mid comes from the ledgerless price feed; no invented spread
   const offerAmt = rfq ? Number(rfq.payload.offerAmount) : 0;
@@ -4769,14 +4819,15 @@ function RequesterDesk(P) {
             React.createElement("table", { className: "qm rq-qm" },
               React.createElement("thead", null, React.createElement("tr", null,
                 React.createElement("th", null, "Dealer"),
-                React.createElement("th", null, "You receive"),
-                React.createElement("th", null, "Implied rate"),
+                React.createElement("th", null, "Fills"),
+                React.createElement("th", null, "Rate"),
+                React.createElement("th", null, "You get"),
                 React.createElement("th", null, "vs mkt"),
                 React.createElement("th", null, "Expires"),
                 React.createElement("th", null))),
               React.createElement("tbody", null,
                 ranked.length === 0
-                  ? React.createElement("tr", null, React.createElement("td", { colSpan: 6, className: "waiting" },
+                  ? React.createElement("tr", null, React.createElement("td", { colSpan: 7, className: "waiting" },
                       rfq ? "Waiting for quotes\u2026"
                           : "No live request. Create one to invite dealers."))
                   : ranked.map((q, i) => {
@@ -4792,12 +4843,24 @@ function RequesterDesk(P) {
                               React.createElement("div", { className: "rq-dn" }, DEALER_NAME(p.dealer)),
                               best ? React.createElement("div", { className: "rq-bp" }, "\u2605 Best price")
                                    : React.createElement("div", { className: "rq-ds" }, "quoted")))),
-                        React.createElement("td", null,
-                          React.createElement("div", { className: "rq-px m" }, fmtNum(p.price)),
-                          React.createElement("div", { className: "rq-pu" }, dispSym(p.wantAsset.symbol))),
+                        // How much of the request this dealer takes, then its price, then
+                        // what that part pays. "You receive" showed the price for the WHOLE
+                        // request even when the dealer only took a third of it.
+                        (function () {
+                          const take = takeOf(q), whole = !offerAmt || take >= offerAmt - 1e-12;
+                          return React.createElement("td", null,
+                            React.createElement("div", { className: "rq-fill m" },
+                              whole ? "All " + fmtAmtStr(offerAmt) : fmtAmtStr(take) + " of " + fmtAmtStr(offerAmt)),
+                            React.createElement("div", { className: "rq-fbar" },
+                              React.createElement("span", { style: { width: (offerAmt ? Math.min(100, take / offerAmt * 100) : 100) + "%" } })));
+                        })(),
                         React.createElement("td", null,
                           React.createElement("div", { className: "m" }, offerAmt ? fmtNum(Number(p.price) / offerAmt) : "\u2014"),
-                          React.createElement("div", { className: "rq-pu" }, dispSym(p.wantAsset.symbol), " / ", dispSym(p.offerAsset.symbol))),
+                          React.createElement("div", { className: "rq-pu" }, dispSym(p.wantAsset.symbol), " per ", dispSym(p.offerAsset.symbol))),
+                        React.createElement("td", null,
+                          React.createElement("div", { className: "rq-px m" },
+                            offerAmt ? fmtNum(Number(p.price) * takeOf(q) / offerAmt) : fmtNum(p.price)),
+                          React.createElement("div", { className: "rq-pu" }, dispSym(p.wantAsset.symbol))),
                         React.createElement("td", { className: "m " + (b == null ? "" : b >= 0 ? "up" : "dn") },
                           fmtVsMkt(b)),
                         React.createElement("td", { className: "m " + (e.warn ? "warn" : "") }, e.txt),
@@ -4824,7 +4887,7 @@ function RequesterDesk(P) {
               : null,
             (rfq && invited.length > quotes.length)
               ? React.createElement("div", { className: "rq-passed" },
-                  invited.map(d => cleanRole(d)).filter(d => !quotedBy.has(d)).map(d =>
+                  invited.filter(d => !quotedBy.has(d)).map(d =>
                     React.createElement("div", { className: "rq-prow", key: d },
                       React.createElement("span", { className: "rq-dd", style: { background: "var(--dim)" } }),
                       React.createElement("span", { className: "rq-pn" }, DEALER_NAME(d)),
@@ -4927,7 +4990,7 @@ function RequesterDesk(P) {
             React.createElement("span", { className: "mod-c m" }, invited.length)),
           React.createElement("div", { className: "mod-b flush" },
             invited.map(d => {
-              const r = cleanRole(d), has = quotedBy.has(r);
+              const r = cleanRole(d), has = quotedBy.has(d);
               return React.createElement("div", { className: "iv-r", key: d },
                 React.createElement("span", { className: "rq-dd", style: { background: ROLES[r] ? ROLES[r].dot : "var(--dim)" } }),
                 React.createElement("span", { className: "iv-n" }, DEALER_NAME(d)),
