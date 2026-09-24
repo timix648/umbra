@@ -1,0 +1,30 @@
+[Unit]
+Description=Umbra venue signer (keys in their own process)
+After=network.target
+[Service]
+User=umbrasigner
+Group=umbra
+WorkingDirectory=/opt/umbra/signer
+EnvironmentFile=/opt/umbra/signer/signer.env
+ExecStart=/usr/bin/node /opt/umbra/signer/signer-daemon.js
+RuntimeDirectory=umbra-signer
+RuntimeDirectoryMode=0750
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/umbra/signer
+StandardOutput=append:/var/log/umbra-signer.log
+StandardError=append:/var/log/umbra-signer.log
+[Install]
+WantedBy=multi-user.target
+#---- umbra-v3.service.d/unprivileged.conf
+[Service]
+User=umbra
+Group=umbra
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=full
+PrivateTmp=true
