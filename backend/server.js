@@ -160,6 +160,7 @@ const OPEN_POSTS = [
   /^\/api\/auth\//,
   /^\/api\/ext\/onboard\//,
   /^\/api\/ext\/(prepare|execute)$/,
+  /^\/api\/admin\/(login|logout)$/,      // admin.js checks its own password and cookie
 ];
 
 app.use((req, res, next) => {
@@ -196,6 +197,9 @@ const PKGN = process.env.PACKAGE_NAME;
 // before 0.3.0 did.
 const FEE_PARTY = process.env.UMBRA_FEE_PARTY || "";
 const FEE_BPS = Number(process.env.UMBRA_FEE_BPS || 5);
+// A campaign stamped on every receipt settled while it runs (0.13.0), e.g.
+// UMBRA_CAMPAIGN=volume-sprint-1. The admin dashboard's leaderboard filters on it.
+const CAMPAIGN = String(process.env.UMBRA_CAMPAIGN || "").trim();
 // ~$10 at August 2026 marks (cBTC 64195, cETH 1898.24, CC 0.091957). A floor only bites
 // when 5 bps comes to less than it, so at $10 it applies below ~$20k of notional and
 // never touches a real block. Deliberately low while testing; raise it later.
@@ -703,12 +707,19 @@ app.get("/api/mode", async (req, res) => {
 // resolves either and contracts created under 0.2.0 stay usable.
 const UMBRA_DAR = {
   name: "umbra-v9",
-  version: "0.3.0",
+  version: "0.13.0",
   // The package id to check for once uploaded, and to pin in packageIdSelectionPreference.
-  packageId: "2831ba0bbad750ebe3bfba3b881015523d722e80ba2d208ceb522a91c490bd88",
-  sha256: "8af967257acc61fbc0ec68dcae6beac0d4b254e713f8136353734537a8b07ebd",
-  dar: "/dar/umbra-v9-0.3.0.dar",
+  packageId: "4436f5dd2254ebd38311f25472989ed060087f70ff02b387520e921c629d43fc",
+  sha256: "fba04a1b439196da47ae63471128dd72adc8a193c798e1ca6c3f1ae76e10be1e",
+  dar: "/dar/umbra-v9-0.13.0.dar",
 };
+// The DAR itself, from backend/dar (a build output, so not in git: copy
+// .daml/dist/umbra-v9-<version>.dar there when deploying).
+app.get("/dar/:file", (req, res) => {
+  const f = path.basename(String(req.params.file));
+  if (!/^umbra-v9-[0-9.]+\.dar$/.test(f)) return res.status(404).end();
+  res.sendFile(path.join(__dirname, "dar", f), (e) => { if (e && !res.headersSent) res.status(404).end(); });
+});
 
 app.get("/api/package", async (req, res) => {
   try {
@@ -3168,6 +3179,8 @@ async function settleDeal(deal, L) {
         // the market mid now, stamped on the receipt so the book can show the trade
         // against market (0.12.2); a missing feed just leaves it empty
         refMid: await refMidFor(p.offerAsset.symbol, p.wantAsset.symbol).then(m => m == null ? null : String(m)).catch(() => null),
+        // the campaign running now, e.g. a volume competition (0.13.0); none by default
+        campaign: CAMPAIGN || null,
       } } }],
     disclosedContracts: disclosed,
   }, "settle-deal", { duty: true });
@@ -5096,6 +5109,12 @@ app.post("/api/governance/confirm", async (req, res) => {
 // broken edit to it, must not stop the venue from starting.
 try { require("./probe_verify.js")(app); }
 catch (e) { console.log("[probe] not mounted:", e.message); }
+
+// The admin dashboard at /admin (admin.js): password-gated, linked from nowhere.
+require("./admin").mountAdmin(app, {
+  partyIdFor, queryActive, marketUsd, loadWallets, loadDealerDirectory,
+  feedTicker: () => feedTicker, faucetLog: () => faucetLog, campaign: CAMPAIGN,
+});
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () =>

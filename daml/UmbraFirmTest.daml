@@ -9,6 +9,7 @@ import Daml.Script
 import DA.Time (addRelTime, minutes)
 import DA.Assert ((===))
 import DA.List (sort)
+import DA.Optional (isSome)
 
 -- ============================================================================
 -- Proofs for firm quotes (0.12.0).
@@ -178,7 +179,7 @@ settle f d dealer fr = do
   _ <- submitMulti [f.operator] [f.requester, dealer] do
     exerciseCmd d SettleDeal with
       offerAllocCid = o; wantAllocCid = w; offerArgs = ea; wantArgs = ea
-      feeAllocCid = fee; feeArgs = fmap (const ea) fee; feeReceiver = fr; refMid = Some 499.0
+      feeAllocCid = fee; feeArgs = fmap (const ea) fee; feeReceiver = fr; refMid = Some 499.0; campaign = None
   pure ()
 
 aFirmQuoteIsOneSignatureAndLocksTheDealersSide : Script ()
@@ -387,3 +388,46 @@ theNextRequestTakesBackLocksOnTheLastOne = do
   total f.dealerA "Amulet" >>= (=== 2000.0)
   gone <- queryContractId f.dealerA q
   gone === None
+
+-- 0.13.0: every part of one award carries the same award id, so a fill across several
+-- dealers can be read back as one trade.
+oneAwardAcrossTwoDealersSharesOneId : Script ()
+oneAwardAcrossTwoDealersSharesOneId = do
+  f <- setupF
+  (rfq, ia, ib) <- openRfq f
+  qa <- firm f f.dealerA ia 1000.0 (Some 1.0) None
+  qb <- firm f f.dealerB ib 990.0 (Some 1.0) None
+  btc <- mint f.requester f.cbtc 2.0
+  [da, db] <- submit f.requester do
+    exerciseCmd rfq AwardFirm with
+      parts = [ FirmPart with quoteCid = qa; fill = 1.0; offerLock = call f.btcReg [btc]
+              , FirmPart with quoteCid = qb; fill = 1.0; offerLock = call f.btcReg [] ]
+      releases = []; keepRest = False
+  Some a <- queryContractId f.operator da
+  Some b <- queryContractId f.operator db
+  assertMsg "a part of an award must carry the award's id" (isSome a.awardId)
+  a.awardId === b.awardId
+  (a.dealer, b.dealer) === (f.dealerA, f.dealerB)
+
+-- ...and the receipt keeps it, with the campaign the venue stamped when it settled.
+theReceiptKeepsTheAwardIdAndTheCampaign : Script ()
+theReceiptKeepsTheAwardIdAndTheCampaign = do
+  f <- setupF
+  (rfq, ia, _) <- openRfq f
+  q <- firm f f.dealerA ia 1000.0 None None
+  btc <- mint f.requester f.cbtc 2.0
+  [d] <- submit f.requester do
+    exerciseCmd rfq AwardFirm with
+      parts = [FirmPart with quoteCid = q; fill = 2.0; offerLock = call f.btcReg [btc]]
+      releases = []; keepRest = False
+  Some deal <- queryContractId f.operator d
+  o <- legOf f.requester f.requester "offer"
+  w <- legOf f.requester f.dealerA "want"
+  _ <- submitMulti [f.operator] [f.requester, f.dealerA] do
+    exerciseCmd d SettleDeal with
+      offerAllocCid = o; wantAllocCid = w; offerArgs = ea; wantArgs = ea
+      feeAllocCid = None; feeArgs = None; feeReceiver = None; refMid = None
+      campaign = Some "volume-sprint-1"
+  [(_, rc)] <- query @SettlementReceipt f.requester
+  rc.awardId === deal.awardId
+  rc.campaign === Some "volume-sprint-1"

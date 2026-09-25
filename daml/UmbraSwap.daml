@@ -754,6 +754,7 @@ template SwapQuote
           settleBefore = addRelTime now (minutes 30)
           feeParty = venueFeeParty
           feeAmount = venueFeeAmount
+          awardId = Some (awardRef requester now)
 
     choice AwardRealSwap : ContractId SwapDeal
       with
@@ -815,6 +816,7 @@ template SwapQuote
           settleBefore = addRelTime now (minutes 30)
           feeParty = venueFeeParty
           feeAmount = venueFeeAmount
+          awardId = Some (awardRef requester now)
 
 
 -- ----------------------------------------------------------------------------
@@ -845,6 +847,10 @@ template SwapDeal
     settleBefore   : Time
     feeParty       : Optional Party
     feeAmount      : Optional Decimal
+    -- Which award this deal came from (0.13.0). Every part of one award -- a fill
+    -- across several dealers -- carries the same id, so its receipts can be read
+    -- back as one trade. None on deals made before 0.13.0.
+    awardId        : Optional Text
   where
     signatory requester, dealer
     observer operator
@@ -862,6 +868,9 @@ template SwapDeal
         feeReceiver   : Optional (ContractId FeeReceiver)
         -- the market mid at execution, stamped on the receipt (0.12.2)
         refMid        : Optional Decimal
+        -- the venue's campaign running when it settled, e.g. a volume competition
+        -- (0.13.0). Stamped by the venue; it moves nothing.
+        campaign      : Optional Text
       controller operator
       do
         now <- getTime
@@ -932,6 +941,8 @@ template SwapDeal
           settledVia = "deal"
           executedAt = now
           refMid
+          awardId
+          campaign
 
     -- Past the lock deadline, send every lock home. Only legs of THIS deal, only
     -- back to their senders (Allocation_Cancel returns the holdings to the sender).
@@ -1282,6 +1293,10 @@ template SettlementReceipt
     -- The market mid when it executed (0.12.2), so the book can show how far from
     -- market the trade was. Optional: receipts written before it carry none.
     refMid      : Optional Decimal
+    -- The award this trade was part of, and the venue campaign it settled under
+    -- (0.13.0). None on receipts from other paths or made before 0.13.0.
+    awardId     : Optional Text
+    campaign    : Optional Text
   where
     signatory requester, dealer
     observer operator
@@ -1343,6 +1358,8 @@ template SwapSettlement
           feeParty; feeAmount; settledVia
           executedAt = now
           refMid
+          awardId = None
+          campaign = None
         pure ()
 
     -- v7 REAL path: one-command, all-signed atomic settle for registry tokens.
@@ -1432,6 +1449,8 @@ template SwapSettlement
           feeParty; feeAmount; settledVia
           executedAt = now
           refMid
+          awardId = None
+          campaign = None
         pure ()
 
     -- Either principal can abort before execution; both allocations are then
@@ -1740,6 +1759,11 @@ releaseLocks w f wa fa = do
   pure (r1.senderHoldingCids ++ r2)
 
 -- Take each part in turn, chaining the requester's change from one lock to the next.
+-- One award's id: its requester and the ledger time of the award. Every part of an
+-- award is created in the same transaction, so every part carries the same id.
+awardRef : Party -> Time -> Text
+awardRef requester now = partyToText requester <> "@" <> show now
+
 takeParts : ContractId SwapRfq -> [FirmPart] -> [ContractId Holding] -> Update [ContractId SwapDeal]
 takeParts _ [] _ = pure []
 takeParts rfq (x :: xs) change = do
@@ -1824,6 +1848,7 @@ template FirmQuote
           settleBefore = settleBy
           feeParty
           feeAmount = partFee
+          awardId = Some (awardRef requester now)
         pure (d, change)
 
     -- The requester passes on this quote (another won, or the request is withdrawn):

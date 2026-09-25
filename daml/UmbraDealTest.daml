@@ -110,7 +110,7 @@ venueSettlesWhenLegsMatch = do
   _ <- submitMulti [t.operator] [t.requester, t.dealer] do
     exerciseCmd d SettleDeal with
       offerAllocCid = o; wantAllocCid = w; offerArgs = ea; wantArgs = ea
-      feeAllocCid = Some f; feeArgs = Some ea; feeReceiver = None; refMid = None
+      feeAllocCid = Some f; feeArgs = Some ea; feeReceiver = None; refMid = None; campaign = None
   rq <- holdings t.requester
   map (\(_, h) -> (h.asset.symbol, h.amount)) rq === [("Amulet", 1000.0)]
   dl <- holdings t.dealer
@@ -131,7 +131,7 @@ feeLandsInAWalletTheVenueHasNoKeyFor = do
   _ <- submitMulti [t.operator] [t.requester, t.dealer] do
     exerciseCmd d SettleDeal with
       offerAllocCid = o; wantAllocCid = w; offerArgs = ea; wantArgs = ea
-      feeAllocCid = Some f; feeArgs = Some ea; feeReceiver = Some fr; refMid = None
+      feeAllocCid = Some f; feeArgs = Some ea; feeReceiver = Some fr; refMid = None; campaign = None
   v <- holdings t.vault
   map (\(_, h) -> (h.asset.symbol, h.amount)) v === [("Amulet", 5.0)]
 
@@ -146,7 +146,7 @@ aWalletFeeNeedsItsFeeReceiver = do
   submitMultiMustFail [t.operator] [t.requester, t.dealer] do
     exerciseCmd d SettleDeal with
       offerAllocCid = o; wantAllocCid = w; offerArgs = ea; wantArgs = ea
-      feeAllocCid = Some f; feeArgs = Some ea; feeReceiver = None; refMid = None
+      feeAllocCid = Some f; feeArgs = Some ea; feeReceiver = None; refMid = None; campaign = None
 
 aLegThatIsNotTheDealIsRefused : Script ()
 aLegThatIsNotTheDealIsRefused = do
@@ -158,7 +158,7 @@ aLegThatIsNotTheDealIsRefused = do
   submitMultiMustFail [t.operator] [t.requester, t.dealer] do
     exerciseCmd d SettleDeal with
       offerAllocCid = o; wantAllocCid = short; offerArgs = ea; wantArgs = ea
-      feeAllocCid = None; feeArgs = None; feeReceiver = None; refMid = None
+      feeAllocCid = None; feeArgs = None; feeReceiver = None; refMid = None; campaign = None
 
 onlyTheVenueSettles : Script ()
 onlyTheVenueSettles = do
@@ -168,7 +168,7 @@ onlyTheVenueSettles = do
   w <- lock t t.dealer t.requester t.cc 1000.0 "want"
   let settle = exerciseCmd d SettleDeal with
         offerAllocCid = o; wantAllocCid = w; offerArgs = ea; wantArgs = ea
-        feeAllocCid = None; feeArgs = None; feeReceiver = None; refMid = None
+        feeAllocCid = None; feeArgs = None; feeReceiver = None; refMid = None; campaign = None
   submitMustFail t.requester settle
   submitMustFail t.dealer settle
   submitMustFail t.outsider settle

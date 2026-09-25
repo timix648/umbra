@@ -47,3 +47,6 @@ backend/package-lock.json
 sdk-build/node_modules/
 sdk-build/package-lock.json
 *.local.js
+
+# the DAR served at /dar/ -- a build output, copied in at deploy
+backend/dar/

@@ -78,7 +78,7 @@ node B is `decman-2` on the app-user participant (JSON API 2975).
 
 ```bash
 cd umbra
-dpm build                       # -> .daml/dist/umbra-v9-0.12.2.dar
+dpm build                       # -> .daml/dist/umbra-v9-0.13.0.dar
 ```
 
 ### 3. The mechanics, without Umbra's server

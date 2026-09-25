@@ -213,7 +213,7 @@ BitSafe's LocalNet sandbox on one machine.
 ### 1. Build and test
 
 ```bash
-dpm build            # -> .daml/dist/umbra-v9-0.12.2.dar
+dpm build            # -> .daml/dist/umbra-v9-0.13.0.dar
 dpm test             # 100 Daml Script proofs: swap, firm quotes, deals, splits, desk,
                      # governance, mandate, dealer registry, trust boundary,
                      # settlement guards, auction and partial fills
@@ -228,7 +228,7 @@ cd backend && npm install && npm test
 ```bash
 curl -X POST "$LEDGER_API/v2/packages" \
   -H "Content-Type: application/octet-stream" -H "Authorization: Bearer $TOKEN" \
-  --data-binary @.daml/dist/umbra-v9-0.12.2.dar
+  --data-binary @.daml/dist/umbra-v9-0.13.0.dar
 ```
 
 The build carries the registries' own CIP-56 packages from `vendor/registry-matched/`.

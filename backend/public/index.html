@@ -41,8 +41,15 @@
     --ok:#3DD68C; --okbg:rgba(61,214,140,.12); --okline:rgba(61,214,140,.5);
     --glow:0 0 0 3px rgba(157,116,255,.16);
     --rad:2px;
+    /* Dealer colours for fills and receipts: eight hues in a fixed order, checked for
+       colour-blind separation and contrast on --bg2. A ninth dealer never gets a
+       generated hue -- it folds into "Others" (--s-other). */
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500;
+    --s5:#d55181; --s6:#008300; --s7:#9085e9; --s8:#e66767; --s-other:#5F6B80;
   }
   [data-theme="light"]{
+    --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100;
+    --s5:#e87ba4; --s6:#008300; --s7:#4a3aa7; --s8:#e34948; --s-other:#8A92A3;
     /* Cards read against the page, lines are visible, and every text level passes
        WCAG AA on the card colour (dim was #9A9AA4, about 2.6:1). */
     --bg:#DCE2EB; --bg2:#F8F9FC; --bg3:#E4E9F0; --hover:#D3DAE5;
@@ -402,11 +409,10 @@
   .spl-bar{display:flex;height:14px;border-radius:7px;overflow:hidden;background:repeating-linear-gradient(135deg,var(--bg3) 0 6px,var(--bg2) 6px 12px);border:1px solid var(--line)}
   .spl-seg{height:100%;transform-origin:left center;animation:splGrow .55s cubic-bezier(.2,.8,.2,1) both}
   .spl-seg + .spl-seg{box-shadow:inset 2px 0 0 var(--bg)}
-  .s0{background:var(--accent)} .s1{background:var(--ok)} .s2{background:var(--amber)}
   @keyframes splGrow{from{transform:scaleX(0);opacity:.4}to{transform:scaleX(1);opacity:1}}
   @media (prefers-reduced-motion: reduce){.spl-seg{animation:none}}
   .spl-scale{display:flex;justify-content:space-between;margin-top:6px;font-size:11px;color:var(--dim)}
-  .spl-lns{margin-top:12px;display:flex;flex-direction:column;gap:6px}
+  .spl-lns{margin-top:12px;display:flex;flex-direction:column;gap:6px;max-height:190px;overflow:auto}
   .spl-ln{display:grid;grid-template-columns:10px 1.2fr 1fr 1fr 1.2fr;gap:10px;align-items:center;font-size:13px;color:var(--mute)}
   .spl-dot{width:10px;height:10px;border-radius:3px}
   .spl-at{color:var(--dim)}
@@ -629,11 +635,26 @@
     transition:max-height calc(580ms / var(--spd)) cubic-bezier(.3,.7,.2,1),opacity calc(420ms / var(--spd)) ease}
   [data-phase="settled"] [data-role="receipt-ok"]{max-height:280px;opacity:1;margin-top:18px}
   [data-phase="reverted"] [data-role="receipt-reverted"]{max-height:280px;opacity:1;margin-top:18px}
-  .vl-parts{margin:4px 0 10px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;text-align:left}
-  .vl-pt{display:grid;grid-template-columns:1.2fr auto 14px auto;gap:8px;align-items:center;padding:4px 0;font-size:12px;color:var(--mute)}
-  .vl-pd{color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .vl-pa{color:var(--dim);text-align:center}
-  .vl-pr{color:var(--text);text-align:right}
+  .fd{display:grid;grid-template-columns:132px 1fr;gap:16px;align-items:center;margin:6px 0 12px;padding:12px;
+    border:1px solid var(--line);border-radius:8px;text-align:left}
+  .fd-chart{position:relative;width:132px;height:132px}
+  .fd-chart svg{width:100%;height:100%;display:block}
+  .fd-seg{animation:fdIn .7s cubic-bezier(.3,.7,.2,1) backwards;transition:stroke-width .15s}
+  .fd-seg:hover{stroke-width:14}
+  @keyframes fdIn{from{stroke-dasharray:0 var(--c)}}
+  @media (prefers-reduced-motion: reduce){.fd-seg{animation:none}}
+  .fd-mid{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none}
+  .fd-mid b{font-size:22px;color:var(--text);line-height:1}
+  .fd-mid span{font-size:11px;color:var(--mute);margin-top:3px}
+  .fd-side{min-width:0}
+  .fd-list{display:flex;flex-direction:column;gap:5px;min-width:0}
+  .fd-list.all{max-height:190px;overflow:auto;padding-right:4px}
+  .fd-row{display:grid;grid-template-columns:10px minmax(0,1fr) auto auto;gap:8px;align-items:center;font-size:12px;color:var(--mute)}
+  .fd-sw{width:10px;height:10px;border-radius:3px}
+  .fd-n{color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fd-p{color:var(--text);text-align:right}
+  .fd-a{text-align:right}
+  @media (max-width:520px){.fd{grid-template-columns:1fr;justify-items:center}.fd-side{width:100%}}
   .vl-more{margin-top:4px;padding:0;border:0;background:none;color:var(--accent);font:600 12px var(--sans);cursor:pointer}
   .vl-rc{text-align:left;border-top:1px solid var(--line)}
   .vl-rr{display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:9px 0;
@@ -4176,10 +4197,10 @@ function SplitPlan({ plan, onPick }) {
     return () => document.removeEventListener("keydown", k);
   }, []);
   const seg = (x, i) => React.createElement("span", {
-    key: x.q.contractId + mode, className: "spl-seg s" + (i % 3),
-    style: { width: (x.fill / total * 100) + "%", animationDelay: (i * 0.22) + "s" } });
+    key: x.q.contractId + mode, className: "spl-seg",
+    style: { width: (x.fill / total * 100) + "%", background: dealerColor(i), animationDelay: (Math.min(i, 8) * 0.18) + "s" } });
   const line = (x, i) => React.createElement("div", { key: x.q.contractId, className: "spl-ln" },
-    React.createElement("span", { className: "spl-dot s" + (i % 3) }),
+    React.createElement("span", { className: "spl-dot", style: { background: dealerColor(i) } }),
     React.createElement("span", { className: "spl-d" }, DEALER_NAME(x.q.payload.dealer)),
     React.createElement("span", { className: "m" }, fmtAmtStr(x.fill) + " " + off),
     React.createElement("span", { className: "spl-at m" }, "@ " + fmtNum(Number(x.q.payload.price) / total)),
@@ -5127,6 +5148,60 @@ function GovernancePanel({ onOpen }) {
         }, "Review")); }));
 }
 
+// A dealer's colour by its place in a fill: eight distinct hues, then "Others".
+const DEALER_SLOTS = 8;
+const dealerColor = i => i < DEALER_SLOTS ? "var(--s" + (i + 1) + ")" : "var(--s-other)";
+
+// A fill across several dealers as a donut: each dealer's share of the block, drawn
+// in turn. Past eight dealers the rest share one "Others" slice; the list below the
+// chart names every one of them.
+function FillDonut({ parts, total, sym, wantSym }) {
+  const [all, setAll] = useState(false);
+  const sorted = parts.slice().sort((a, b) => Number(b.offerAmt) - Number(a.offerAmt));
+  const top = sorted.slice(0, DEALER_SLOTS), rest = sorted.slice(DEALER_SLOTS);
+  const slices = top.map((x, i) => ({ key: x.cid || i, name: x.dealerName, amt: Number(x.offerAmt), color: dealerColor(i) }));
+  if (rest.length) slices.push({ key: "others", name: "Others (" + rest.length + " dealers)",
+    amt: rest.reduce((s, x) => s + Number(x.offerAmt), 0), color: dealerColor(DEALER_SLOTS) });
+  const R = 42, C = 2 * Math.PI * R, GAP = slices.length > 1 ? 1.6 : 0;
+  let at = 0;
+  const pct = a => total > 0 ? (a / total * 100) : 0;
+  const fmtPct = a => { const p = pct(a); return (p >= 10 ? p.toFixed(0) : p.toFixed(1)) + "%"; };
+  const rows = all ? sorted : top;
+  return React.createElement("div", { className: "fd" },
+    React.createElement("div", { className: "fd-chart" },
+      React.createElement("svg", { viewBox: "0 0 100 100", role: "img",
+        "aria-label": "Fill by dealer: " + slices.map(s => s.name + " " + fmtPct(s.amt)).join(", ") },
+        React.createElement("circle", { cx: 50, cy: 50, r: R, fill: "none", stroke: "var(--bg3)", strokeWidth: 12 }),
+        slices.map((s, i) => {
+          const len = Math.max(0, s.amt / total * C - GAP);
+          const el = React.createElement("circle", { key: s.key, className: "fd-seg", cx: 50, cy: 50, r: R, fill: "none",
+            stroke: s.color, strokeWidth: 12, strokeDasharray: len + " " + (C - len),
+            strokeDashoffset: -at, transform: "rotate(-90 50 50)",
+            style: { animationDelay: (0.25 + i * 0.14) + "s", "--c": C } },
+            React.createElement("title", null, s.name + ": " + fmtPct(s.amt) + " (" + fmtNum(s.amt) + " " + sym + ")"));
+          at += s.amt / total * C;
+          return el;
+        })),
+      React.createElement("div", { className: "fd-mid" },
+        React.createElement("b", { className: "m" }, parts.length),
+        React.createElement("span", null, parts.length === 1 ? "dealer" : "dealers"))),
+    React.createElement("div", { className: "fd-side" },
+    React.createElement("div", { className: "fd-list" + (all ? " all" : "") },
+      rows.map((x, i) => React.createElement("div", { key: x.cid || i, className: "fd-row" },
+        React.createElement("span", { className: "fd-sw", style: { background: dealerColor(all ? Math.min(i, DEALER_SLOTS) : i) } }),
+        React.createElement("span", { className: "fd-n" }, x.dealerName),
+        React.createElement("span", { className: "fd-p m" }, fmtPct(Number(x.offerAmt))),
+        React.createElement("span", { className: "fd-a m" }, fmtNum(x.wantAmt) + " " + wantSym))),
+      !all && rest.length ? React.createElement("div", { className: "fd-row" },
+        React.createElement("span", { className: "fd-sw", style: { background: dealerColor(DEALER_SLOTS) } }),
+        React.createElement("span", { className: "fd-n" }, "Others (" + rest.length + ")"),
+        React.createElement("span", { className: "fd-p m" }, fmtPct(rest.reduce((s, x) => s + Number(x.offerAmt), 0))),
+        React.createElement("span", { className: "fd-a m" },
+          fmtNum(rest.reduce((s, x) => s + Number(x.wantAmt), 0)) + " " + wantSym)) : null),
+      rest.length ? React.createElement("button", { className: "vl-more", onClick: () => setAll(v => !v) },
+        all ? "Show less" : "Show all " + parts.length + " dealers") : null));
+}
+
 // Listing in the dealer directory, from the header of either desk. It was also a card
 // on the dealer desk, which said the same thing twice.
 function ListingToggle({ listed, onToggle }) {
@@ -5143,7 +5218,6 @@ function ListingToggle({ listed, onToggle }) {
 }
 
 function SettlementVault({ trade, onClose, role }) {
-  const [showAllParts, setShowAllParts] = useState(false);
   const [phase, setPhase] = useState("idle");
   const [proof, setProof] = useState(null);
   const failed = !!(trade && trade.failed);
@@ -5204,18 +5278,9 @@ function SettlementVault({ trade, onClose, role }) {
           React.createElement("div", { className: "vl-seam", "data-role": "seam" }),
           leaf(trade.wantSym, trade.wantAmt, "bottom")),
 
-        // A fill across several dealers: the totals above, each dealer's part here.
-        // Three rows show; the rest fold behind "+N more" so a long fill stays short.
-        (trade.parts && trade.parts.length > 1) ? React.createElement("div", { className: "vl-parts" },
-          (showAllParts ? trade.parts : trade.parts.slice(0, 3)).map((x, i) =>
-            React.createElement("div", { key: x.cid || i, className: "vl-pt" },
-              React.createElement("span", { className: "vl-pd" }, x.dealerName),
-              React.createElement("span", { className: "m" }, fmtNum(x.offerAmt) + " " + x.offerSym),
-              React.createElement("span", { className: "vl-pa" }, "→"),
-              React.createElement("span", { className: "m vl-pr" }, fmtNum(x.wantAmt) + " " + x.wantSym))),
-          trade.parts.length > 3 ? React.createElement("button", { className: "vl-more",
-            onClick: () => setShowAllParts(v => !v) },
-            showAllParts ? "Show less" : "+" + (trade.parts.length - 3) + " more") : null) : null,
+        // A fill across several dealers: the totals above, each dealer's share here.
+        (trade.parts && trade.parts.length > 1) ? React.createElement(FillDonut, {
+          parts: trade.parts, total: Number(trade.offerAmt), sym: trade.offerSym, wantSym: trade.wantSym }) : null,
 
         React.createElement("div", { className: "vl-say" },
           pending
@@ -6509,7 +6574,7 @@ function PartyPortal({ role, wallet, onExit }) {
           // Deals from one award share its deadline (one signature created them all), so
           // a fill across several dealers gathers into ONE receipt instead of a pop-up
           // per dealer. A part that settles first waits (up to 25s) for its siblings.
-          const groupOf = dp => dp.requester + "|" + dp.allocateBefore;
+          const groupOf = dp => dp.awardId || (dp.requester + "|" + dp.allocateBefore);   // awardId: 0.13.0
           for (const [cid, w] of Object.entries(dealWatch.current)) {
             if (openIds.has(cid)) continue;
             const dp = w.d.payload;
