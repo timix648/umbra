@@ -5645,7 +5645,7 @@ function DealerDesk(P) {
                     return React.createElement("div", { className: "ask-line dim" },
                       _share < 1 ? "For " + fmtAmtStr(_capN) + " of " + fmtAmtStr(amt) + " " + o + ", you pay " : "You pay ",
                       React.createElement("b", null, fmtNum(px + fee), " " + w),
-                      " — ", fmtNum(px), " to the buyer plus ",
+                      ": ", fmtNum(px), " to the buyer plus ",
                       React.createElement("b", null, fmtNum(fee), " " + w),
                       onFloor ? " venue fee (minimum)" : " venue fee (" + f.bps + " bps)");
                   })(),
