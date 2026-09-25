@@ -749,7 +749,7 @@
             "Dealers compete.", h("br"), h("span", null, "None of them can see each other.")),
           h("p", { className: "u-in-p" },
             "A buyer privately asks several dealers to price a block. Each dealer is " +
-            "cryptographically blind to the others — the ledger itself withholds a rival's " +
+            "cryptographically blind to the others. The ledger itself withholds a rival's " +
             "quote. The winning trade settles atomically.")),
         h("div", { className: "u-in-legend" },
           h("span", { className: "u-lab" }, "Tokenised assets"),
@@ -763,7 +763,7 @@
           h("div", { className: "u-col", style: { gap: 10 } },
             h("h2", { className: "u-connect-h" }, "Connect a Canton wallet"),
             h("p", { className: "u-connect-p" },
-              "No signup. Your wallet ", h("b", null, "is"), " the account — Umbra coordinates " +
+              "No signup. Your wallet ", h("b", null, "is"), " the account. Umbra coordinates " +
               "the trade and never holds a key.")),
           h("button", {
             type: "button", className: "u-btn u-btn-pri u-btn-lg u-btn-blk",

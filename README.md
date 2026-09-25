@@ -214,7 +214,7 @@ BitSafe's LocalNet sandbox on one machine.
 
 ```bash
 dpm build            # -> .daml/dist/umbra-v9-0.13.0.dar
-dpm test             # 100 Daml Script proofs: swap, firm quotes, deals, splits, desk,
+dpm test             # 102 Daml Script proofs: swap, firm quotes, deals, splits, desk,
                      # governance, mandate, dealer registry, trust boundary,
                      # settlement guards, auction and partial fills
 
@@ -232,6 +232,11 @@ curl -X POST "$LEDGER_API/v2/packages" \
 ```
 
 The build carries the registries' own CIP-56 packages from `vendor/registry-matched/`.
+
+The DAR Umbra runs (and serves at `/api/package`) is built with the upgrade check against
+the previous release, which also records that release inside the package:
+`dpm build --upgrades umbra-v9-0.12.2.dar`. That build is reproducible: its SHA-256 is
+`fba04a1b439196da47ae63471128dd72adc8a193c798e1ca6c3f1ae76e10be1e`, package id `4436f5dd…`.
 
 ### 3. `backend/.env`
 

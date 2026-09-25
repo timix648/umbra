@@ -2796,7 +2796,7 @@ const DEV_WALLET_KEY = process.env.UMBRA_DEV_WALLET_KEY || "";
 const DEV_WALLET_KEYDIR = process.env.UMBRA_DEV_WALLET_KEYDIR || "";
 
 // Find the key file that owns `party`. Keyfiles record their own partyId (written by
-// wallet_onboard_demo.js), so this matches rather than guesses.
+// the old wallet onboarding script), so this matches rather than guesses.
 function devKeyFor(party) {
   const fsx = require("fs"), pathx = require("path");
   const tryFile = (f) => {

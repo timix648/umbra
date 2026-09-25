@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>UMBRA — Dark OTC Venue</title>
+<title>UMBRA · Dark OTC Venue</title>
 <!-- Figtree, served from this origin (SIL OFL 1.1, /assets/fonts/OFL.txt). Not Google
      Fonts: a private venue should not tell a third party who opened it. -->
 <link rel="preload" href="/assets/fonts/figtree-latin.woff2" as="font" type="font/woff2" crossorigin>
@@ -2302,7 +2302,7 @@ const WalletLink = (() => {
     let signature;
     try { signature = await sign(prep.preparedTransactionHash); }
     catch (e) {
-      const d = new Error("Wallet closed — nothing was signed.");
+      const d = new Error("Wallet closed. Nothing was signed.");
       d.declined = true;
       throw d;
     }
@@ -2648,7 +2648,7 @@ const WalletLink = (() => {
       const a = pick();
       if (!a || !a.signRaw) throw new Error("this wallet cannot sign a hosting change here");
       try { return await a.signRaw(s, b64); }
-      catch (e) { const d = new Error("Wallet closed \u2014 nothing was signed."); d.declined = true; throw d; }
+      catch (e) { const d = new Error("Wallet closed. Nothing was signed."); d.declined = true; throw d; }
     },
     async walletHoldings() {
       const a = pick();
@@ -3012,7 +3012,7 @@ function RedactedTape({
     }
   }))))), /*#__PURE__*/React.createElement("div", {
     className: "redfoot"
-  }, "At the protocol level you cannot see ", /*#__PURE__*/React.createElement("b", null, rival), "'s quotes — not the price, not the count, not whether they exist. Enforced by Canton signatory rules, not app code."));
+  }, "At the protocol level you cannot see ", /*#__PURE__*/React.createElement("b", null, rival), "'s quotes: not the price, not the count, not whether they exist. Enforced by Canton signatory rules, not app code."));
 }
 function OperatorConsole({ onExit }) {
   const [theme, setTheme] = useState(() => {
@@ -3162,15 +3162,15 @@ function OperatorConsole({ onExit }) {
   async function flipMode(next) {
     if (busyMode) return;
     setBusyMode(true);
-    addlog(next ? "engaging signed mode — onboarding external parties…" : "reverting to operator mode", "");
+    addlog(next ? "engaging signed mode: onboarding external parties…" : "reverting to operator mode", "");
     try {
       const r = await post("/api/mode", {
         signed: next
       });
       setMode(r.signedMode);
       setParties(r.parties || {});
-      push(next ? "Signed — parties self-custody" : "Operator mode");
-      addlog(next ? "signed mode live — 3 parties hold their own keys" : "operator mode live", "ok");
+      push(next ? "Signed: parties self-custody" : "Operator mode");
+      addlog(next ? "signed mode live: 3 parties hold their own keys" : "operator mode live", "ok");
     } catch (e) {
       push(e.message, "er");
       addlog("mode: " + e.message, "er");
@@ -3219,7 +3219,7 @@ function OperatorConsole({ onExit }) {
       const _have = _rh.filter(h => sameSym(h.payload.asset.symbol, f.offerAsset.symbol))
         .reduce((s, h) => s + Number(h.payload.amount), 0);
       if (_have < Number(f.offerAmount)) {
-        push("You only hold " + _have + " " + dispSym(f.offerAsset.symbol) + " \u2014 can't offer " + f.offerAmount, "er");
+        push("You only hold " + _have + " " + dispSym(f.offerAsset.symbol) + ", not enough to offer " + f.offerAmount, "er");
         return;
       }
       await post("/api/swap/rfq", {
@@ -3298,7 +3298,7 @@ function OperatorConsole({ onExit }) {
         : "Requester accepts quote",
       "Allocate real " + offerSym + " + " + wantSym + " legs",
       "Record on-ledger settlement",
-      "Atomic execute \u2014 both real legs swap"
+      "Atomic execute: both real legs swap"
     ];
     // The remainder is a real outcome, so it gets its own beat rather than being
     // something the buyer discovers after the animation has finished.
@@ -3353,8 +3353,8 @@ function OperatorConsole({ onExit }) {
     const isCip = kind === "cip56";
     const path = isCip ? "/api/dvp/award" : "/api/award";
     const steps = isCip
-      ? ["Fund requester cash", "Fund dealer instrument", "Requester allocates (CIP-56)", "Dealer allocates (CIP-56)", "Venue proposes", "Dealer accepts", "Requester accepts", "Atomic execute — assets swap"]
-      : ["Fund requester cash", "Fund dealer instrument", "Requester accepts — cash locked", "Atomic DvP settle"];
+      ? ["Fund requester cash", "Fund dealer instrument", "Requester allocates (CIP-56)", "Dealer allocates (CIP-56)", "Venue proposes", "Dealer accepts", "Requester accepts", "Atomic execute: assets swap"]
+      : ["Fund requester cash", "Fund dealer instrument", "Requester accepts, cash locked", "Atomic DvP settle"];
     setPipe({ active: -1, steps });
     addlog((isCip ? "CIP-56 settlement initiated" : "award initiated") + (mode ? " · via party signatures" : ""), "");
     try {
@@ -3379,7 +3379,7 @@ function OperatorConsole({ onExit }) {
       };
       setSettled(prev => [trade, ...prev]);
       setOverlay(trade);
-      push("Settled — $" + r.totalCost);
+      push("Settled: $" + r.totalCost);
       addlog("DvP settled $" + Number(r.totalCost).toLocaleString() + (r.signed ? " (fully signed)" : ""), "ok");
       refresh();
     } catch (e) {
@@ -3427,7 +3427,7 @@ function OperatorConsole({ onExit }) {
     className: "spin"
   }), "onboarding…") : /*#__PURE__*/React.createElement("div", {
     className: "seg",
-    "data-tip": "Trust model — OPERATOR: the venue submits on parties' behalf. SIGNED: each party signs with its own key and the venue cannot forge anything.",
+    "data-tip": "Trust model. OPERATOR: the venue submits on parties' behalf. SIGNED: each party signs with its own key and the venue cannot forge anything.",
     style: { position: "relative" }
   }, /*#__PURE__*/React.createElement("button", {
     className: mode ? "" : "op",
@@ -3441,8 +3441,8 @@ function OperatorConsole({ onExit }) {
     const s = mode;
     const TIP = {
       requester: "The buyer initiating the trade. In SIGNED mode this party holds its own key; in OPERATOR mode it shares the venue's namespace.",
-      dealer1: "A competing dealer quoting a price. It can never see the other dealers' quotes — enforced by the ledger.",
-      dealer2: "A competing dealer quoting a price. It can never see the other dealers' quotes — enforced by the ledger."
+      dealer1: "A competing dealer quoting a price. It can never see the other dealers' quotes. The ledger enforces it.",
+      dealer2: "A competing dealer quoting a price. It can never see the other dealers' quotes. The ledger enforces it."
     };
     return /*#__PURE__*/React.createElement("div", {
       className: "id tip-below",
@@ -3509,7 +3509,7 @@ function OperatorConsole({ onExit }) {
     className: "pb flush"
   }, swapQuotesAll.length === 0 ? /*#__PURE__*/React.createElement("div", {
     className: "empty"
-  }, "No swap quotes yet. Create a swap RFQ and invite dealers \u2014 each dealer's price is visible only to you.") : /*#__PURE__*/React.createElement("table", {
+  }, "No swap quotes yet. Create a swap RFQ and invite dealers. Each price is visible only to you.") : /*#__PURE__*/React.createElement("table", {
     className: "qm"
   }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null,
       /*#__PURE__*/React.createElement("th", null, "Dealer"),
@@ -3554,7 +3554,7 @@ function OperatorConsole({ onExit }) {
               disabled: awarding,
               style: { borderColor: "var(--accentline)", color: "var(--accent2)", opacity: awarding ? .5 : 1, cursor: awarding ? "default" : "pointer" },
               onClick: () => awardSwap(q, fills[q.contractId] || ""),
-              "data-tip": "Award this quote \u2014 both assets swap atomically via CIP-56, or neither moves"
+              "data-tip": "Award this quote. Both assets swap atomically via CIP-56, or neither moves."
             }, awarding ? "Settling\u2026" : "Award")));
       }))))), /*#__PURE__*/React.createElement("div", {
     className: "pane"
@@ -3591,13 +3591,13 @@ function OperatorConsole({ onExit }) {
       disabled: awarding,
       style: awarding ? { opacity: .5, cursor: "default" } : undefined,
       onClick: () => award(q.contractId, "custom"),
-      "data-tip": "Settle via Umbra's atomic engine — cash and asset swap in one transaction, or neither moves"
+      "data-tip": "Settle via Umbra's atomic engine: cash and asset swap in one transaction, or neither moves"
     }, awarding ? "Settling\u2026" : "Award"), /*#__PURE__*/React.createElement("button", {
       className: "btn sm",
       disabled: awarding,
       style: { marginLeft: "5px", borderColor: "var(--accentline)", color: "var(--accent2)", opacity: awarding ? .5 : 1, cursor: awarding ? "default" : "pointer" },
       onClick: () => award(q.contractId, "cip56"),
-      "data-tip": "Settle via the CIP-56 token standard — each party allocates its own holding; assets swap atomically"
+      "data-tip": "Settle via the CIP-56 token standard. Each party allocates its own holding and the assets swap atomically."
     }, "CIP-56")));
   }))))), /*#__PURE__*/React.createElement("div", {
     className: "pane"
@@ -3615,7 +3615,7 @@ function OperatorConsole({ onExit }) {
     className: "log"
   }, log.length === 0 ? /*#__PURE__*/React.createElement("span", {
     className: "t"
-  }, "— no activity —") : log.map((l, i) => /*#__PURE__*/React.createElement("div", {
+  }, "No activity yet") : log.map((l, i) => /*#__PURE__*/React.createElement("div", {
     key: i
   }, /*#__PURE__*/React.createElement("span", {
     className: "t"
@@ -3651,7 +3651,7 @@ function OperatorConsole({ onExit }) {
     style: {
       paddingTop: 0
     }
-  }, /*#__PURE__*/React.createElement("b", null, pub), " contracts visible. An outsider is never a stakeholder, so the ledger discloses nothing — no RFQ, no quotes, no settlement.")))), toastNode, overlay && /*#__PURE__*/React.createElement("div", { className: "ovl", onClick: () => setOverlay(null) },
+  }, /*#__PURE__*/React.createElement("b", null, pub), " contracts visible. An outsider is never a stakeholder, so the ledger discloses nothing: no request, no quotes, no settlement.")))), toastNode, overlay && /*#__PURE__*/React.createElement("div", { className: "ovl", onClick: () => setOverlay(null) },
   /*#__PURE__*/React.createElement("div", { className: "ovlcard", onClick: e => e.stopPropagation() },
     /*#__PURE__*/React.createElement("div", { className: "eyb" }, overlay.engine === "CIP-56" ? "Atomic Settlement - CIP-56 Standard" : "Atomic Settlement"),
     /*#__PURE__*/React.createElement("div", { className: "swaprow" },
@@ -3890,7 +3890,7 @@ function SwapRfqForm({
       onChange: setInvited
     }),
     /*#__PURE__*/React.createElement("em", { className: "dlrpick-n" },
-      "Only those you invite can see this block — or price it.",
+      "Only dealers you invite can see or price this block.",
       dealers.length > 6 ? " " + dealers.length + " are listed today." : "")) : null,
 
   /*#__PURE__*/React.createElement("button", {
@@ -3910,9 +3910,9 @@ function SwapRfqForm({
       } finally { setBusy(false); }
     },
     "data-tip": _short
-      ? ("You hold " + _offerHeld + " " + offerSym + " — not enough to offer " + amount)
+      ? ("You hold " + _offerHeld + " " + offerSym + ", not enough to offer " + amount)
       : (!invited.length ? "Pick at least one dealer to ask"
-        : "Request quotes to swap one asset for another — dealers compete, winner settles atomically")
+        : "Request quotes for a swap. Dealers compete and the winner settles atomically.")
   }, busy ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", { className: "spinr" }), "Creating")
      : (!(_amt > 0) ? "Enter an amount"
         : (_short ? ("Insufficient " + offerSym)
@@ -3958,7 +3958,7 @@ function RfqForm({
       try { await onCreate({ rfqId, instrument, quantity }); setRfqId(rnd()); }
       finally { setBusy(false); }
     },
-    "data-tip": "Broadcast a request-for-quote — then invite dealers to compete on price"
+    "data-tip": "Open a request, then invite dealers to compete on price"
   }, busy ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", { className: "spinr" }), "Creating") : "Create RFQ")));
 }
 function DealerCard({
@@ -4021,7 +4021,7 @@ function DealerCard({
                               sizes[iv.contractId] || ""); }
       finally { setBusyQuote(b => { const nb = { ...b }; delete nb[iv.contractId]; return nb; }); }
     },
-    "data-tip": "Submit your bid privately \u2014 rival dealers can never see it, enforced by the ledger"
+    "data-tip": "Submit your bid privately. Rival dealers can never see it; the ledger enforces that."
   }, busyQuote[iv.contractId] ? /*#__PURE__*/React.createElement("span", { className: "spinr" }) : "Quote")))), (data.inv.length === 0 && (data.swapInv || []).length === 0) ? /*#__PURE__*/React.createElement("div", {
     className: "empty"
   }, "No invitations yet.") : data.inv.map(iv => /*#__PURE__*/React.createElement("div", {
@@ -4053,7 +4053,7 @@ function DealerCard({
       try { await onQuote(iv.contractId, name, prices[iv.contractId] || "0"); }
       finally { setBusyQuote(b => { const nb = { ...b }; delete nb[iv.contractId]; return nb; }); }
     },
-    "data-tip": "Submit your bid privately — rival dealers can never see it, enforced by the ledger"
+    "data-tip": "Submit your bid privately. Rival dealers can never see it; the ledger enforces that."
   }, busyQuote[iv.contractId] ? /*#__PURE__*/React.createElement("span", { className: "spinr" }) : "Quote"))))), (data.q.length > 0 || (data.swapQ || []).length > 0) && /*#__PURE__*/React.createElement("div", {
     className: "pb",
     style: {
@@ -4129,8 +4129,8 @@ function Balances({
 // ---- ROLE META ----
 const ROLES = {
   requester: { nm: "Requester", ds: "Institutional buyer. Request prices, compare, award.", dot: "var(--accent)" },
-  dealer1:   { nm: "Dealer 1",  ds: "Liquidity provider. Price what you're shown \u2014 nothing else.", dot: "var(--amber)" },
-  dealer2:   { nm: "Dealer 2",  ds: "Liquidity provider. Price what you're shown \u2014 nothing else.", dot: "#6AA6FF" },
+  dealer1:   { nm: "Dealer 1",  ds: "Liquidity provider. Price what you're shown, nothing else.", dot: "var(--amber)" },
+  dealer2:   { nm: "Dealer 2",  ds: "Liquidity provider. Price what you're shown, nothing else.", dot: "#6AA6FF" },
   operator:  { nm: "Venue operations", ds: "Every party at once. For running the venue, not trading on it.", dot: "var(--dim)" }
 };
 
@@ -4230,7 +4230,7 @@ function SplitPlan({ plan, onPick }) {
         React.createElement("span", null, "You get ", React.createElement("b", { className: "m" }, fmtNum(get) + " " + wnt))),
       React.createElement("div", { className: "spl-b" },
         React.createElement("button", { className: "drw-b",
-          onClick: () => onPick(mode === "all" ? "all" : (keepOpen ? "keep" : "close")) }, "Continue — sign once"),
+          onClick: () => onPick(mode === "all" ? "all" : (keepOpen ? "keep" : "close")) }, "Continue and sign"),
         React.createElement("button", { className: "wpk-x", onClick: () => onPick(null) }, "Cancel"))));
 }
 
@@ -4329,13 +4329,13 @@ function WalletConnect({ onEnter }) {
           pkgInfo.name + " " + pkgInfo.version + "), so this party cannot see a block " +
           "or price one. Whoever runs that validator installs it once: ",
           React.createElement("a", { href: pkgInfo.dar, className: "vl-link" }, "download the DAR"),
-          " — or connect a wallet on a validator that already has it.") : null)
+          ", or connect a wallet on a validator that already has it.") : null)
     : React.createElement("div", { className: "sgn-wl-t" },
         React.createElement("div", { className: "sgn-eyebrow" }, "Bring your own wallet"),
         React.createElement("div", { className: "sgn-wl-h" }, "Connect a Canton wallet"),
         React.createElement("div", { className: "sgn-wl-d" },
-          "No signup. Your wallet ", React.createElement("b", null, "is"), " the account — ",
-          "the venue coordinates the trade and never sees your key."),
+          "No signup. Your wallet ", React.createElement("b", null, "is"), " the account. ",
+          "The venue coordinates the trade and never sees your key."),
         err ? React.createElement("div", { className: "sgn-wl-err" }, err) : null);
 
   const actions = wallet
@@ -4913,7 +4913,7 @@ function RequesterDesk(P) {
                           React.createElement("button", {
                             className: "btn sm award hold" + (held ? " holding" : "") + (best ? " lead" : ""),
                             disabled: awarding,
-                            title: "Press and hold to settle \u2014 this is irreversible",
+                            title: "Press and hold to settle. This can't be undone.",
                             "data-tip": "Hold to award. Both legs settle together, or neither does.",
                             onMouseDown: () => startHold(q),
                             onMouseUp: cancelHold,
@@ -4972,10 +4972,10 @@ function RequesterDesk(P) {
                   : P.openTrade.kind === "deal"
                   ? React.createElement(React.Fragment, null,
                       React.createElement("b", null, "One step left for you:"),
-                      " lock your ", off, ". The venue settles the moment the dealer locks theirs — nothing more to sign.")
+                      " lock your ", off, ". The venue settles the moment the dealer locks theirs. Nothing more to sign.")
                   : React.createElement(React.Fragment, null,
                       React.createElement("b", null, "Signed in your wallet."),
-                      " Settlement alternates between you and the dealer — pick it up whenever it is your turn.")),
+                      " Settlement alternates between you and the dealer. Pick it up when it is your turn.")),
               React.createElement("div", { className: "ask-empty" },
                 React.createElement("div", { className: "ask-mark" },
                   pl.offerAmount != null ? fmtNum(pl.offerAmount) : "—", " " + off),
@@ -5013,7 +5013,7 @@ function RequesterDesk(P) {
                     P.readFailed ? "Balances unavailable" : "No assets yet"),
                   React.createElement("div", { className: "void-s" },
                     P.readFailed
-                      ? "Could not reach your wallet's validator. Your assets are unaffected — this is a read problem, not a balance."
+                      ? "Could not reach your wallet's validator. Your assets are unaffected. This is a read problem, not a balance problem."
                       : "Your balances appear here once funded."))
               : React.createElement("div", { className: "hl" },
                   aggHoldings(holdings, usd).map(h => React.createElement("div", { className: "hl-r", key: h.symbol },
@@ -5345,7 +5345,7 @@ function SettlementVault({ trade, onClose, role }) {
 
         React.createElement("div", { className: "vl-rc", "data-role": "receipt-reverted" },
           row("Reason", trade.reason || "a leg could not be covered", false),
-          row("Moved", "nothing \u2014 the swap is all-or-none", false)),
+          row("Moved", "nothing, the swap is all or none", false)),
 
         React.createElement("button", { className: "vl-x", onClick: onClose }, "Close")),
       proof ? React.createElement(LedgerProof, {
@@ -5700,7 +5700,7 @@ function DealerDesk(P) {
                       React.createElement("b", null, "One step left for you:"),
                       " lock the ", wnt, " you pay and the fee.")
                   : React.createElement(React.Fragment, null,
-                      React.createElement("b", null, "Your move."), " The buyer cannot settle for you — ",
+                      React.createElement("b", null, "Your move."), " The buyer cannot settle for you: ",
                       "your leg is allocated and accepted with ", React.createElement("b", null, "your key"), ".")),
               React.createElement("div", { className: "ask-empty" },
                 React.createElement("div", { className: "ask-mark" },
@@ -5912,7 +5912,7 @@ function Funding({ party, say, onChanged }) {
     try {
       say("Approve the transfer in your wallet…");
       await WalletLink.deposit({ recipient: party, amount: w.amount, admin: inst.admin, id });
-      say("Sent from your wallet. It shows under Incoming in a few seconds — press Accept to finish.");
+      say("Sent from your wallet. It shows under Incoming in a few seconds. Press Accept to finish.");
       setTimeout(load, 3000); setTimeout(load, 8000); setTimeout(loadWallet, 5000);
     } catch (e) { say((e && e.message) || "the deposit did not go through", true); }
     setBusy("");
@@ -5985,7 +5985,7 @@ function Funding({ party, say, onChanged }) {
           React.createElement("span", { style: { color: "var(--amber)" } }, "○"),
           React.createElement("b", { style: { color: "var(--text)" } },
             fmtAmtStr(o.amount) + " " + dispSym(o.instrument)),
-          "sent — waiting for ",
+          "sent, waiting for ",
           U.abbrevParty ? U.abbrevParty(o.receiver, 9, 6) : "the recipient",
           " to accept. Locked until they do.")))) : null);
 }
@@ -6056,9 +6056,9 @@ function HumanCheck({ role, pow, setPow, disabled }) {
         stroke: "currentColor", strokeWidth: 3.2, strokeLinecap: "round", strokeLinejoin: "round" },
         React.createElement("path", { d: "M5 12.5l4.5 4.5L19 7.5" })) : null),
     React.createElement("span", { className: "fct-hc-t" },
-      state === "done" ? "Verified — you can tap"
+      state === "done" ? "Verified. You can tap."
         : state === "work" ? "Checking you're human…"
-        : state === "failed" ? "The check did not finish — click to try again"
+        : state === "failed" ? "The check did not finish. Click to try again."
         : "Verify you're human",
       state === "work"
         ? React.createElement("span", { className: "fct-hc-pb" }, React.createElement("i", { style: { width: Math.round(prog * 100) + "%" } }))
@@ -6129,7 +6129,7 @@ function FaucetPage({ role, onBack, onExit, say }) {
       if (b && b.tapId) await post("/api/faucet/cancel", { party: role, tapId: b.tapId }).catch(() => {});
       await refresh();
       setMsg({ kind: e && e.declined ? "" : "bad",
-               text: e && e.declined ? "Wallet closed — nothing minted."
+               text: e && e.declined ? "Wallet closed. Nothing was minted."
                                      : ((e && e.message) || "the tap did not go through") });
     }
     setBusy(false);
@@ -6193,7 +6193,7 @@ function FaucetPage({ role, onBack, onExit, say }) {
                 : !amt ? "Enter an amount"
                 : !valid ? "At most " + fmtCC(remaining) + " CC today"
                 : !pow ? "Verify you're human first"
-                : "Tap " + fmtCC(n) + " CC — one approval"),
+                : "Tap " + fmtCC(n) + " CC"),
             msg ? React.createElement("div", { className: "fct-msg " + (msg.kind || ""), role: "status" },
               msg.text, msg.kind === "ok"
                 ? React.createElement(React.Fragment, null, " ", React.createElement("a", { onClick: onBack }, "Start trading →"))
@@ -6298,7 +6298,7 @@ function SettingsDrawer({ open, onClose, role, say, onFaucet }) {
           React.createElement("span", { className: "drw-st" + (m ? " on" : "") },
             m === undefined ? "\u2026" : m ? "On" : "Off")),
         React.createElement("p", { className: "drw-d" },
-          "Sign once. For the time you choose, Umbra opens your requests and invites every dealer, accepts the quote you pick, and proposes or accepts settlement \u2014 without asking your wallet each time."),
+          "Sign once. For the time you choose, Umbra opens your requests and invites every dealer, accepts the quote you pick, and proposes or accepts settlement, without asking your wallet each time."),
         React.createElement("p", { className: "drw-d" },
           React.createElement("b", null, "It can never move your funds."),
           " Locking your coins for a trade always needs your own signature. You can end it any time."),
@@ -6314,7 +6314,7 @@ function SettingsDrawer({ open, onClose, role, say, onFaucet }) {
                   onClick: () => setHours(h)
                 }, h === 1 ? "1 hour" : h + " hours"))),
               React.createElement("button", { className: "drw-b", disabled: busy || m === undefined, onClick: turnOn },
-                busy ? "Waiting for your wallet\u2026" : "Turn on \u2014 one signature"))),
+                busy ? "Waiting for your wallet\u2026" : "Turn on (one signature)"))),
       hs && hs.enabled ? React.createElement("section", { className: "drw-s" },
         React.createElement("div", { className: "drw-t" },
           React.createElement("h3", null, "Backup node"),
@@ -6323,7 +6323,7 @@ function SettingsDrawer({ open, onClose, role, say, onFaucet }) {
           hs.backup ? "Your account runs on " + hs.hosts.filter((h) => h.hosted).length + " nodes. One can go down and you keep trading."
                     : "Your account is on one node. Add a second so trading continues if it goes down."),
         hs.backup ? null : React.createElement("button", { className: "drw-b", disabled: !!hBusy, onClick: addBackup },
-          hBusy || "Add backup node \u2014 one approval")) : null,
+          hBusy || "Add backup node")) : null,
       onFaucet ? React.createElement("section", { className: "drw-s" },
         React.createElement("div", { className: "drw-t" },
           React.createElement("h3", null, "Test CC"),
@@ -6776,15 +6776,15 @@ function PartyPortal({ role, wallet, onExit }) {
             return { ok: true, settlementCid: s2.contractId };
           }
         }
-        const e = new Error("You accepted the swap. The venue is finalising settlement — " +
-          "your funds are allocated and nothing is lost.");
+        const e = new Error("You accepted the swap. The venue is finalising settlement. " +
+          "Your funds are allocated and nothing is lost.");
         e.waiting = true;
         throw e;
       }
       const e = new Error("Your side is signed and your " +
         (dispSym(pnd.payload.offerAsset && pnd.payload.offerAsset.symbol) || "offer") +
         " leg is allocated. Waiting for " + DEALER_NAME(pnd.payload.dealer) +
-        " to accept — nothing has moved yet, and nothing is lost.");
+        " to accept. Nothing has moved yet, and nothing is lost.");
       e.waiting = true;
       throw e;
     }
@@ -6817,7 +6817,7 @@ function PartyPortal({ role, wallet, onExit }) {
       const staleSum = stale.reduce((t, a) => t + Number(a.amount), 0);
       if (stale.length && freeSum + staleSum >= Number(al.amount)) {
         for (const a of stale) {
-          onStep("Releasing " + fmtAmtStr(a.amount) + " " + sym + " from an expired trade first — approve in your wallet…");
+          onStep("Releasing " + fmtAmtStr(a.amount) + " " + sym + " from an expired trade first. Approve in your wallet…");
           const b = await post("/api/real/withdraw/" + a.contractId + "?build=1", { role, build: true });
           await WalletLink.submit({ commands: b.commands, disclosedContracts: b.disclosedContracts });
         }
@@ -6890,7 +6890,7 @@ function PartyPortal({ role, wallet, onExit }) {
         // dropping it, which read as "nothing happened" while a leg sat allocated.
         if (a.party && a.party !== role) {
           const e = new Error("Waiting for the counterparty to sign " + a.step +
-            " — your side is done, and nothing is lost.");
+            ". Your side is done, and nothing is lost.");
           e.waiting = true;
           throw e;
         }
@@ -6905,7 +6905,7 @@ function PartyPortal({ role, wallet, onExit }) {
         const ins = rr.awaiting || {}, al = ins.allocate || {};
         if (ins.party && ins.party !== role) {
           const e = new Error("Waiting for the counterparty to allocate its own leg" +
-            " — your side is done, and nothing is lost.");
+            ". Your side is done, and nothing is lost.");
           e.waiting = true;
           throw e;
         }
@@ -6965,7 +6965,7 @@ function PartyPortal({ role, wallet, onExit }) {
         await WalletLink.submit({ commands: r.commands, disclosedContracts: r.disclosedContracts || [] });
       }
       setListed(!!r.listed);
-      say(r.listed ? "You are listed — buyers can now invite you to price blocks."
+      say(r.listed ? "You are listed. Buyers can now invite you to price blocks."
                    : "Delisted. You will not appear in the dealer directory.");
     } catch (e) { say(e.message || "could not change your listing", true); }
   }, [role, listed]);
@@ -7104,10 +7104,10 @@ function PartyPortal({ role, wallet, onExit }) {
       }
       const by = new Date(fresh[0].payload.allocateBefore).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       say("Your " + dispSym(p.offerAsset.symbol) + " is locked for " + fresh.length + (fresh.length > 1 ? " deals" : " deal") +
-          ". Each settles by itself as soon as its dealer locks — nothing more to sign. Anything not locked by " +
+          ". Each settles by itself as soon as its dealer locks. Nothing more to sign. Anything not locked by " +
           by + " comes back to you." + (plan.total - filled > 1e-12
             ? " The unfilled " + fmtAmtStr(plan.total - filled) + " " + dispSym(p.offerAsset.symbol) +
-              (keepRest ? " is open again for new quotes." : " was closed — it never left your wallet.") : ""), false, 12000);
+              (keepRest ? " is open again for new quotes." : " was closed. It never left your wallet.") : ""), false, 12000);
       load();
     } catch (e) {
       if (e && e.declined) { say(e.message, false, 8000); return; }
@@ -7218,7 +7218,7 @@ function PartyPortal({ role, wallet, onExit }) {
         await lockDealLegs(deal.contractId, setAwardStep);
         const by = new Date(deal.payload.allocateBefore).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
         say("Your " + dispSym(offerSym) + " is locked. The trade settles by itself as soon as " +
-          DEALER_NAME(p.dealer) + " locks theirs \u2014 nothing more to sign. If they have not by " + by +
+          DEALER_NAME(p.dealer) + " locks theirs. Nothing more to sign. If they have not by " + by +
           ", it comes back to you.", false, 12000);
         load();
         return;

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>UMBRA — Dark OTC Venue on Canton</title>
+<title>UMBRA · Dark OTC Venue on Canton</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2032%2032%22%3E%3Ccircle%20cx%3D%2216%22%20cy%3D%2216%22%20r%3D%2210%22%20fill%3D%22none%22%20stroke%3D%22%237c3aed%22%20stroke-width%3D%224.5%22%2F%3E%3Ccircle%20cx%3D%2216%22%20cy%3D%2216%22%20r%3D%2210.5%22%20fill%3D%22none%22%20stroke%3D%22%23c4b5fd%22%20stroke-width%3D%221.2%22%2F%3E%3C%2Fsvg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -229,7 +229,7 @@
   <div class="left">
     <div class="kicker"><span class="ln"></span> A dark venue on Canton</div>
     <h1>Block trades where <b>no one sees</b> the other side.</h1>
-    <p class="lede">Umbra is a request-for-quote venue for institutional block trades. Competing dealers price the same trade and stay <b>mutually blind</b>, and every settlement is <b>atomic</b> — asset and cash move together or not at all. Guaranteed by the ledger, not by trust.</p>
+    <p class="lede">Umbra is a request-for-quote venue for institutional block trades. Competing dealers price the same trade and stay <b>mutually blind</b>, and every settlement is <b>atomic</b>: asset and cash move together or not at all. Guaranteed by the ledger, not by trust.</p>
     <div class="cta">
       <a class="btn-primary" data-enter>Open the live venue
         <svg viewBox="0 0 24 24" fill="none"><path d="M5 12h14m-6-6 6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -254,7 +254,7 @@
           <tr><td><span class="dot a"></span>Dealer 3</td><td>CBTC / cETH</td><td>0.1</td><td><span class="rd"><i style="--w:26px"></i></span></td></tr>
         </tbody>
       </table>
-      <div class="bf">You see <b>your own quote</b>. Rival prices aren't hidden by this screen — they were <b>never disclosed to you</b> at the protocol level.</div>
+      <div class="bf">You see <b>your own quote</b>. Rival prices aren't hidden by this screen. They were <b>never disclosed to you</b> at the protocol level.</div>
     </div>
   </div>
 </header>
@@ -262,7 +262,7 @@
 <section id="why" class="reveal">
   <div class="sec-eyebrow"><span class="ln"></span><span>The problem</span></div>
   <h2 class="sec-h">On a transparent chain, a private trade is a contradiction.</h2>
-  <p class="sec-sub">Multi-dealer RFQ already works — but it runs on infrastructure where someone always sees everything. On a public chain, every quote sits in a shared mempool for rivals to read and front-run. On a centralized venue, the operator is a trusted party who <b>could</b> peek, leak, or be compelled to. The privacy is a promise. Umbra makes it a property of the ledger.</p>
+  <p class="sec-sub">Multi-dealer RFQ already works, but on infrastructure where someone always sees everything. On a public chain, every quote sits in a shared mempool for rivals to read and front-run. On a centralized venue, the operator is a trusted party who <b>could</b> peek, leak, or be compelled to. The privacy is a promise. Umbra makes it a property of the ledger.</p>
   <div class="vs">
     <div class="card old">
       <span class="seal">Today</span>
@@ -274,7 +274,7 @@
       <span class="seal">Umbra</span>
       <div class="ct"><i></i> Dark venue on Canton</div>
       <h4>Privacy is a property</h4>
-      <p>Canton has no public mempool and enforces visibility per contract: a dealer is a stakeholder only on its own quote, so rival quotes are never disclosed to it. Settlement is one indivisible transaction — both legs move, or neither does. No trusted operator in the loop.</p>
+      <p>Canton has no public mempool and enforces visibility per contract: a dealer is a stakeholder only on its own quote, so rival quotes are never disclosed to it. Settlement is one indivisible transaction: both legs move, or neither does. No trusted operator in the loop.</p>
     </div>
   </div>
 </section>
@@ -282,18 +282,18 @@
 <section id="properties" class="reveal">
   <div class="sec-eyebrow"><span class="ln"></span><span>What we prove, live</span></div>
   <h2 class="sec-h">The guarantees you can run yourself.</h2>
-  <p class="sec-sub">Not claims on a slide. Each is reproducible against the live ledger on Canton DevNet — the kind of thing you can run in front of a skeptic.</p>
+  <p class="sec-sub">Not claims on a slide. Each one is reproducible against the live ledger on Canton DevNet.</p>
   <div class="props">
     <div class="prop">
       <span class="pid">P1 · No information leakage</span>
       <h4>Dealers are mutually blind</h4>
-      <p>Invite two dealers to the same RFQ; both quote. Query the ledger as each: Dealer 1 sees one quote, Dealer 2 sees one, the requester sees both. The contrast is enforced by Canton signatory rules — not by application code filtering results.</p>
+      <p>Invite two dealers to the same RFQ; both quote. Query the ledger as each: Dealer 1 sees one quote, Dealer 2 sees one, the requester sees both. Canton's signatory rules enforce it, not application code filtering results.</p>
       <div class="ev"><svg viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg> Proven live · 1 / 1 / 2 visibility</div>
     </div>
     <div class="prop">
       <span class="pid">P2 · Atomic settlement</span>
       <h4>Delivery-versus-payment, or nothing</h4>
-      <p>Awarding a quote allocates both real legs; settlement swaps one asset for the other — real CBTC, cETH or Canton Coin — in a single transaction. There is no moment where one side holds both. Underfund it and the whole trade is rejected, with nothing stranded.</p>
+      <p>Awarding a quote allocates both real legs; settlement swaps one asset for the other (real CBTC, cETH or Canton Coin) in a single transaction. There is no moment where one side holds both. Underfund it and the whole trade is rejected, with nothing stranded.</p>
       <div class="ev"><svg viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg> Proven live · atomic swap + clean abort</div>
     </div>
   </div>
@@ -301,20 +301,20 @@
 
 <section id="trust" class="reveal">
   <div class="sec-eyebrow"><span class="ln"></span><span>The trust model</span></div>
-  <h2 class="sec-h">Two modes off one engine. Trust the operator — or trust no one.</h2>
-  <p class="sec-sub">The same trade lifecycle runs two ways. The toggle isn't a setting; it's the whole argument about what a private venue should require of its participants.</p>
+  <h2 class="sec-h">The venue coordinates. Only you can sign.</h2>
+  <p class="sec-sub">Umbra prepares each transaction and checks it before your wallet sees it. It never holds a key that can move your funds.</p>
   <div class="trust">
-    <div class="th"><span class="t">Authority model</span><span class="eb">Live toggle in the terminal</span></div>
+    <div class="th"><span class="t">Who can do what</span><span class="eb">Enforced by the ledger</span></div>
     <div class="modes">
       <div class="mode">
-        <span class="badge op">Operator mode</span>
-        <h5>The venue acts for you</h5>
-        <p>Fast path: the operator holds the rights to submit on each party's behalf. Convenient for onboarding and demos — but the operator is technically able to act as any participant.</p>
+        <span class="badge op">The venue</span>
+        <h5>Coordinates and settles</h5>
+        <p>It relays requests and quotes, settles a trade once both sides have locked their funds for it, and sends locked funds home when a deal runs out of time. That is all it can do.</p>
       </div>
       <div class="mode">
-        <span class="badge sg">Signed mode · trust no operator</span>
-        <h5>You sign with your own key</h5>
-        <p>Each party is an external Canton party holding its own signing key. Every quote, acceptance, and settlement is signed client-side. The operator relays transactions but <b>cannot forge, impersonate, or act</b> for any participant — it never holds the keys.</p>
+        <span class="badge sg">You</span>
+        <h5>Sign every move</h5>
+        <p>Your party is controlled by your wallet's key. Every request, quote, award and deposit is signed in your wallet, and the ledger <b>refuses anything without that signature</b>.</p>
       </div>
     </div>
   </div>
@@ -325,10 +325,10 @@
   <h2 class="sec-h">Built on Canton's native primitives.</h2>
   <p class="sec-sub">No bolted-on privacy layer, no mixers, no zero-knowledge overhead. The guarantees fall out of how Canton works.</p>
   <div class="stack">
-    <div class="layer"><div class="n">Ledger</div><h5>Per-contract visibility</h5><p>Signatory and observer rules decide who sees a contract. A dealer is a stakeholder only on its own quote — rivals are structurally excluded.</p></div>
+    <div class="layer"><div class="n">Ledger</div><h5>Per-contract visibility</h5><p>Signatory and observer rules decide who sees a contract. A dealer is a stakeholder only on its own quote, so rivals are structurally excluded.</p></div>
     <div class="layer"><div class="n">Settlement</div><h5>Atomic DvP</h5><p>One Daml transaction archives the cash and creates the instrument holding together. Indivisible by construction.</p></div>
     <div class="layer"><div class="n">Identity</div><h5>External-party keys</h5><p>Participants onboard as external parties whose identity is their own keypair, signing via Canton's interactive submission.</p></div>
-    <div class="layer"><div class="n">Assets</div><h5>Real assets, live</h5><p>Settles real BitSafe CBTC, onRails cETH and DSO Canton Coin atomically across issuers on Canton DevNet — via the CIP-56 token standard, not stand-in tokens.</p></div>
+    <div class="layer"><div class="n">Assets</div><h5>Real assets, live</h5><p>Settles real BitSafe CBTC, onRails cETH and DSO Canton Coin atomically across issuers on Canton DevNet, through the CIP-56 token standard.</p></div>
   </div>
 </section>
 
