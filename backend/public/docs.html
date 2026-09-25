@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Umbra Docs</title>
+<meta name="description" content="How Umbra works: requesting quotes, pricing as a dealer, settlement, privacy, fees and security.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0B0E13; --bg2:#141923; --bg3:#1A2030; --line:#222B3B; --line2:#2E3950;
+    --text:#E8EBF0; --mute:#A3AEC0; --dim:#8591A6;
+    --accent:#9D74FF; --accent2:#C2A6FF; --accentbg:rgba(157,116,255,.12); --accentline:rgba(157,116,255,.45);
+    --amber:#E0A33B; --amberbg:rgba(224,163,59,.10); --green:#4FD18B;
+    --disp:"Space Grotesk",ui-sans-serif,system-ui,sans-serif;
+    --mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font:15.5px/1.7 var(--disp);-webkit-font-smoothing:antialiased}
+  a{color:var(--accent2);text-decoration:none}
+  a:hover{text-decoration:underline}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+  ::selection{background:var(--accentbg)}
+  .mark{width:22px;height:22px;display:block;flex:none}
+
+  .top{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:18px;height:58px;padding:0 24px;
+    border-bottom:1px solid var(--line);background:rgba(11,14,19,.94);backdrop-filter:blur(10px)}
+  .brand{display:flex;align-items:center;gap:11px;color:var(--text)}
+  .brand:hover{text-decoration:none}
+  .brand b{font:600 15px/1 var(--mono);letter-spacing:.34em}
+  .brand .sub{font:600 9px/1 var(--mono);letter-spacing:.18em;color:var(--dim);text-transform:uppercase;border-left:1px solid var(--line2);padding-left:11px}
+  .grow{flex:1}
+  .top .lk{font:600 11px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--mute)}
+  .top .lk:hover{color:var(--text);text-decoration:none}
+  .enter{white-space:nowrap;font:600 11px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--accent);
+    border:1px solid var(--accentline);background:var(--accentbg);padding:9px 14px;border-radius:2px}
+  .enter:hover{background:var(--accent);color:#0c0618;text-decoration:none}
+
+  .wrap{display:grid;grid-template-columns:260px minmax(0,1fr);max-width:1180px;margin:0 auto}
+  .side{position:sticky;top:58px;height:calc(100vh - 58px);overflow:auto;padding:26px 18px 40px 24px;border-right:1px solid var(--line)}
+  .search{width:100%;padding:9px 11px;border:1px solid var(--line2);border-radius:4px;background:var(--bg2);color:var(--text);
+    font:14px var(--disp);margin-bottom:18px}
+  .search::placeholder{color:var(--dim)}
+  .grp{font:600 10px/1 var(--mono);letter-spacing:.2em;text-transform:uppercase;color:var(--dim);margin:20px 0 8px}
+  .grp:first-of-type{margin-top:0}
+  .side a{display:block;padding:6px 10px;margin:1px 0;border-radius:4px;color:var(--mute);font-size:14px}
+  .side a:hover{color:var(--text);background:var(--bg2);text-decoration:none}
+  .side a.on{color:var(--text);background:var(--accentbg);box-shadow:inset 2px 0 0 var(--accent)}
+  .side .none{color:var(--dim);font-size:13px;padding:6px 10px}
+
+  main{padding:40px 56px 80px;min-width:0}
+  .crumb{font:600 11px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin-bottom:14px}
+  h1{font-size:40px;line-height:1.12;letter-spacing:-.02em;margin:0 0 14px;font-weight:600}
+  .lead{font-size:18px;color:var(--mute);margin:0 0 30px;max-width:720px}
+  h2{font-size:22px;margin:40px 0 10px;font-weight:600;letter-spacing:-.01em;scroll-margin-top:80px}
+  h3{font-size:16px;margin:26px 0 6px;font-weight:600}
+  p,li{color:#CBD2DE;max-width:760px}
+  ul,ol{padding-left:22px}
+  li{margin:5px 0}
+  b,strong{color:var(--text)}
+  code{font:13px var(--mono);background:var(--bg3);border:1px solid var(--line);padding:1px 6px;border-radius:3px;color:var(--accent2)}
+  .note{border:1px solid var(--line2);border-left:3px solid var(--accent);background:var(--bg2);padding:14px 18px;border-radius:4px;margin:22px 0;max-width:760px}
+  .note.warn{border-left-color:var(--amber);background:var(--amberbg)}
+  .note p{margin:0}
+  .note b.t{display:block;font:600 11px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--accent2);margin-bottom:8px}
+  .note.warn b.t{color:var(--amber)}
+  table{border-collapse:collapse;margin:18px 0;width:100%;max-width:760px;font-size:14px}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font:600 11px/1.2 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+  td{color:#CBD2DE}
+  .steps{counter-reset:s;list-style:none;padding:0}
+  .steps li{counter-increment:s;position:relative;padding-left:40px;margin:14px 0}
+  .steps li::before{content:counter(s);position:absolute;left:0;top:1px;width:26px;height:26px;border-radius:50%;
+    border:1px solid var(--accentline);background:var(--accentbg);color:var(--accent2);font:600 12px/26px var(--mono);text-align:center}
+  .pn{display:flex;justify-content:space-between;gap:16px;margin-top:56px;padding-top:24px;border-top:1px solid var(--line);max-width:760px}
+  .pn a{display:block;padding:14px 16px;border:1px solid var(--line2);border-radius:4px;flex:1;color:var(--text)}
+  .pn a:hover{border-color:var(--accentline);text-decoration:none}
+  .pn a small{display:block;font:600 10px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--dim);margin-bottom:6px}
+  .pn a.nx{text-align:right}
+  .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;max-width:760px;margin:22px 0}
+  .card{display:block;padding:16px 18px;border:1px solid var(--line2);border-radius:4px;background:var(--bg2);color:var(--text)}
+  .card:hover{border-color:var(--accentline);text-decoration:none}
+  .card b{display:block;margin-bottom:4px}
+  .card span{color:var(--mute);font-size:14px}
+  .menu{display:none}
+
+  @media (max-width:860px){
+    .wrap{display:block}
+    .side{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);padding:14px 16px;display:none}
+    .side.open{display:block}
+    .menu{display:inline-flex;align-items:center;gap:8px;font:600 11px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;
+      color:var(--mute);background:none;border:1px solid var(--line2);border-radius:3px;padding:8px 10px;cursor:pointer}
+    main{padding:28px 16px 60px}
+    h1{font-size:30px}
+    .top{padding:0 16px;gap:12px}
+    .top .lk,.brand .sub{display:none}
+    .grid{grid-template-columns:1fr}
+    table{display:block;overflow-x:auto}
+  }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <g id="umb">
+    <filter id="umbGlow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="1.4" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <circle cx="12" cy="12" r="7.2" fill="none" stroke="#9D74FF" stroke-width="1.7" filter="url(#umbGlow)"/>
+    <circle cx="12" cy="12" r="7.2" fill="none" stroke="#ede9fe" stroke-width="0.5" opacity="0.85"/>
+  </g>
+</defs></svg>
+
+<nav class="top">
+  <a class="brand" href="/" title="Umbra home">
+    <svg class="mark" viewBox="0 0 24 24" fill="none"><use href="#umb"/></svg>
+    <b>UMBRA</b><span class="sub">Docs</span>
+  </a>
+  <button class="menu" id="menu" aria-expanded="false" aria-controls="side">Contents</button>
+  <div class="grow"></div>
+  <a class="lk" href="https://github.com/timix648/umbra" target="_blank" rel="noopener">GitHub</a>
+  <a class="enter" href="/app">Open the venue</a>
+</nav>
+
+<div class="wrap">
+  <aside class="side" id="side">
+    <input class="search" id="search" type="search" placeholder="Search the docs" aria-label="Search the docs">
+    <div id="nav"></div>
+  </aside>
+  <main id="doc" tabindex="-1"></main>
+</div>
+
+<script>
+// Each page: slug, group, title, lead, body (HTML). Order here is the reading order.
+const PAGES = [
+{ slug: "", group: "Start", title: "Introduction",
+  lead: "Umbra is a private request-for-quote venue on the Canton Network. A buyer asks chosen dealers to price a block; each dealer quotes blind to the others; the winning trade settles atomically on the ledger.",
+  body: `
+<h2>What Umbra does</h2>
+<p>On a transparent chain, a large order is visible before it fills, and dealers can see each other's prices. Umbra uses Canton's privacy model so that <b>only the parties to a quote can see it</b>. Rival dealers are not hidden from each other by a screen: their quotes are never sent to each other at all.</p>
+<ul>
+  <li><b>Blind competition.</b> Every invited dealer prices the same block without seeing any other quote.</li>
+  <li><b>Firm quotes.</b> A dealer's quote is backed by funds it locks when it quotes, so a quote you can take is a quote that can settle.</li>
+  <li><b>Atomic settlement.</b> Both sides of a trade and the venue fee move in one ledger transaction, or nothing moves.</li>
+  <li><b>Self-custody.</b> Your keys stay in your wallet. Every action is signed by you; the venue cannot sign for you.</li>
+</ul>
+<h2>Where to start</h2>
+<div class="grid">
+  <a class="card" href="/docs/getting-started"><b>Getting started</b><span>Connect a wallet and get test funds.</span></a>
+  <a class="card" href="/docs/requesting"><b>Requesting a quote</b><span>Ask dealers to price a block.</span></a>
+  <a class="card" href="/docs/dealing"><b>Pricing as a dealer</b><span>List yourself and send firm quotes.</span></a>
+  <a class="card" href="/docs/settlement"><b>How settlement works</b><span>What happens when you award a quote.</span></a>
+</div>
+<div class="note warn"><b class="t">DevNet</b><p>Umbra currently runs on Canton <b>DevNet</b>, a test network. Its tokens have no value. See <a href="/docs/status">Status and limitations</a>.</p></div>`},
+
+{ slug: "getting-started", group: "Start", title: "Getting started",
+  lead: "Connect a Canton wallet, create your trading party with one signature, and fund it.",
+  body: `
+<h2>1. Connect your wallet</h2>
+<ol class="steps">
+  <li>Open <a href="/app">the venue</a> and choose <b>Connect wallet</b>, then <b>Continue with Loop</b>.</li>
+  <li>Approve the connection in Loop. Loop may ask for your password first; that stays inside Loop.</li>
+  <li>The first time, Umbra creates your <b>trading party</b>: an account on the ledger controlled by your wallet's key. You approve it once.</li>
+</ol>
+<p>Loop is the wallet verified with Umbra. Other wallets that follow the Canton dApp standard (CIP-0103) are listed but not yet verified.</p>
+<h2>2. Signing in</h2>
+<p>Each time you connect, your wallet signs a short message to prove it controls your party. That session lasts <b>30 minutes</b>. When it ends, the venue returns you to the connect screen; connecting again takes one approval.</p>
+<h2>3. Fund your trading party</h2>
+<p>Your trading party is separate from your Loop wallet's own balance. Move funds in with <b>Deposit</b>, and out with <b>Withdraw</b>, on the right of the venue.</p>
+<table>
+  <tr><th>Asset</th><th>Issuer</th><th>How to get test funds</th></tr>
+  <tr><td>CC (Canton Coin)</td><td>Canton Foundation</td><td>The Umbra faucet: <b>Settings → Test CC</b>, or <a href="/faucet">/faucet</a>. Up to 5,000 CC per party every 24 hours.</td></tr>
+  <tr><td>CBTC</td><td>BitSafe</td><td>BitSafe's faucet at <a href="https://cbtc-faucet.bitsafe.finance/" target="_blank" rel="noopener">cbtc-faucet.bitsafe.finance</a>, then deposit it.</td></tr>
+  <tr><td>cETH</td><td>onRails</td><td>No public DevNet faucet. onRails grants test cETH on request.</td></tr>
+</table>
+<div class="note"><b class="t">Deposits</b><p>A deposit arrives under <b>Incoming</b>. Press <b>Accept</b> to finish it; the token standard needs the receiver's consent.</p></div>`},
+
+{ slug: "requesting", group: "Trading", title: "Requesting a quote",
+  lead: "Ask chosen dealers to price a block. Only the dealers you invite can see the request, and none of them sees another's quote.",
+  body: `
+<h2>Create a request</h2>
+<ol class="steps">
+  <li><b>Offer asset and amount.</b> What you give, for example 0.01 CBTC.</li>
+  <li><b>Want asset.</b> What you want in return, for example CC.</li>
+  <li><b>Responses close in.</b> How long dealers have to quote. After that the ledger refuses new quotes.</li>
+  <li><b>Invite dealers.</b> Pick dealers from the directory, or <b>Invite all</b>. Only invited dealers can see or price the block.</li>
+  <li><b>Create Swap RFQ</b> and approve once in your wallet. The first request also sets up your request desk, one extra approval, once.</li>
+</ol>
+<h2>Reading the quotes</h2>
+<table>
+  <tr><th>Column</th><th>Meaning</th></tr>
+  <tr><td>Fills</td><td>How much of your block this dealer takes. A dealer may take only part of it.</td></tr>
+  <tr><td>Rate</td><td>The dealer's price per unit of what you offer.</td></tr>
+  <tr><td>You get</td><td>What you receive for the part this dealer fills.</td></tr>
+  <tr><td>vs mkt</td><td>How the rate compares with the market reference. Green is better than market for you.</td></tr>
+  <tr><td>Expires</td><td>How long the quote stays firm.</td></tr>
+</table>
+<p>Quotes are listed best first. Every quote shown is <b>firm</b>: the dealer has already locked the funds behind it.</p>
+<h2>Award a quote</h2>
+<p>Press and hold <b>Hold to award</b> for about a second and a half, then approve once in your wallet. That one signature takes the quote and locks your side. The venue then settles the trade; you sign nothing more. See <a href="/docs/settlement">How settlement works</a>.</p>
+<h2>Close a request early</h2>
+<p>Use <b>Close request</b> on the live request, then <b>Confirm close</b>, and approve once. The request ends and every dealer's locked funds go back to them. Your own funds were never locked, since that only happens when you award.</p>`},
+
+{ slug: "partial-fills", group: "Trading", title: "Partial fills",
+  lead: "When the best price covers only part of your block, choose how to fill the rest.",
+  body: `
+<h2>When it happens</h2>
+<p>A dealer can price your whole block but take only part of it. When you award such a quote, Umbra shows your block as one bar and each dealer's part filling it.</p>
+<h2>Your choices</h2>
+<table>
+  <tr><th>Choice</th><th>What happens</th></tr>
+  <tr><td>All dealers</td><td>The best price fills its part and the next best prices fill the rest, each within what that dealer will take.</td></tr>
+  <tr><td>Best price only</td><td>Only the best dealer fills. Tick <b>Keep the rest open</b> to leave the remainder open for new quotes, or untick it to close the remainder.</td></tr>
+</table>
+<p>Either way it is <b>one signature</b>. The dialog shows exactly what you give and what you get before you continue.</p>
+<h2>After a partial fill</h2>
+<p>If you kept the rest open, dealers can keep quoting until the request closes. To stop early, use <b>Close request</b>.</p>
+<h2>The receipt</h2>
+<p>A fill across several dealers shows <b>one receipt</b> with the totals and each dealer's part. Each dealer's part settles as its own atomic transaction: both legs of that part move together, or neither does.</p>`},
+
+{ slug: "dealing", group: "Trading", title: "Pricing as a dealer",
+  lead: "List yourself in the directory, price blocks you are invited to, and back each quote with locked funds.",
+  body: `
+<h2>Get listed</h2>
+<p>Use the <b>shop icon</b> in the header of either desk to list or unlist yourself. Buyers can only invite dealers who are listed.</p>
+<h2>Price a block</h2>
+<ol class="steps">
+  <li>Invitations appear under <b>Blocks to price</b>. Open one.</li>
+  <li>Enter what you pay, in the want asset, for the <b>whole</b> block. <b>Ref</b> fills in the market mid; <b>+0.10%</b> and <b>−0.10%</b> nudge it.</li>
+  <li>Optionally set <b>Take at most</b> to fill only part of the block. You then pay only your share of the price.</li>
+  <li>Check the line under the price: it shows exactly what you pay, including the venue fee.</li>
+  <li><b>Seal quote to the ledger</b> and approve once. That signature records your quote and locks the funds behind it.</li>
+</ol>
+<h2>If you are not chosen</h2>
+<p>Your locked funds come back to you. Nobody else ever sees your quote, including the venue's own party.</p>
+<h2>If you are chosen</h2>
+<p>The trade settles by itself: your funds are already locked and the buyer's side is locked at award. You sign nothing more.</p>
+<div class="note"><b class="t">You cannot over-quote</b><p>The desk will not let you seal a quote you cannot back. With the fee included, it must be within what you hold.</p></div>`},
+
+{ slug: "settlement", group: "How it works", title: "How settlement works",
+  lead: "Every trade settles atomically through the Canton token standard: both legs and the fee in one transaction, or nothing.",
+  body: `
+<h2>The sequence</h2>
+<ol class="steps">
+  <li><b>Dealer quotes.</b> One signature records the quote and locks the dealer's payment and fee as <i>allocations</i> at the token's own registry.</li>
+  <li><b>Requester awards.</b> One signature takes the quote and locks the requester's side the same way.</li>
+  <li><b>Venue settles.</b> With every leg locked, the venue executes the trade. The registry moves all legs in a single transaction.</li>
+</ol>
+<h2>Why it is safe</h2>
+<ul>
+  <li>An allocation can only end two ways: executed exactly as the signed deal, or returned to its owner.</li>
+  <li>If any leg is missing, the transaction fails as a whole. Nobody can end up having paid without receiving.</li>
+  <li>If a deal is not completed in time, the locked funds go back to their owners.</li>
+</ul>
+<h2>Receipts</h2>
+<p>Each settled trade leaves a receipt on the ledger, visible to the two parties and the venue. It records the amounts, the fee and the market reference at the moment it settled. Your <b>book</b> lists them, and each links to the contract on the ledger.</p>
+<h2>Standards</h2>
+<p>Settlement uses <b>CIP-56</b>, the Canton token standard's allocation interface. It works with any token that implements it: CC, CBTC and cETH today.</p>`},
+
+{ slug: "privacy", group: "How it works", title: "Privacy",
+  lead: "Who can see what, and why. Umbra relies on Canton's sub-transaction privacy, not on hiding things in the interface.",
+  body: `
+<h2>Who sees what</h2>
+<table>
+  <tr><th>Item</th><th>Visible to</th></tr>
+  <tr><td>A request</td><td>The requester, the dealers invited to it, and the venue</td></tr>
+  <tr><td>A quote</td><td>The dealer who sent it and the requester. Not other dealers. The venue's party is not a party to it either.</td></tr>
+  <tr><td>A settled trade</td><td>The requester, the winning dealer and the venue</td></tr>
+  <tr><td>Anything</td><td>Nothing is visible to parties outside the trade</td></tr>
+</table>
+<h2>How it is enforced</h2>
+<p>On Canton, a contract is only sent to its stakeholders. A rival dealer is never a stakeholder on your quote, so the ledger never sends it to them. It is not a matter of the screen hiding it.</p>
+<div class="note warn"><b class="t">The node operator</b><p>Your trading party is hosted on a validator node, today Umbra's. Whoever runs that node can read the contracts of the parties it hosts. Contract-level privacy between dealers holds; node-level privacy needs parties hosted on nodes their owners trust. See <a href="/docs/decentralization">Decentralization</a>.</p></div>`},
+
+{ slug: "fees", group: "How it works", title: "Fees",
+  lead: "The venue charges the winning dealer a fee on the traded amount. Requesters pay nothing to the venue.",
+  body: `
+<h2>The fee</h2>
+<ul>
+  <li><b>5 basis points</b> (0.05%) of what the dealer pays, charged to the <b>winning dealer</b> only.</li>
+  <li>A <b>minimum per asset</b> applies to very small trades.</li>
+  <li>The dealer sees the exact fee before sealing a quote, and it is locked with the quote.</li>
+  <li>It is paid in the same atomic transaction as the trade, to the venue's fee account.</li>
+</ul>
+<p>Dealers whose quotes are not chosen pay nothing. Network costs on DevNet are covered by the venue's node.</p>`},
+
+{ slug: "security", group: "Trust", title: "Security and custody",
+  lead: "Umbra never holds your keys, checks every transaction before your wallet signs it, and keeps its own keys isolated.",
+  body: `
+<h2>Your keys</h2>
+<p>Your trading party is controlled by your wallet's key. Every action that moves or locks your funds is signed in your wallet. Umbra's server prepares transactions but cannot sign them for you, and the ledger refuses any transaction without your signature.</p>
+<h2>What is checked before you sign</h2>
+<p>A wallet shows a transaction hash, not the trade. So before your wallet is asked, the venue page:</p>
+<ul>
+  <li>recomputes the hash from the full transaction with Canton's own code, and refuses if it differs;</li>
+  <li>checks the transaction acts only for you;</li>
+  <li>checks every action is the one the page asked for, with the amounts you chose.</li>
+</ul>
+<p>If any check fails, nothing is sent to your wallet and the page says why.</p>
+<h2>The venue's own keys</h2>
+<p>The venue signs settlement and a few administrative actions. Its keys live in a separate signing process, under its own system account. That signer inspects every transaction and signs only an allowlisted set of actions, such as settling or cancelling a deal. The application server holds neither the keys nor their passphrase.</p>
+<div class="note warn"><b class="t">Audits</b><p>The contracts and the server have not had an external security audit yet.</p></div>`},
+
+{ slug: "decentralization", group: "Trust", title: "Decentralization",
+  lead: "A party lives on the nodes that host it. Umbra hosts parties on more than one node so that one node going down does not stop the venue.",
+  body: `
+<h2>Why it matters</h2>
+<p>If every party were hosted on one node, that node going down would stop trading. Umbra uses <b>BitSafe's Decentralization Manager</b> to host each party on several independent nodes and fails over between them.</p>
+<h2>What happens</h2>
+<ul>
+  <li><b>New wallets</b> are hosted on every configured node from the start, with one signature.</li>
+  <li><b>Existing wallets</b> can add a backup node from Settings with one signature, once a second node is configured; their contracts follow.</li>
+  <li><b>Failover.</b> The server checks each node's connection to the network and sends requests to a healthy one.</li>
+</ul>
+<h2>Status</h2>
+<p>Multi-node hosting and failover are proven on BitSafe's LocalNet sandbox. On DevNet, Umbra runs on its own node while a second operator's node is being connected. Two hosts give failover; requiring two nodes to confirm every transaction needs three.</p>
+<p>The full design and a guide to reproduce it are in the <a href="https://github.com/timix648/umbra/blob/main/docs/DECENTRALIZATION.md" target="_blank" rel="noopener">repository</a>.</p>`},
+
+{ slug: "market-reference", group: "Reference", title: "Market reference",
+  lead: "The reference price shown next to quotes and receipts, where it comes from, and what it is for.",
+  body: `
+<p>Umbra shows a live mid price for each pair from <b>CoinGecko</b>: CBTC from BitSafe's own listing, CC from Canton Network's, and cETH from ETH, since cETH is wrapped one-to-one.</p>
+<ul>
+  <li>It is a <b>reference</b>, shown to help you judge a quote. It is not enforced: any price the two sides agree can settle.</li>
+  <li>When a trade settles, the reference at that moment is written into its receipt, so your book can show how far from market each trade was.</li>
+  <li>If the feed is unavailable, the venue shows a dash rather than a made-up price.</li>
+</ul>`},
+
+{ slug: "faq", group: "Reference", title: "FAQ",
+  lead: "Short answers to common questions.",
+  body: `
+<h3>Can a dealer back out after I award?</h3>
+<p>No. A firm quote's funds are locked when it is quoted, so an award against it settles.</p>
+<h3>What if settlement fails?</h3>
+<p>Nothing moves. Locked funds return to their owners.</p>
+<h3>Why does my wallet show a hash, not the trade?</h3>
+<p>Canton wallets sign a transaction hash. The venue page checks that hash against the full transaction before asking your wallet. See <a href="/docs/security">Security</a>.</p>
+<h3>Why was I sent back to the connect screen?</h3>
+<p>Your 30-minute session ended. Connect again; it takes one approval.</p>
+<h3>Can I see other dealers' prices?</h3>
+<p>No. Only the requester sees the quotes on a request.</p>
+<h3>How much test CC can I get?</h3>
+<p>Up to 5,000 CC per party every 24 hours from the faucet.</p>`},
+
+{ slug: "glossary", group: "Reference", title: "Glossary",
+  lead: "Terms used in the venue and these docs.",
+  body: `
+<table>
+  <tr><th>Term</th><th>Meaning</th></tr>
+  <tr><td>RFQ</td><td>Request for quote. A buyer asks chosen dealers to price a block.</td></tr>
+  <tr><td>Block</td><td>The amount being traded in one request.</td></tr>
+  <tr><td>Firm quote</td><td>A quote backed by funds the dealer locked when quoting.</td></tr>
+  <tr><td>Award</td><td>Taking a quote. It locks the requester's side.</td></tr>
+  <tr><td>Allocation</td><td>Funds locked at a token's registry for one specific trade. It either executes as that trade or returns to its owner.</td></tr>
+  <tr><td>Party</td><td>An account on the Canton ledger, controlled by a key.</td></tr>
+  <tr><td>Validator / node</td><td>A server that hosts parties and connects them to the network.</td></tr>
+  <tr><td>bps</td><td>Basis points. 1 bps is 0.01%.</td></tr>
+  <tr><td>CC, CBTC, cETH</td><td>Canton Coin, BitSafe's Bitcoin, and onRails' Ether on Canton.</td></tr>
+  <tr><td>DevNet</td><td>Canton's development network. Tokens there have no value.</td></tr>
+</table>`},
+
+{ slug: "status", group: "Reference", title: "Status and limitations",
+  lead: "What runs today, and what does not yet.",
+  body: `
+<h2>Live on DevNet</h2>
+<ul>
+  <li>Requests, firm quotes, partial fills and atomic settlement of real CC and CBTC, signed in Loop.</li>
+  <li>Transaction checks before every wallet signature, and an isolated venue signer.</li>
+</ul>
+<h2>Not yet</h2>
+<ul>
+  <li><b>Mainnet.</b> Umbra runs on DevNet only.</li>
+  <li><b>A second node on DevNet.</b> Multi-node hosting is proven on a sandbox; the second DevNet operator is being connected.</li>
+  <li><b>cETH liquidity.</b> cETH is listed, but test cETH is only available from onRails on request.</li>
+  <li><b>External audit.</b> Not done yet.</li>
+</ul>
+<p>A detailed account is in <a href="https://github.com/timix648/umbra/blob/main/docs/HONESTY.md" target="_blank" rel="noopener">HONESTY.md</a>.</p>`},
+];
+
+const bySlug = Object.fromEntries(PAGES.map(p => [p.slug, p]));
+const nav = document.getElementById("nav"), doc = document.getElementById("doc");
+const side = document.getElementById("side"), menu = document.getElementById("menu");
+const slugOf = () => location.pathname.replace(/^\/docs\/?/, "").replace(/\/$/, "");
+const href = s => "/docs" + (s ? "/" + s : "");
+const text = p => (p.title + " " + p.lead + " " + p.body.replace(/<[^>]+>/g, " ")).toLowerCase();
+
+function drawNav(filter) {
+  const f = (filter || "").trim().toLowerCase(), cur = slugOf();
+  let html = "", group = null, n = 0;
+  for (const p of PAGES) {
+    if (f && !text(p).includes(f)) continue;
+    if (p.group !== group) { group = p.group; html += '<div class="grp">' + group + '</div>'; }
+    html += '<a href="' + href(p.slug) + '" data-slug="' + p.slug + '"' + (p.slug === cur ? ' class="on" aria-current="page"' : '') + '>' + p.title + '</a>';
+    n++;
+  }
+  nav.innerHTML = n ? html : '<div class="none">No page matches.</div>';
+}
+
+function render() {
+  const s = slugOf(), p = bySlug[s] || null, i = PAGES.indexOf(p);
+  if (!p) {
+    doc.innerHTML = '<div class="crumb">Docs</div><h1>Page not found</h1><p class="lead">That page does not exist. Start from the <a href="/docs">introduction</a>.</p>';
+    document.title = "Not found · Umbra Docs"; drawNav(document.getElementById("search").value); return;
+  }
+  const prev = PAGES[i - 1], next = PAGES[i + 1];
+  doc.innerHTML = '<div class="crumb">' + p.group + '</div><h1>' + p.title + '</h1><p class="lead">' + p.lead + '</p>' + p.body +
+    '<div class="pn">' + (prev ? '<a href="' + href(prev.slug) + '"><small>Previous</small>' + prev.title + '</a>' : '<span></span>') +
+    (next ? '<a class="nx" href="' + href(next.slug) + '"><small>Next</small>' + next.title + '</a>' : '<span></span>') + '</div>';
+  document.title = (p.slug ? p.title + " · " : "") + "Umbra Docs";
+  drawNav(document.getElementById("search").value);
+}
+
+// Links inside the docs change the page without a reload.
+document.addEventListener("click", e => {
+  const a = e.target.closest("a");
+  if (!a || a.target === "_blank" || e.metaKey || e.ctrlKey || e.shiftKey) return;
+  const u = new URL(a.href, location.href);
+  if (u.origin !== location.origin || !/^\/docs(\/|$)/.test(u.pathname)) return;
+  e.preventDefault();
+  if (u.pathname !== location.pathname) history.pushState(null, "", u.pathname);
+  render(); window.scrollTo(0, 0); doc.focus({ preventScroll: true });
+  side.classList.remove("open"); menu.setAttribute("aria-expanded", "false");
+});
+window.addEventListener("popstate", render);
+document.getElementById("search").addEventListener("input", e => drawNav(e.target.value));
+menu.addEventListener("click", () => {
+  const open = side.classList.toggle("open"); menu.setAttribute("aria-expanded", String(open));
+});
+render();
+</script>
+</body>
+</html>

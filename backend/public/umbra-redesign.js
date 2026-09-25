@@ -405,6 +405,8 @@
                     var next = sel.slice();
                     ids.forEach(function (i) { if (next.indexOf(i) < 0) next.push(i); });
                     props.onChange && props.onChange(next);
+                    // Everyone is in: nothing left to pick, so close without asking for Done.
+                    props.onDone && props.onDone();
                   }
                 }, needle ? "Invite " + hits.length + " matching" : "Invite all " + hits.length)
               : null,
@@ -737,7 +739,8 @@
 
       h("div", { className: "u-in-l" },
         h("div", { className: "u-col", style: { gap: 8 } },
-          h("div", { className: "u-in-brand" },
+          h("a", { className: "u-in-brand", href: "/", title: "Back to umbra",
+                   style: { textDecoration: "none", color: "inherit" } },
             h("span", { className: "u-in-ring" }),
             h("span", { className: "u-in-word" }, "Umbra")),
           h("span", { className: "u-lab" }, "Private OTC block venue")),

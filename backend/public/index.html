@@ -43,9 +43,11 @@
     --rad:2px;
   }
   [data-theme="light"]{
-    --bg:#E9EDF3; --bg2:#F4F6FA; --bg3:#DFE4EC; --hover:#D4DAE6;
-    --line:rgba(10,10,20,.09); --line2:rgba(10,10,20,.16);
-    --text:#16161C; --mute:#6A6A75; --dim:#9A9AA4;
+    /* Cards read against the page, lines are visible, and every text level passes
+       WCAG AA on the card colour (dim was #9A9AA4, about 2.6:1). */
+    --bg:#DCE2EB; --bg2:#F8F9FC; --bg3:#E4E9F0; --hover:#D3DAE5;
+    --line:rgba(10,10,20,.14); --line2:rgba(10,10,20,.24);
+    --text:#14151B; --mute:#4F5462; --dim:#5A5F6E;
     --accent:#7C4DFF; --accent2:#5B2EE5; --accentbg:rgba(124,77,255,.1); --accentline:rgba(124,77,255,.45);
     --amber:#B5791A; --amberbg:rgba(181,121,26,.1); --amberline:rgba(181,121,26,.4);
     --red:#D63A47; --redact:rgba(124,77,255,.18);
@@ -627,6 +629,12 @@
     transition:max-height calc(580ms / var(--spd)) cubic-bezier(.3,.7,.2,1),opacity calc(420ms / var(--spd)) ease}
   [data-phase="settled"] [data-role="receipt-ok"]{max-height:280px;opacity:1;margin-top:18px}
   [data-phase="reverted"] [data-role="receipt-reverted"]{max-height:280px;opacity:1;margin-top:18px}
+  .vl-parts{margin:4px 0 10px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;text-align:left}
+  .vl-pt{display:grid;grid-template-columns:1.2fr auto 14px auto;gap:8px;align-items:center;padding:4px 0;font-size:12px;color:var(--mute)}
+  .vl-pd{color:var(--text);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .vl-pa{color:var(--dim);text-align:center}
+  .vl-pr{color:var(--text);text-align:right}
+  .vl-more{margin-top:4px;padding:0;border:0;background:none;color:var(--accent);font:600 12px var(--sans);cursor:pointer}
   .vl-rc{text-align:left;border-top:1px solid var(--line)}
   .vl-rr{display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:9px 0;
     opacity:0;transform:translateY(6px);
@@ -1767,6 +1775,12 @@ async function api(path, opts, retried) {
     reauthing = reauthing || REAUTH().finally(() => { reauthing = null; });
     await reauthing;
     return api(path, opts, true);
+  }
+  // A refused read means the session ran out (30 minutes). Say so instead of letting
+  // the page show empty balances while it still looks signed in.
+  if (r.status === 401 && o.method !== "POST" && path.indexOf("/api/auth/") !== 0 &&
+      (!SESSION || Date.now() >= SESSION.exp)) {
+    try { window.dispatchEvent(new CustomEvent("umbra:session-expired")); } catch (e) {}
   }
   const t = await r.text();
   let j;
@@ -4723,17 +4737,7 @@ function RequesterDesk(P) {
         // Opting in to price other people's blocks. Here, not only on the dealer desk:
         // a wallet reaches that desk by opening an invitation, and nobody can invite it
         // until it is listed.
-        wallet && listed != null ? React.createElement("button", {
-          className: "prt-ico tip-below tip-left" + (listed ? " on" : ""), onClick: onToggleListing,
-          "aria-label": listed ? "Listed as a dealer - click to leave the directory" : "List me as a dealer",
-          "aria-pressed": !!listed,
-          "data-tip": listed ? "Listed as a dealer. Click to unlist."
-                             : "Click to list yourself as a dealer."
-        }, React.createElement("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor",
-            strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
-          React.createElement("path", { d: "M4 4h16l2 5H2z" }),
-          React.createElement("path", { d: "M4 9v11h16V9" }),
-          React.createElement("path", { d: "M10 20v-6h4v6" }))) : null,
+        wallet && listed != null ? React.createElement(ListingToggle, { listed, onToggle: onToggleListing }) : null,
         P.onSettings ? React.createElement("button", {
           className: "prt-ico tip-below tip-left", onClick: P.onSettings, "aria-label": "Settings",
           "data-tip": "Settings"
@@ -5123,7 +5127,23 @@ function GovernancePanel({ onOpen }) {
         }, "Review")); }));
 }
 
+// Listing in the dealer directory, from the header of either desk. It was also a card
+// on the dealer desk, which said the same thing twice.
+function ListingToggle({ listed, onToggle }) {
+  return React.createElement("button", {
+    className: "prt-ico tip-below tip-left" + (listed ? " on" : ""), onClick: onToggle,
+    "aria-label": listed ? "Listed as a dealer - click to leave the directory" : "List me as a dealer",
+    "aria-pressed": !!listed,
+    "data-tip": listed ? "Listed as a dealer. Click to unlist." : "Click to list yourself as a dealer."
+  }, React.createElement("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor",
+      strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": "true" },
+    React.createElement("path", { d: "M4 4h16l2 5H2z" }),
+    React.createElement("path", { d: "M4 9v11h16V9" }),
+    React.createElement("path", { d: "M10 20v-6h4v6" })));
+}
+
 function SettlementVault({ trade, onClose, role }) {
+  const [showAllParts, setShowAllParts] = useState(false);
   const [phase, setPhase] = useState("idle");
   const [proof, setProof] = useState(null);
   const failed = !!(trade && trade.failed);
@@ -5184,6 +5204,19 @@ function SettlementVault({ trade, onClose, role }) {
           React.createElement("div", { className: "vl-seam", "data-role": "seam" }),
           leaf(trade.wantSym, trade.wantAmt, "bottom")),
 
+        // A fill across several dealers: the totals above, each dealer's part here.
+        // Three rows show; the rest fold behind "+N more" so a long fill stays short.
+        (trade.parts && trade.parts.length > 1) ? React.createElement("div", { className: "vl-parts" },
+          (showAllParts ? trade.parts : trade.parts.slice(0, 3)).map((x, i) =>
+            React.createElement("div", { key: x.cid || i, className: "vl-pt" },
+              React.createElement("span", { className: "vl-pd" }, x.dealerName),
+              React.createElement("span", { className: "m" }, fmtNum(x.offerAmt) + " " + x.offerSym),
+              React.createElement("span", { className: "vl-pa" }, "→"),
+              React.createElement("span", { className: "m vl-pr" }, fmtNum(x.wantAmt) + " " + x.wantSym))),
+          trade.parts.length > 3 ? React.createElement("button", { className: "vl-more",
+            onClick: () => setShowAllParts(v => !v) },
+            showAllParts ? "Show less" : "+" + (trade.parts.length - 3) + " more") : null) : null,
+
         React.createElement("div", { className: "vl-say" },
           pending
             ? React.createElement(React.Fragment, null,
@@ -5223,7 +5256,9 @@ function SettlementVault({ trade, onClose, role }) {
             : phase === "settled"
               ? React.createElement(React.Fragment, null,
                   React.createElement("b", null, "Settled."),
-                  " Both legs moved in one indivisible transaction.")
+                  (trade.parts && trade.parts.length > 1)
+                    ? " With " + trade.parts.length + " dealers. Each part moved both legs in one indivisible transaction."
+                    : " Both legs moved in one indivisible transaction.")
               : phase === "reverted"
                 ? React.createElement(React.Fragment, null,
                     React.createElement("b", { className: "rj" }, "Reverted."),
@@ -5239,7 +5274,8 @@ function SettlementVault({ trade, onClose, role }) {
               onClick: () => setProof(trade.cid),
               title: "Read this contract back off the Canton ledger"
             }, short(trade.cid), React.createElement("span", { className: "vl-ext" }, "\u2197"))) : null,
-          trade.offset != null ? row("Ledger", "#" + trade.offset, true) : null,
+          trade.offset != null ? row("Ledger", (trade.parts && trade.parts.length > 1
+            ? trade.parts.length + " transactions, last #" : "#") + trade.offset, true) : null,
           row("Trust", trade.signed ? "each party self-signed" : "operator submitted", false)),
 
         React.createElement("div", { className: "vl-rc", "data-role": "receipt-reverted" },
@@ -5445,6 +5481,7 @@ function DealerDesk(P) {
               : React.createElement("span", { className: "dsk-ref na tip-below tip-left", "data-tip": "Market reference unavailable." }, "REF", React.createElement("b", null, "\u2014")))
           : null,
         active ? React.createElement("span", { className: "dsk-close" + (cd.warn ? " warn" : "") }, "Closes in ", React.createElement("b", null, cd.txt)) : null,
+        P.wallet && P.listed != null ? React.createElement(ListingToggle, { listed: P.listed, onToggle: P.onToggleListing }) : null,
         P.onSettings ? React.createElement("button", {
           className: "prt-ico tip-below tip-left", onClick: P.onSettings, "aria-label": "Settings",
           "data-tip": "Settings"
@@ -5532,13 +5569,16 @@ function DealerDesk(P) {
                   // the winning dealer, so it has to be visible BEFORE the price is sealed
                   // -- otherwise the first time a dealer meets the charge is the settle
                   // loop asking it to allocate a third leg it never agreed to.
+                  // With "Take at most" the dealer pays only its share of the price: the
+                  // price is for the whole block, the fill is a part of it.
                   (function () {
-                    const f = P.fee, px = Number(price[active.contractId]);
-                    if (!f || !isFinite(px) || px <= 0) return null;
+                    const f = P.fee, whole = Number(price[active.contractId]);
+                    if (!f || !isFinite(whole) || whole <= 0) return null;
+                    const px = whole * _share;
                     const fee = Math.max(px * (f.bps / 10000), (f.floors && f.floors[w]) || 0);
                     const onFloor = fee > px * (f.bps / 10000);
                     return React.createElement("div", { className: "ask-line dim" },
-                      "You pay ",
+                      _share < 1 ? "For " + fmtAmtStr(_capN) + " of " + fmtAmtStr(amt) + " " + o + ", you pay " : "You pay ",
                       React.createElement("b", null, fmtNum(px + fee), " " + w),
                       " — ", fmtNum(px), " to the buyer plus ",
                       React.createElement("b", null, fmtNum(fee), " " + w),
@@ -5606,22 +5646,6 @@ function DealerDesk(P) {
                 className: "sgn-btn", disabled: !!P.settling, onClick: P.onSettle
               }, P.settling ? (P.settleStep || "Settling…") : (dealLockLabel(P.openTrade) || "Complete settlement"))));
         })() : null,
-        P.listed === null ? null : React.createElement("section", { className: "mod" },
-          React.createElement("div", { className: "mod-h" },
-            React.createElement("h2", null, "Dealer listing")),
-          React.createElement("div", { className: "mod-b" },
-            React.createElement("p", { className: "whg-sub" },
-              P.listed
-                ? React.createElement(React.Fragment, null,
-                    React.createElement("b", null, "You are listed."),
-                    " Buyers can invite you.")
-                : React.createElement(React.Fragment, null,
-                    React.createElement("b", null, "Not listed."),
-                    " List yourself to receive requests.")),
-            React.createElement("button", {
-              className: "sgn-btn", onClick: P.onToggleListing
-            }, P.listed ? "Remove me from the directory" : "List me as a dealer"))),
-
         React.createElement("section", { className: "mod" },
           React.createElement("div", { className: "mod-h" },
             React.createElement("h2", null, "The ledger withholds")),
@@ -5973,7 +5997,7 @@ function HumanCheck({ role, pow, setPow, disabled }) {
         : "Verify you're human",
       state === "work"
         ? React.createElement("span", { className: "fct-hc-pb" }, React.createElement("i", { style: { width: Math.round(prog * 100) + "%" } }))
-        : React.createElement("small", null, state === "done" ? "Good for one tap, for 5 minutes." : "Takes a few seconds. No puzzles, no tracking.")),
+        : React.createElement("small", null, state === "done" ? "Ready for your next tap." : "Takes a few seconds. No puzzles, no tracking.")),
     React.createElement("span", { className: "fct-hc-tag" }, "Proof of work"));
 }
 
@@ -6392,6 +6416,15 @@ function PartyPortal({ role, wallet, onExit }) {
   // these (a receipt appears) -- never while the other side has yet to lock.
   const dealWatch = useRef({});
   const watchDeal = (d, view) => { if (d && d.contractId) dealWatch.current[d.contractId] = { d, view }; };
+  const rcBuf = useRef({});   // settled parts of one award, waiting to show as one receipt
+  // The session ran out (a read was refused): go back to the wallet-connect screen
+  // rather than keep showing empty balances under a signed-in header.
+  useEffect(() => {
+    if (!wallet) return;
+    const out = () => { if (onExit) onExit(); };
+    window.addEventListener("umbra:session-expired", out);
+    return () => window.removeEventListener("umbra:session-expired", out);
+  }, [wallet, onExit]);
 
   const load = useCallback(async () => {
     try {
@@ -6473,6 +6506,10 @@ function PartyPortal({ role, wallet, onExit }) {
                   wantAmt: dp.price, dealerName: DEALER_NAME(dp.dealer) });
           }
           const openIds = new Set(dl.deals.map(d => d.contractId));
+          // Deals from one award share its deadline (one signature created them all), so
+          // a fill across several dealers gathers into ONE receipt instead of a pop-up
+          // per dealer. A part that settles first waits (up to 25s) for its siblings.
+          const groupOf = dp => dp.requester + "|" + dp.allocateBefore;
           for (const [cid, w] of Object.entries(dealWatch.current)) {
             if (openIds.has(cid)) continue;
             const dp = w.d.payload;
@@ -6481,11 +6518,24 @@ function PartyPortal({ role, wallet, onExit }) {
               Number(r.payload.price) === Number(dp.price) && r.payload.settledVia === "deal");
             if (rc) {
               delete dealWatch.current[cid];
-              setVault(Object.assign({}, w.view, { cid: rc.contractId, offset: rc.offset, signed: true }));
+              const g = rcBuf.current[groupOf(dp)] || (rcBuf.current[groupOf(dp)] = { parts: [], at: Date.now() });
+              g.parts.push(Object.assign({}, w.view, { cid: rc.contractId, offset: rc.offset }));
             } else if (Date.parse(dp.allocateBefore) + 120000 < Date.now()) {
               delete dealWatch.current[cid];
               say("Trade expired. Your funds were returned.", false, 9000);
             }
+          }
+          for (const [key, g] of Object.entries(rcBuf.current)) {
+            const siblingOpen = Object.values(dealWatch.current).some(w => groupOf(w.d.payload) === key);
+            if (siblingOpen && Date.now() - g.at < 25000) continue;
+            delete rcBuf.current[key];
+            const ps = g.parts, one = ps[0];
+            setVault(ps.length === 1 ? Object.assign({}, one, { signed: true }) : {
+              offerSym: one.offerSym, wantSym: one.wantSym, signed: true,
+              offerAmt: ps.reduce((s, x) => s + Number(x.offerAmt), 0),
+              wantAmt: ps.reduce((s, x) => s + Number(x.wantAmt), 0),
+              dealerName: ps.length + " dealers", parts: ps,
+              cid: one.cid, offset: Math.max.apply(null, ps.map(x => Number(x.offset) || 0)) });
           }
         }
         const dnew = ((dl && dl.deals) || []).slice().sort((x, y) => (x.payload.tradeId < y.payload.tradeId ? 1 : -1))[0];
@@ -7471,6 +7521,7 @@ function App() {
     // so leaving the session live meant Sign out bounced straight back in -- the page
     // appeared to refresh and never reached the wallet picker.
     Promise.resolve(WalletLink.disconnect()).catch(() => {});
+    setSession(null);
     setWallet(null);
     setRole(null);
   };

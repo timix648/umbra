@@ -95,6 +95,8 @@ app.use((req, res, next) => {
 const noStore = (res) => res.set("Cache-Control", "no-store, must-revalidate");
 app.get("/", (req, res) => { noStore(res); res.sendFile(path.join(__dirname, "public", "landing.html")); });
 app.get("/app", (req, res) => { noStore(res); res.sendFile(path.join(__dirname, "public", "index.html")); });
+// The docs are one page that routes /docs/<section> itself.
+app.get(["/docs", "/docs/*section"], (req, res) => { noStore(res); res.sendFile(path.join(__dirname, "public", "docs.html")); });
 // The DevNet faucet is a page of the app: it needs the same signed-in wallet.
 app.get("/faucet", (req, res) => { noStore(res); res.sendFile(path.join(__dirname, "public", "index.html")); });
 app.use(express.static(path.join(__dirname, "public"), { index: false }));
