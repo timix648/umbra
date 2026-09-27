@@ -2232,11 +2232,19 @@ const WalletLink = (() => {
   // exactly as for Loop. Wallets differ on the params shape -- the WalletConnect
   // binding takes { message }, the spec's prose a bare string -- so try both, but never
   // retry after the user said no.
+  // Nightly is the exception: its signMessage takes the bytes as base64 and decodes them
+  // itself (docs.nightly.app, Canton sign_message), so it gets base64 instead.
+  const activeWalletId = async (s) => {
+    try { const x = s.getActiveSession ? await s.getActiveSession() : null; if (x && x.walletId) return x.walletId; } catch (e) {}
+    try { return localStorage.getItem("umbra.pl.wallet") || null; } catch (e) { return null; }
+  };
   const cipSigner = (s) => async (b64) => {
     if (!s || typeof s.signMessage !== "function") {
       throw new Error("This wallet cannot sign messages, so Umbra cannot give it a party.");
     }
-    const msg = String.fromCharCode(...lBytes(b64));
+    const msg = (await activeWalletId(s)) === "nightly"
+      ? lB64(lBytes(b64))
+      : String.fromCharCode(...lBytes(b64));
     let r;
     try { r = await s.signMessage({ message: msg }); }
     catch (e) {
