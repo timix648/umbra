@@ -1640,6 +1640,11 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
      5N Loop matters most — 5North's validator has already vetted Umbra, so a Loop
      party has both halves and should trade without asking any vendor for anything. -->
 <script src="/partylayer.js"></script>
+<!-- Walley ships no PartyLayer package, only an official dApp-SDK ProviderAdapter,
+     which PartyLayer accepts as is (@k2flabs/walley-dapp-sdk 1.2.0 as window.WalleySDK).
+     The WalletConnect project id is a public app identifier, not a secret. -->
+<script src="/walley-sdk.js"></script>
+<script>window.UMBRA_WC_PROJECT_ID = "35feb36938c720a01f77006e662bcf8a";</script>
 <!-- Loop's own SDK, bundled straight rather than reached through PartyLayer. Its
      adapter there throws on signTransaction and hides signMessage, which is the one
      call that makes Loop usable here. One layer fewer, and nothing in between to
@@ -2008,8 +2013,17 @@ const WalletLink = (() => {
         // which took PartyLayer down whole -- every "other wallet" silently fell
         // through to the plain Canton SDK picker. Add it back only with its config.
         // WalletConnect is a transport rather than one vendor's wallet, so it
-        // reaches every mobile wallet that speaks the protocol at once.
-        ...(WC_PROJECT_ID ? optional(S.WalletConnectAdapter) : []),
+        // reaches every mobile wallet that speaks the protocol at once. It must be
+        // an instance: PartyLayer constructs a bare class with no arguments, and
+        // this adapter throws without its projectId.
+        ...(WC_PROJECT_ID && S.WalletConnectAdapter ? [new S.WalletConnectAdapter({
+          projectId: WC_PROJECT_ID,   // chain follows network: "devnet" -> canton:da-devnet
+          metadata: { name: "Umbra", description: "Private block trading on Canton",
+                      url: location.origin, icons: [location.origin + "/favicon.ico"] },
+        })] : []),
+        // Walley's official ProviderAdapter; PartyLayer wraps it like its own.
+        ...(window.WalleySDK && window.WalleySDK.WalleyAdapter
+          ? [new window.WalleySDK.WalleyAdapter()] : []),
       ].filter(Boolean);
 
       plClient = S.createPartyLayer({
