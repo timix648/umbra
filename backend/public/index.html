@@ -2319,6 +2319,16 @@ const WalletLink = (() => {
     if (!s || typeof s.signMessage !== "function") {
       throw new Error("This wallet cannot sign messages, so Umbra cannot give it a party.");
     }
+    // Console takes the bytes as { base64 } and signs exactly those. A bare string
+    // is not its format, and PartyLayer's Console adapter UTF-8 encodes the string
+    // first, which turns every byte above 127 into two. So on either route, ask the
+    // extension directly through Console's own SDK.
+    const cw = window.ConsoleWallet;
+    if (cw && typeof cw.signMessage === "function" &&
+        (s === cw || (await activeWalletId(s)) === "console")) {
+      const r = await cw.signMessage({ message: { base64: lB64(lBytes(b64)) } });
+      return lB64(lBytes(lSigOf(r)));
+    }
     const msg = (await activeWalletId(s)) === "nightly"
       ? lB64(lBytes(b64))
       : String.fromCharCode(...lBytes(b64));
