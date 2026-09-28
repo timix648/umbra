@@ -1608,6 +1608,19 @@ var d=null!=c&&c.hydratedSources||null,e=!1,f="",g=aj;null!==c&&void 0!==c&&(!0=
 function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmountComponentAtNode=function(a){if(!Vd(a))throw Error(m(40));return a._reactRootContainer?(yb(function(){Wd(null,null,a,!1,function(){a._reactRootContainer=null;a[Ja]=null})}),!0):!1};Q.unstable_batchedUpdates=Tf;Q.unstable_renderSubtreeIntoContainer=function(a,b,c,d){if(!Vd(c))throw Error(m(200));if(null==a||void 0===a._reactInternals)throw Error(m(38));return Wd(a,b,c,!1,d)};Q.version="18.3.1-next-f1338f8080-20240426"});
 })();
 </script>
+<!-- Both the dApp SDK below and PartyLayer bundle the same Lit UI elements
+     (api-key-card, swk-wallet-picker, ...). The second copy registers them lazily,
+     the first time WalletConnect starts, and a repeat define throws and kills the
+     connect. Keep the first registration and skip repeats. -->
+<script>
+(() => {
+  const reg = window.customElements;
+  if (!reg || reg.__umbraOnce) return;
+  const define = reg.define.bind(reg);
+  reg.define = (name, ctor, opts) => { if (!reg.get(name)) define(name, ctor, opts); };
+  reg.__umbraOnce = true;
+})();
+</script>
 <!-- CIP-0103 dApp SDK, prebundled into a browser IIFE by sdk-build/build.sh.
      This page has no bundler and no `import` statements, so the SDK can only
      arrive as a global. If it is missing (404, blocked, stale cache) it is just
@@ -1649,7 +1662,7 @@ function(a,b,c){if(!Vd(b))throw Error(m(200));return Wd(null,a,b,!1,c)};Q.unmoun
      adapter there throws on signTransaction and hides signMessage, which is the one
      call that makes Loop usable here. One layer fewer, and nothing in between to
      mistranslate what the wallet actually supports. -->
-<script src="/loop-sdk.js"></script>
+<script src="/loop-sdk.js?v=qr1"></script>
 <script src="/canton-tx.js"></script>
 <script src="/tx-verify.js"></script>
 <script>
@@ -1991,6 +2004,51 @@ const WalletLink = (() => {
   //
   // 5N Loop matters most: 5North's validator has ALREADY vetted umbra, so a Loop
   // party has both halves and should trade without asking any vendor for anything.
+  // WalletConnect's pairing link as a QR to scan with a phone wallet, plus the link
+  // itself for a wallet on this device. Closing it only hides it; the connect keeps
+  // waiting until the wallet answers or times out.
+  const wcQr = {
+    hide() { const o = document.getElementById("umbra-wc-qr"); if (o) o.remove(); },
+    async show(uri) {
+      wcQr.hide();
+      let src = null;
+      try { src = await window.LoopSDKBundle.qrDataURL(uri); } catch (e) {}
+      const o = document.createElement("div");
+      o.id = "umbra-wc-qr";
+      o.style.cssText = "position:fixed;inset:0;z-index:100000;background:rgba(5,6,12,.8);" +
+        "display:flex;align-items:center;justify-content:center;padding:16px";
+      const box = document.createElement("div");
+      box.style.cssText = "background:#12141f;border:1px solid #6b5bd6;border-radius:12px;" +
+        "padding:24px;width:320px;max-width:100%;text-align:center;color:#e8e8f0;font:14px system-ui,sans-serif";
+      const h = document.createElement("div");
+      h.textContent = "Scan with your Canton wallet";
+      h.style.cssText = "font-weight:600;margin-bottom:14px";
+      box.appendChild(h);
+      if (src) {
+        const img = document.createElement("img");
+        img.src = src; img.alt = "WalletConnect QR code";
+        img.style.cssText = "width:100%;max-width:260px;background:#fff;padding:8px;border-radius:8px";
+        box.appendChild(img);
+      }
+      const row = document.createElement("div");
+      row.style.cssText = "margin-top:14px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap";
+      const btn = (label, fn) => {
+        const b = document.createElement("button");
+        b.type = "button"; b.textContent = label; b.onclick = fn;
+        b.style.cssText = "background:#1d2033;color:#e8e8f0;border:1px solid #3a3f5c;border-radius:6px;padding:8px 12px;cursor:pointer";
+        row.appendChild(b); return b;
+      };
+      const copy = btn("Copy link", async () => {
+        try { await navigator.clipboard.writeText(uri); copy.textContent = "Copied"; } catch (e) {}
+      });
+      btn("Open wallet", () => { location.href = uri; });
+      btn("Close", () => wcQr.hide());
+      box.appendChild(row);
+      o.appendChild(box);
+      document.body.appendChild(o);
+    },
+  };
+
   let plClient = null;
   const partylayer = () => {
     if (plClient) return plClient;
@@ -2018,6 +2076,8 @@ const WalletLink = (() => {
         // this adapter throws without its projectId.
         ...(WC_PROJECT_ID && S.WalletConnectAdapter ? [new S.WalletConnectAdapter({
           projectId: WC_PROJECT_ID,   // chain follows network: "devnet" -> canton:da-devnet
+          // The adapter hands over its pairing link and draws nothing itself.
+          onUri: (uri) => wcQr.show(uri),
           metadata: { name: "Umbra", description: "Private block trading on Canton",
                       url: location.origin, icons: [location.origin + "/favicon.ico"] },
         })] : []),
@@ -2049,9 +2109,12 @@ const WalletLink = (() => {
       let want = new URLSearchParams(location.search).get("wallet");
       // The wallet picked in Umbra's own list, so PartyLayer never has to guess.
       if (!want) { try { want = localStorage.getItem("umbra.pl.wallet"); } catch (e) {} }
-      const sess = await s.connect(want
-        ? { walletId: want, timeoutMs: 120000 }
-        : { preferInstalled: true, timeoutMs: 120000 });
+      let sess;
+      try {
+        sess = await s.connect(want
+          ? { walletId: want, timeoutMs: 120000 }
+          : { preferInstalled: true, timeoutMs: 120000 });
+      } finally { wcQr.hide(); }
       if (!sess) throw new Error("no wallet connected");
       return true;
     },

@@ -3607,6 +3607,9 @@ class LoopSDK {
   }
 }
 var loop = new LoopSDK;
-return { MessageType, PaymentRequiredError, PopupClosedError, RejectRequestError, RequestTimeoutError, UnauthorizedError, extractErrorCode, isUnauthCode, loop };
+// Umbra addition: the QR encoder this bundle already carries, so the page can draw
+// WalletConnect's link without shipping a second QR library.
+var qrDataURL = (text) => new Promise((res, rej) => exports_browser.toDataURL(text, { margin: 1, width: 300 }, (e, d) => e ? rej(e) : res(d)));
+return { MessageType, PaymentRequiredError, PopupClosedError, RejectRequestError, RequestTimeoutError, UnauthorizedError, extractErrorCode, isUnauthCode, loop, qrDataURL };
 
 })();
