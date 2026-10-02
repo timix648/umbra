@@ -1,0 +1,195 @@
+<!doctype html><meta charset="utf-8"><title>Umbra relayed signing</title>
+<!--
+  Private page for the BitSafe node-down run, 2 October 2026.
+
+  BitSafe prepares each transaction on their participant; this page checks it and
+  the wallet signs the hash. Nothing is signed that has not passed the SAME check
+  the app runs on its own submissions (tx-verify.js verifyPrepared):
+    - the hash really is the hash of the transaction sent
+    - it acts for exactly one party, and that party is one of ours
+    - it holds exactly the actions we asked for, same contracts, same choices,
+      same arguments, compared at the ledger's own numeric precision
+  The expected command is pasted alongside, so "what we asked for" is explicit
+  rather than assumed. A mismatch is refused and no wallet is ever opened.
+-->
+<style>
+  body{font:15px/1.5 system-ui;background:#10131a;color:#e8e8f0;max-width:1000px;margin:32px auto;padding:20px}
+  h1{font-size:21px;margin-bottom:4px} .muted{color:#9aa0b4;font-size:14px}
+  label{display:block;margin:16px 0 6px;font-weight:600;font-size:14px}
+  textarea{width:100%;min-height:150px;background:#0c0e15;color:#e8e8f0;border:1px solid #2a2f45;border-radius:8px;padding:11px;font:12px ui-monospace,Menlo,Consolas,monospace}
+  button{padding:12px 18px;margin:14px 10px 0 0;border-radius:8px;border:1px solid #3a3f5c;background:#232840;color:#e8e8f0;cursor:pointer;font-size:15px}
+  button:disabled{opacity:.45;cursor:default}
+  pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0c0e15;padding:13px;border-radius:8px;font-size:13px;margin-top:14px}
+  .ok{color:#6ee7a8} .bad{color:#ff8080} .warn{color:#ffd479}
+</style>
+<h1>Relayed signing &mdash; BitSafe node-down run</h1>
+<p class="muted">Checks BitSafe's prepared transaction against the command we asked for, then signs the hash in your wallet. Refuses anything that does not match.</p>
+
+<label>1a. preparedTransactionHash from BitSafe</label>
+<input id="hash" spellcheck="false" style="width:100%;background:#0c0e15;color:#e8e8f0;border:1px solid #2a2f45;border-radius:8px;padding:11px;font:12px ui-monospace,Menlo,Consolas,monospace" placeholder="7UdU9zLH+/Nds...">
+
+<label>1b. preparedTransaction from BitSafe
+  <span class="muted">just the base64 - paste every block one after another, line breaks are fine</span></label>
+<textarea id="prep" spellcheck="false" placeholder="CqwrCgMyLjESATAawwsKATHCPrwLCrkLCgMyLjESQjAw..."></textarea>
+
+<label>2. The command we asked for
+  <span class="muted">the step's JSON from the command sheet, as an array</span></label>
+<textarea id="cmds" spellcheck="false" placeholder='[ { "ExerciseCommand": { "templateId": "#umbra-v9:UmbraSwap:SwapInvitation", "contractId": "00...", "choice": "SubmitSwapQuote", "choiceArgument": { "price": "0.0143694" } } } ]'></textarea>
+
+<button id="check">Check it</button>
+<button id="sign" disabled>Sign in wallet</button>
+<pre id="out">Paste both, then press Check it.</pre>
+
+<script src="/canton-tx.js"></script>
+<script src="/tx-verify.js"></script>
+<script src="/loop-sdk.js?v=qr1"></script>
+<script>
+const PARTIES = {
+  "wallet-adeca067cef37e72::12205255ba7db073da7a81f1cf191de1cfcd7b60fb344bd90f73adeca067cef37e72":
+    { name: "trader A", wallet: "console", pub: "ylzwxI90i2o2AYS3dk01un1EhN9Kit3lDzqswB6WtMw=" },
+  "wallet-1790271428664::1220f6f0089d6e0315ed9a68bab83f03e5981e5ca74108c385bdb0e1b4390206a93e":
+    { name: "trader B", wallet: "loop", pub: "dC4dbE+jr3AVwXs3Wzo543YxA1OVorQe31sb7Z1IoP4=" },
+};
+
+const out = document.getElementById("out");
+const say = (t, cls) => { out.textContent = t; out.className = cls || ""; };
+const bytes = (s) => {
+  const t = String(s || "").trim().replace(/^0x/, "");
+  return /^[0-9a-f]+$/i.test(t) && t.length % 2 === 0
+    ? Uint8Array.from(t.match(/../g), (h) => parseInt(h, 16))
+    : Uint8Array.from(atob(t), (c) => c.charCodeAt(0));
+};
+const b64 = (u) => btoa(String.fromCharCode(...u));
+const sigOf = (r) => (typeof r === "string" ? r : (r && (r.signature || r.signedMessage || r.result || r.data))) || String(r);
+
+let checked = null;   // { prep, party, info } once it has passed
+
+document.getElementById("check").onclick = async () => {
+  document.getElementById("sign").disabled = true;
+  checked = null;
+  try {
+    const rawPrep = document.getElementById("prep").value.trim();
+    const rawHash = document.getElementById("hash").value.trim();
+    const commands = JSON.parse(document.getElementById("cmds").value);
+    if (!Array.isArray(commands)) throw new Error("the command must be a JSON array");
+    // Either paste the two fields, or drop BitSafe's whole JSON into the big box.
+    let parsed;
+    if (rawPrep.startsWith("{")) {
+      parsed = JSON.parse(rawPrep);
+    } else {
+      parsed = { preparedTransaction: rawPrep, preparedTransactionHash: rawHash };
+    }
+    if (!parsed.preparedTransaction) throw new Error("paste the preparedTransaction base64 into box 1b");
+    if (!parsed.preparedTransactionHash) throw new Error("paste the preparedTransactionHash into box 1a");
+    // Pasted base64 arrives wrapped: chat clients split long strings across lines and
+    // blocks. Strip layout, then say precisely what is wrong rather than letting atob
+    // throw "not correctly encoded" over a 10KB string.
+    const clean = (s, what) => {
+      const t = String(s).replace(/\s+/g, "");
+      const bad = t.replace(/[A-Za-z0-9+/=]/g, "");
+      if (bad) throw new Error(what + " has " + bad.length + " character(s) that are not base64, first is " +
+        JSON.stringify(bad[0]) + " - a block marker or stray text probably came across with the paste");
+      if (t.length % 4) throw new Error(what + " is " + t.length + " characters, which is not a multiple of 4 - " +
+        (4 - t.length % 4) + " character(s) short, so part of the paste is missing");
+      return t;
+    };
+    const prep = {
+      preparedTransaction: clean(parsed.preparedTransaction, "preparedTransaction"),
+      preparedTransactionHash: clean(parsed.preparedTransactionHash, "preparedTransactionHash"),
+    };
+
+    // Who does it act for? Read it from the transaction, not from a dropdown.
+    const tx = window.CantonTx.decodePreparedTransaction(prep.preparedTransaction);
+    const acts = (tx.metadata && tx.metadata.submitterInfo && tx.metadata.submitterInfo.actAs) || [];
+    if (acts.length !== 1) throw new Error("it acts for " + acts.length + " parties; expected exactly one");
+    const party = acts[0];
+    const who = PARTIES[party];
+    if (!who) throw new Error("it acts for a party this page does not hold a wallet for:\n  " + party);
+
+    // The real check: same one the app runs before its own submissions.
+    const r = await window.UmbraTxVerify.verifyPrepared(window.CantonTx, party, commands, prep, null);
+
+    const lines = commands.map((c, i) => {
+      if (c.CreateCommand) return "  " + (i + 1) + ". create " + c.CreateCommand.templateId;
+      const e = c.ExerciseCommand;
+      return "  " + (i + 1) + ". " + e.choice + " on " + e.templateId + "\n       contract " + e.contractId;
+    });
+    checked = { prep, party, who };
+    say("PASSED - matches the command we asked for.\n\n" +
+        "acts for : " + who.name + "  (" + who.wallet + " wallet)\n" +
+        "           " + party + "\n" +
+        "actions  : " + r.actions + " root, " + r.nodes + " nodes total\n" +
+        lines.join("\n") + "\n\nPress Sign in wallet.", "ok");
+    document.getElementById("sign").disabled = false;
+  } catch (e) {
+    say("REFUSED: " + (e && e.message || e) + "\n\nNothing was signed.", "bad");
+  }
+};
+
+async function loadConsole() {
+  if (window.ConsoleWallet) return window.ConsoleWallet;
+  await new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = "/console-wallet-sdk.js";
+    s.onload = res; s.onerror = () => rej(new Error("could not load the Console SDK"));
+    document.head.appendChild(s);
+  });
+  const w = window.ConsoleWalletSDK && window.ConsoleWalletSDK.consoleWallet;
+  if (!w) throw new Error("Console SDK loaded but exposed nothing");
+  window.ConsoleWallet = w;
+  return w;
+}
+
+document.getElementById("sign").onclick = async (ev) => {
+  if (!checked) return;
+  ev.target.disabled = true;
+  const { prep, who } = checked;
+  const hash = prep.preparedTransactionHash;
+  try {
+    let pub, sig;
+    if (who.wallet === "console") {
+      say("Approve the signature in Console.", "warn");
+      const cw = await loadConsole();
+      const st = await cw.isConnected().catch(() => null);
+      if (!(st && (st.isConnected === true || st.isConnected === "connected"))) {
+        await cw.connect({ name: "Umbra", target: "combined" });
+      }
+      const acct = await cw.getPrimaryAccount();
+      const raw = acct && acct.publicKey ? bytes(acct.publicKey) : null;
+      pub = raw ? b64(raw.length === 44 ? raw.slice(12) : raw) : null;
+      if (pub !== who.pub) throw new Error("wrong Console account selected\n  got      " + pub + "\n  expected " + who.pub);
+      sig = b64(bytes(sigOf(await cw.signMessage({ message: { base64: hash } }))));
+    } else {
+      say("Connect and approve in Loop.", "warn");
+      const sdk = window.LoopSDKBundle.loop;
+      const provider = await new Promise((res, rej) => {
+        sdk.init({ appName: "Umbra", network: "devnet", onAccept: res, onReject: () => rej(new Error("declined in Loop")) });
+        Promise.resolve(sdk.autoConnect()).catch(() => Promise.resolve(sdk.connect()).catch(rej));
+      });
+      pub = b64(bytes(provider.public_key));
+      if (pub !== who.pub) throw new Error("wrong Loop wallet connected\n  got      " + pub + "\n  expected " + who.pub + "\n\nSwitch to wallet ...8664.");
+      sig = b64(bytes(sigOf(await provider.signMessage(String.fromCharCode(...bytes(hash))))));
+    }
+
+    // Never hand over a signature that does not verify over the raw hash bytes.
+    const key = await crypto.subtle.importKey("raw", bytes(pub), { name: "Ed25519" }, false, ["verify"]);
+    const rawOk = await crypto.subtle.verify("Ed25519", key, bytes(sig), bytes(hash));
+    if (!rawOk) {
+      const utf8 = new TextEncoder().encode(String.fromCharCode(...bytes(hash)));
+      const txtOk = await crypto.subtle.verify("Ed25519", key, bytes(sig), utf8);
+      throw new Error(txtOk
+        ? "this wallet signed the UTF-8 expansion, not the raw bytes - Canton will reject it"
+        : "the signature verifies under neither encoding");
+    }
+    say("SIGNED and verified over the raw hash bytes.\n\n" +
+        "party      : " + checked.party + "\n" +
+        "public key : " + pub + "\n" +
+        "hash       : " + hash + "\n" +
+        "signature  : " + sig + "\n\nSend the signature back to BitSafe.", "ok");
+  } catch (e) {
+    say("Failed: " + (e && e.message || e) + "\n\nNothing was sent.", "bad");
+  } finally {
+    ev.target.disabled = false;
+  }
+};
+</script>

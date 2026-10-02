@@ -1,0 +1,169 @@
+<!doctype html><meta charset="utf-8"><title>Umbra topology signing</title>
+<!--
+  One-off private page for the BitSafe co-hosting session on 2 October 2026.
+  It signs ONLY the two hashes below, which are hard-coded after the full
+  topology transactions were verified off-line: hash re-derived from the
+  transaction bytes, party checked, threshold 1, hosts exactly {umbra,
+  iBTC-validator-1}, and the embedded key's fingerprint matched the party's
+  namespace. Nothing here can be pointed at a different hash, so a wallet
+  approval on this page cannot authorise anything that was not checked.
+  It prepares nothing, submits nothing and contacts no Umbra endpoint.
+-->
+<style>
+  body{font:16px/1.5 system-ui;background:#10131a;color:#e8e8f0;max-width:900px;margin:40px auto;padding:20px}
+  h1{font-size:22px} h2{font-size:17px;margin:0 0 4px}
+  .card{border:1px solid #2a2f45;border-radius:10px;padding:18px;margin:18px 0;background:#161a26}
+  button{padding:11px 16px;margin:10px 8px 0 0;border-radius:7px;border:1px solid #3a3f5c;background:#232840;color:#e8e8f0;cursor:pointer}
+  button:disabled{opacity:.5;cursor:default}
+  pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#0c0e15;padding:12px;border-radius:7px;font-size:13px}
+  code{overflow-wrap:anywhere} .ok{color:#6ee7a8} .bad{color:#ff8080} .muted{color:#9aa0b4;font-size:14px}
+</style>
+<h1>Topology signing &mdash; BitSafe co-hosting</h1>
+<p class="muted">Signs only the two pre-verified hashes below. No transaction is built or submitted.</p>
+
+<div class="card" id="console-card">
+  <h2>Trader A &mdash; Console wallet</h2>
+  <div class="muted">wallet-adeca067cef37e72::12205255&hellip;7e72</div>
+  <button class="go">Connect Console &amp; sign</button>
+  <pre class="out">Not started.</pre>
+</div>
+
+<div class="card" id="loop-card">
+  <h2>Trader B &mdash; Loop wallet &hellip;8664</h2>
+  <div class="muted">wallet-1790271428664::1220f6f0&hellip;a93e</div>
+  <button class="go">Connect Loop &amp; sign</button>
+  <pre class="out">Not started.</pre>
+</div>
+
+<script src="/loop-sdk.js?v=qr1"></script>
+<script>
+const JOBS = {
+  "console-card": {
+    hash: "EiBBKl3r4rILO78CHliVcUE68KYWx22T/ik4t01Ye7QJjQ==",
+    pub:  "ylzwxI90i2o2AYS3dk01un1EhN9Kit3lDzqswB6WtMw=",
+    party:"wallet-adeca067cef37e72::12205255ba7db073da7a81f1cf191de1cfcd7b60fb344bd90f73adeca067cef37e72",
+  },
+  "loop-card": {
+    hash: "EiCPDy3rCICA0hXr9nJaV8iV9C821h7qkZnLwqajMhGvrA==",
+    pub:  "dC4dbE+jr3AVwXs3Wzo543YxA1OVorQe31sb7Z1IoP4=",
+    party:"wallet-1790271428664::1220f6f0089d6e0315ed9a68bab83f03e5981e5ca74108c385bdb0e1b4390206a93e",
+  },
+};
+
+const bytes = (s) => {
+  const t = String(s || "").trim().replace(/^0x/, "");
+  return /^[0-9a-f]+$/i.test(t) && t.length % 2 === 0
+    ? Uint8Array.from(t.match(/../g), (h) => parseInt(h, 16))
+    : Uint8Array.from(atob(t), (c) => c.charCodeAt(0));
+};
+const b64 = (u) => btoa(String.fromCharCode(...u));
+const sigOf = (r) => (typeof r === "string" ? r : (r && (r.signature || r.signedMessage || r.result || r.data))) || String(r);
+
+// Verify before showing anything: the signature must verify over the RAW 34
+// bytes under the key we expect for that party. A wallet that signs the text
+// instead produces a signature that fails here and is never displayed.
+async function check(cardId, pubB64, sigB64) {
+  const j = JOBS[cardId];
+  if (pubB64 !== j.pub) {
+    return { ok: false, why: "this wallet's public key is not the one registered for this party\n  got      " + pubB64 + "\n  expected " + j.pub };
+  }
+  const key = await crypto.subtle.importKey("raw", bytes(pubB64), { name: "Ed25519" }, false, ["verify"]);
+  const raw = bytes(j.hash);
+  const sig = bytes(sigB64);
+  if (await crypto.subtle.verify("Ed25519", key, sig, raw)) return { ok: true };
+  const utf8 = new TextEncoder().encode(String.fromCharCode(...raw));
+  if (await crypto.subtle.verify("Ed25519", key, sig, utf8)) {
+    return { ok: false, why: "this wallet signed the UTF-8 expansion, not the raw bytes - Canton will reject it" };
+  }
+  return { ok: false, why: "the signature verifies under neither encoding" };
+}
+
+function show(cardId, text, cls) {
+  const pre = document.querySelector("#" + cardId + " .out");
+  pre.textContent = text;
+  pre.className = "out" + (cls ? " " + cls : "");
+}
+
+async function finish(cardId, pubB64, sigB64, extra) {
+  const v = await check(cardId, pubB64, sigB64);
+  if (!v.ok) { show(cardId, "REFUSED: " + v.why + "\n\nNothing to send.", "bad"); return; }
+  show(cardId,
+    "VERIFIED over the raw 34 hash bytes.\n\n" +
+    "party      : " + JOBS[cardId].party + "\n" +
+    "public key : " + pubB64 + "\n" +
+    "signature  : " + sigB64 + (extra ? "\n\n" + extra : ""), "ok");
+}
+
+document.querySelector("#loop-card .go").onclick = async (e) => {
+  e.target.disabled = true;
+  try {
+    show("loop-card", "Connect in Loop, then approve the signing request.");
+    const sdk = window.LoopSDKBundle.loop;
+    const provider = await new Promise((res, rej) => {
+      sdk.init({ appName: "Umbra", network: "devnet", onAccept: res, onReject: () => rej(new Error("declined in Loop")) });
+      Promise.resolve(sdk.autoConnect()).catch(() => Promise.resolve(sdk.connect()).catch(rej));
+    });
+    const pub = b64(bytes(provider.public_key));
+    if (pub !== JOBS["loop-card"].pub) {
+      show("loop-card", "Wrong Loop wallet connected.\n  got      " + pub + "\n  expected " + JOBS["loop-card"].pub +
+                        "\n\nSwitch to wallet ...8664 in Loop and try again.", "bad");
+      return;
+    }
+    show("loop-card", "Approve the signing request in Loop.");
+    const raw = bytes(JOBS["loop-card"].hash);
+    const r = await provider.signMessage(String.fromCharCode(...raw));
+    await finish("loop-card", pub, b64(bytes(sigOf(r))), "Loop party: " + provider.party_id);
+  } catch (err) {
+    show("loop-card", "Failed: " + (err && err.message || err), "bad");
+  } finally { e.target.disabled = false; }
+};
+
+let consoleSdk = null;
+async function loadConsole() {
+  if (window.ConsoleWallet) return window.ConsoleWallet;
+  if (!consoleSdk) {
+    consoleSdk = new Promise((res, rej) => {
+      const s = document.createElement("script");
+      s.src = "/console-wallet-sdk.js";
+      s.onload = () => {
+        const w = window.ConsoleWalletSDK && window.ConsoleWalletSDK.consoleWallet;
+        if (!w) { consoleSdk = null; return rej(new Error("Console SDK loaded but exposed nothing")); }
+        window.ConsoleWallet = w; res(w);
+      };
+      s.onerror = () => { consoleSdk = null; rej(new Error("could not load the Console SDK")); };
+      document.head.appendChild(s);
+    });
+  }
+  return consoleSdk;
+}
+
+document.querySelector("#console-card .go").onclick = async (e) => {
+  e.target.disabled = true;
+  try {
+    show("console-card", "Loading the Console SDK.");
+    const cw = await loadConsole();
+    if (typeof cw.checkExtensionAvailability === "function") {
+      const a = await cw.checkExtensionAvailability();
+      if (a && a.status && a.status !== "installed") throw new Error("the Console extension is not installed");
+    }
+    show("console-card", "Approve the connection in Console (unlock it first if locked).");
+    const st = await cw.isConnected().catch(() => null);
+    const already = st && (st.isConnected === true || st.isConnected === "connected");
+    if (!already) await cw.connect({ name: "Umbra", target: "combined" });
+    const acct = (typeof cw.getPrimaryAccount === "function" && await cw.getPrimaryAccount()) || null;
+    const pubRaw = acct && acct.publicKey ? bytes(acct.publicKey) : null;
+    const pub = pubRaw ? b64(pubRaw.length === 44 ? pubRaw.slice(12) : pubRaw) : null;
+    if (!pub) throw new Error("Console did not share an account public key");
+    if (pub !== JOBS["console-card"].pub) {
+      show("console-card", "Wrong Console account selected.\n  got      " + pub + "\n  expected " + JOBS["console-card"].pub +
+                           "\n\nSwitch account in Console and try again.", "bad");
+      return;
+    }
+    show("console-card", "Approve the signing request in Console.");
+    const r = await cw.signMessage({ message: { base64: JOBS["console-card"].hash } });
+    await finish("console-card", pub, b64(bytes(sigOf(r))), "Console native party: " + (acct.partyId || "(not reported)"));
+  } catch (err) {
+    show("console-card", "Failed: " + (err && err.message || err), "bad");
+  } finally { e.target.disabled = false; }
+};
+</script>
