@@ -771,7 +771,7 @@
           }, h("span", { className: "u-dot", style: { background: "var(--bg)" } }),
              props.connecting ? "Waiting for wallet…" : "Connect wallet"),
           h("div", { className: "u-facts" },
-            [["Custody", "Keys stay in Loop"],
+            [["Custody", "Keys stay in your wallet"],
              ["Visibility", "Invite-only, blind"],
              ["Settlement", "Atomic, on-ledger"]].map(function (f) {
               return h("div", { className: "u-fact", key: f[0] },

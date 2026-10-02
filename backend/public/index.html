@@ -1916,16 +1916,6 @@ const WalletLink = (() => {
       connect: async (s) => { const r = await s.connect(); if (r && r.isConnected === false) throw new Error(r.reason || "declined"); return true; },
       disconnect: (s) => s.disconnect(),
       accounts: (s) => s.listAccounts(),
-      submit: async (s, params) => {
-        if (typeof s.prepareExecuteAndWait === "function") {
-          const r = await s.prepareExecuteAndWait(params);
-          const tx = r && r.tx;
-          if (tx && tx.status === "failed") throw new Error("wallet reported the transaction failed");
-          return { committed: true, updateId: (tx && tx.updateId) || null, commandId: (tx && tx.commandId) || null };
-        }
-        await s.prepareExecute(params);
-        return { committed: false, updateId: null, commandId: null };
-      },
       ledgerApi: (s, r) => s.ledgerApi({
         requestMethod: (r.method || "get").toLowerCase(),
         resource: r.resource, body: r.body, query: r.query, path: r.path
@@ -1958,13 +1948,6 @@ const WalletLink = (() => {
         if (list && list.length) return list;
         const one = typeof s.getPrimaryAccount === "function" ? await s.getPrimaryAccount() : null;
         return one ? [one] : [];
-      },
-      submit: async (s, params) => {
-        // Same payload shape; Console's own type is PrepareTransactionBodyDTO minus partyId.
-        const r = await s.prepareExecuteAndWait(params);
-        const tx = r && r.tx;
-        if (tx && tx.status === "failed") throw new Error("wallet reported the transaction failed");
-        return { committed: true, updateId: (tx && tx.updateId) || null, commandId: (tx && tx.commandId) || null };
       },
       // Console proxies the ledger, but needs a token minted via ledgerAuth first.
       ledgerApi: async (s, r, acct) => {
@@ -2147,52 +2130,6 @@ const WalletLink = (() => {
       return [{ partyId: pid, hint: pid.split("::")[0],
                 namespace: pid.split("::")[1] || null,
                 networkId: sess.network || null, primary: true, disabled: false }];
-    },
-    // Prepare here, sign there, execute here.
-    submit: async (s, params) => {
-      const sess = await s.getActiveSession();
-      if (!sess) throw new Error("no PartyLayer session");
-      const prep = await post("/api/ext/prepare", {
-        party: sess.partyId, commands: params.commands,
-        disclosedContracts: params.disclosedContracts || [], tag: "partylayer",
-      });
-      // TWO SHAPES OF WALLET, and the difference decides who submits.
-      //
-      //  a) pure signer -- returns a signature, WE execute on our node. The wallet's
-      //     participant never submits anything, which is the shape that lets a party
-      //     trade on a validator that has not vetted us.
-      //  b) sign-and-submit -- Loop is this: it refuses `signTransaction`
-      //     ("Loop SDK combines signing and submission") and submits through its OWN
-      //     participant. That works for standard CIP-56 commands, which every node
-      //     has the packages for, but it means Umbra's own templates would need
-      //     vetting on that node.
-      //
-      // Note the registry lies about this: listWallets() advertises `signTransaction`
-      // in Loop's capabilities and the call then throws CapabilityNotSupportedError.
-      // Trust the runtime, not the metadata.
-      let signed = null;
-      try {
-        signed = await s.signTransaction({ tx: prep.preparedTransaction });
-      } catch (e) {
-        const capMiss = /CapabilityNotSupported|does not support capability/i.test(
-          (e && (e.name + " " + e.message)) || "");
-        if (!capMiss) throw e;
-        const receipt = await s.submitTransaction({ signedTx: prep.preparedTransaction });
-        return { committed: !!receipt, updateId: (receipt && receipt.updateId) || null,
-                 commandId: (receipt && receipt.commandId) || prep.commandId,
-                 submittedByWallet: true };
-      }
-      // `signedTx` is typed `unknown` -- wallets differ on whether they hand back a bare
-      // signature or a wrapper around one. Accept either rather than assume.
-      const sig = (signed && (signed.signature || signed.signedTx)) || signed;
-      const out = await post("/api/ext/execute", {
-        party: sess.partyId, commandId: prep.commandId,
-        preparedTransaction: prep.preparedTransaction,
-        hashingSchemeVersion: prep.hashingSchemeVersion,
-        signature: typeof sig === "string" ? sig : (sig && sig.signature),
-        signedBy: String(sess.partyId).split("::")[1],
-      });
-      return { committed: !!(out && out.ok), updateId: null, commandId: prep.commandId };
     },
     // ---- RATE GUARD ---------------------------------------------------------
     // A wallet's ledger API is somebody else's hosted service with somebody else's
@@ -2413,7 +2350,49 @@ const WalletLink = (() => {
 
   // The connected wallet's primary account and its key, from wherever this wallet
   // keeps them: getPrimaryAccount, the account list, or (PartyLayer) the session.
+  let consoleSdkLoading = null;
+  async function consoleWalletSdk() {
+    const existing = window.ConsoleWallet || (window.ConsoleWalletSDK && window.ConsoleWalletSDK.consoleWallet);
+    if (existing && typeof existing.getPrimaryAccount === "function") {
+      window.ConsoleWallet = existing;
+      return existing;
+    }
+    if (!consoleSdkLoading) {
+      consoleSdkLoading = new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = "/console-wallet-sdk.js";
+        script.onload = () => {
+          const sdk = window.ConsoleWalletSDK && window.ConsoleWalletSDK.consoleWallet;
+          if (!sdk || typeof sdk.getPrimaryAccount !== "function") {
+            script.remove();
+            reject(new Error("Console Wallet SDK could not be initialized."));
+            return;
+          }
+          window.ConsoleWallet = sdk;
+          resolve(sdk);
+        };
+        script.onerror = () => {
+          script.remove();
+          reject(new Error("Console Wallet SDK could not be loaded. Try connecting again."));
+        };
+        document.head.appendChild(script);
+      }).catch(error => { consoleSdkLoading = null; throw error; });
+    }
+    return consoleSdkLoading;
+  }
   async function primaryOf(base, s) {
+    // PartyLayer's Console session omits the public key. Read the same account
+    // through Console's SDK, also used by cipSigner, and reject account drift.
+    if (base.id === "partylayer" && (await activeWalletId(s)) === "console") {
+      const session = await s.getActiveSession();
+      const cw = await consoleWalletSdk();
+      const account = await cw.getPrimaryAccount();
+      if (!account || !account.partyId || !session || account.partyId !== session.partyId) {
+        throw new Error("Console Wallet account changed. Reconnect Console before continuing.");
+      }
+      if (!account.publicKey) return { partyId: account.partyId, pub: null };
+      return { partyId: account.partyId, pub: rawKeyB64(account.publicKey), funding: "console" };
+    }
     let a = null;
     try { if (typeof s.getPrimaryAccount === "function") a = await s.getPrimaryAccount(); }
     catch (e) {}
@@ -2433,10 +2412,43 @@ const WalletLink = (() => {
     if (!a) return null;
     let pub = null;
     try { pub = a.publicKey ? rawKeyB64(a.publicKey) : null; } catch (e) { pub = null; }
-    return { partyId: a.partyId || null, pub };
+    return { partyId: a.partyId || null, pub, funding: base.id === "console" ? "console" : null };
   }
 
   let cust = null;   // { walletId, party, sign, home } for a wallet on the one path
+  async function consoleFundingContext() {
+    const cw = await consoleWalletSdk();
+    const account = await cw.getPrimaryAccount();
+    const network = await cw.getActiveNetwork();
+    if (!cust || cust.funding !== "console" || !account || account.partyId !== cust.home) {
+      throw new Error("Console account changed. Reconnect Console before depositing.");
+    }
+    if (!network || network.id !== "CANTON_NETWORK_DEV") {
+      throw new Error("Switch Console to Canton Devnet before depositing.");
+    }
+    return { cw, account, network };
+  }
+  async function consoleWalletHoldings() {
+    const { cw, account, network } = await consoleFundingContext();
+    const result = await cw.getCoinsBalance({ party: account.partyId, network: network.id });
+    // Only token totals: including the UTXOs would count the same money twice.
+    if (!result || !Array.isArray(result.tokens)) throw new Error("Console did not return wallet balances.");
+    return { tokens: result.tokens };
+  }
+  async function consoleDeposit(p) {
+    const { cw, account } = await consoleFundingContext();
+    if (!p.recipient || !Number.isFinite(Number(p.amount)) || Number(p.amount) <= 0) {
+      throw new Error("Enter a valid deposit amount and recipient.");
+    }
+    const result = await cw.submitCommands({
+      from: account.partyId, to: p.recipient, token: dispSym(p.id),
+      amount: String(p.amount),
+      expireDate: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      memo: "Deposit to Umbra", waitForFinalization: 5000
+    });
+    if (!result || result.status !== true) throw new Error("Console deposit was cancelled or not submitted.");
+    return result;
+  }
   const custodial = (base) => Object.assign({}, base, {
     serverReads: true,
     init: async (s) => {
@@ -2447,7 +2459,7 @@ const WalletLink = (() => {
           const party = a && a.pub ? await custodyAdopt(a.pub) : null;
           if (party) {
             const sign = cipSigner(s);
-            cust = { walletId: base.id, party, sign, home: a.partyId };
+            cust = { walletId: base.id, party, sign, home: a.partyId, funding: a.funding };
             REAUTH = () => walletSignIn(party, sign);
           }
         }
@@ -2464,7 +2476,7 @@ const WalletLink = (() => {
       }
       const sign = cipSigner(s);
       const party = await custodyFound(a.pub, sign);
-      cust = { walletId: base.id, party, sign, home: a.partyId };
+      cust = { walletId: base.id, party, sign, home: a.partyId, funding: a.funding };
       await custodySignIn(party, sign);
       return true;
     },
@@ -2478,6 +2490,15 @@ const WalletLink = (() => {
            primary: true, disabled: false }]
       : [],
     homeParty: () => (cust && cust.walletId === base.id ? cust.home || null : null),
+    canDeposit: () => !!(cust && cust.walletId === base.id && cust.funding === "console") ||
+      !!(base.canDeposit && base.canDeposit()),
+    walletHoldings: async () => (cust && cust.walletId === base.id && cust.funding === "console")
+      ? consoleWalletHoldings() : (base.walletHoldings ? base.walletHoldings() : null),
+    deposit: async (s, p) => {
+      if (cust && cust.walletId === base.id && cust.funding === "console") return consoleDeposit(p);
+      if (base.deposit) return base.deposit(s, p);
+      throw new Error("Send the deposit from your wallet.");
+    },
     submit: async (s, params) => {
       if (!cust || cust.walletId !== base.id) throw new Error("wallet is not connected");
       return custodySubmit(cust.party, cust.sign, params, base.id);
@@ -2641,20 +2662,19 @@ const WalletLink = (() => {
   // reload keeps the wallet connected. Concurrent callers share one promise --
   // the mount effect and a click can easily race.
   //
-  // Try every provider that is PRESENT, not just the first one. Presence is not
-  // usability: console-wallet-sdk.js defines window.ConsoleWallet on every page load,
-  // extension or no extension, so Console always LOOKS present. Committing to it on
-  // that basis strands a user who has a perfectly good Canton wallet behind an
-  // "extension is not installed" error for a wallet they never asked for.
+  // Honor an explicit choice; failure must not silently select another wallet.
   const ensure = () => {
     if (initing) return initing;
     initing = (async () => {
       let lastErr = null;
-      for (const id of ORDER) {
+      let selected = null;
+      try { selected = localStorage.getItem("umbra.wallet"); } catch (e) {}
+      const candidates = selected ? [selected] : ORDER;
+      for (const id of candidates) {
         const a = adapters[id];
         if (!a || !a.get()) continue;
         try { const s = a.get(); await a.init(s); picked = a; return s; }
-        catch (e) { lastErr = e; }   // present but unusable -- fall through to the next
+        catch (e) { lastErr = e; }
       }
       throw lastErr || new Error("no Canton wallet provider found");
     })().catch(e => { initing = null; throw e; });
@@ -2708,7 +2728,7 @@ const WalletLink = (() => {
       const ws = await c.listWallets().catch(() => []);
       const out = [];
       for (const w of ws) {
-        if (w.walletId === "loop") continue;
+        if (w.walletId === "loop" || w.walletId === "console") continue;
         if (!(w.capabilities || []).includes("signMessage")) continue;
         let det = null;
         try {
@@ -2731,7 +2751,7 @@ const WalletLink = (() => {
     },
 
     // Deposit from the wallet's own party, started from this page. Only wallets that
-    // can build a transfer themselves answer yes (Loop today); the rest keep the
+    // can build a transfer themselves answer yes (Loop and Console); the rest keep the
     // "send it to your Umbra party" instructions.
     canDeposit() {
       const a = pick();
@@ -4331,11 +4351,12 @@ function SplitPlan({ plan, onPick }) {
 
 function WalletPicker({ busy, onPick, onClose }) {
   const [others, setOthers] = useState(null);
+  const [scan, setScan] = useState(0);
   useEffect(() => {
     let live = true;
     WalletLink.otherWallets().then(l => { if (live) setOthers(l || []); }).catch(() => { if (live) setOthers([]); });
     return () => { live = false; };
-  }, []);
+  }, [scan]);
   return React.createElement("div", { className: "ovl", onClick: onClose },
     React.createElement("div", { className: "ovlcard wpk", onClick: e => e.stopPropagation() },
 
@@ -4367,6 +4388,15 @@ function WalletPicker({ busy, onPick, onClose }) {
             "Settled a live trade on this venue")),
         React.createElement("span", { className: "wpk-tag" }, "Verified")),
 
+      React.createElement("button", {
+        className: "wpk-primary", disabled: busy, onClick: () => onPick("partylayer", "console")
+      },
+        React.createElement("span", { className: "wpk-mark", "aria-hidden": true }, "C"),
+        React.createElement("span", { className: "wpk-p-t" },
+          React.createElement("span", { className: "wpk-p-n" }, "Continue with Console"),
+          React.createElement("span", { className: "wpk-p-s" }, "Signing and withdrawals verified · Full trade pending")),
+        React.createElement("span", { className: "wpk-tag" }, "Verified")),
+
       // Other wallets, named. "Use another Canton wallet" used to connect whichever one
       // answered first, and PartyLayer guessed Console on a machine without it.
       React.createElement("div", { className: "wpk-lab" }, "Other Canton wallets · not yet verified with Umbra"),
@@ -4378,10 +4408,14 @@ function WalletPicker({ busy, onPick, onClose }) {
               ? React.createElement("button", {
                   className: "wpk-go", disabled: busy, onClick: () => onPick("partylayer", w.id)
                 }, "Connect")
-              : React.createElement("span", { className: "wpk-miss" }, "Not installed",
+              : React.createElement("span", { className: "wpk-miss" }, "Not detected",
+                  React.createElement("button", { className: "wpk-go", disabled: busy, onClick: () => onPick("partylayer", w.id) }, "Try connect"),
                   w.url ? React.createElement("a", {
                     href: w.url, target: "_blank", rel: "noopener noreferrer", className: "wpk-get"
                   }, "Get it") : null))),
+      React.createElement("button", {
+        className: "wpk-more", disabled: busy, onClick: () => { setOthers(null); setScan(n => n + 1); }
+      }, "Check wallets again"),
       React.createElement("button", {
         className: "wpk-more", disabled: busy, onClick: () => onPick("canton")
       }, "Another CIP-0103 wallet…"),
@@ -5907,6 +5941,7 @@ function walletBalancesOf(res) {
     Object.values(node).forEach(v => walk(v, depth + 1));
   };
   walk(res, 0);
+  if (res && Array.isArray(res.tokens) && res.tokens.length === 0) return {};
   return Object.keys(out).length ? out : null;
 }
 
