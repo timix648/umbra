@@ -125,7 +125,8 @@ Where a claim ran on one machine rather than on DevNet, [docs/HONESTY.md](docs/H
 | The venue never sees a losing quote | Queried as the venue's party: 0 `FirmQuote` contracts, 0 of their locks |
 | The venue cannot sign for anyone | External parties; the venue signer refuses any transaction not acting for the venue (tested against a real user transaction) |
 | Failover | Node A disconnected from the synchronizer on the sandbox; Umbra traded through node B, then returned to A |
-| Contract correctness | **102 Daml Script tests** and **37 backend tests**, run by CI on every push |
+| A trade with the venue's node switched off | DevNet, 6 Oct: `splice-validator-participant-1` stopped 1h 52m; BitSafe's node committed all three legs. Update `1220fa44b5a8…`, settled 13:21:50Z, five balances reconciled exactly, zero locked holdings. A manual relay, not automatic failover |
+| Contract correctness | **102 Daml Script tests** and **56 backend tests**, run by CI on every push |
 | The package is what we say it is | `umbra-v9 0.13.0`, package id `4436f5dd…`, SHA-256 `fba04a1b…10be1e`, reproducible from this repo |
 
 ---
@@ -194,8 +195,10 @@ Decentralization Manager (DecMan)**:
 - **Checked before signing.** The user's page and the venue signer both verify that a hosting
   change is for their own party and names only nodes the venue allows.
 
-Proven end to end on BitSafe's LocalNet sandbox. On DevNet, DecMan v1.12 runs beside our
-validator with Keycloak login, ready for a second operator. Reproduce it with
+Proven end to end on BitSafe's LocalNet sandbox, and on DevNet: BitSafe's participant
+co-hosts Umbra's parties, and on 6 October a full trade settled with our own participant
+stopped for 1h 52m. Onboarding-time co-hosting is written and runs, but is switched off by
+configuration until a second DecMan tenant endpoint is available. Reproduce it with
 [docs/DECENTRALIZATION.md](docs/DECENTRALIZATION.md).
 
 ---
@@ -332,7 +335,7 @@ dpm test             # 102 Daml Script tests: swap, firm quotes, deals, splits, 
                      # settlement guards, auction and partial fills
 
 cd backend && npm install && npm test
-                     # 37 tests: sessions, the keystore, the venue signer's policy,
+                     # 56 tests: sessions, the keystore, the venue signer's policy,
                      # hosting checks, and ledger node failover
 ```
 
