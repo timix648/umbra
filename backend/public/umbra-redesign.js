@@ -562,7 +562,9 @@
     var over = known && num > avail + 1e-12;
     /* BUG FIX: was `dest === homeParty` — see samePartyId above. */
     var toSelf = samePartyId(dest, homeParty);
-    var valid = num > 0 && !over && (dep || normParty(dest) !== "");
+    var sameAccount = samePartyId(homeParty, umbraParty);
+    var sameDestination = samePartyId(dest, umbraParty);
+    var valid = num > 0 && !over && (dep ? !sameAccount : normParty(dest) !== "" && !sameDestination);
 
     function setPct(p) {
       setAmt(avail > 0 ? (avail * p / 100).toFixed(dp).replace(/0+$/, "").replace(/\.$/, "") : "");
@@ -632,7 +634,12 @@
     ];
 
     /* deposit ------------------------------------------------------- */
-    var depositSect = canDeposit
+    var depositSect = sameAccount
+      ? h("div", { className: "u-sect" },
+          h("p", { className: "u-note", style: { margin: 0 } },
+            "Your connected wallet and Umbra use the same party. No deposit is needed between them. If wallet balances differ, check its network and selected account."),
+          umbraBox)
+      : canDeposit
       ? h("div", { className: "u-sect" },
           amountForm,
           h("div", { className: "u-dest", "data-home": "1" },
@@ -688,7 +695,11 @@
               type: "button", className: "u-btn u-btn-xs",
               onClick: function () { setEditDest(true); }
             }, "Change")),
-      !toSelf && normParty(dest) !== ""
+      sameDestination
+        ? h("p", { className: "u-note u-note-w", style: { margin: 0 } },
+            "This is your Umbra trading party. Choose a different receiving party to withdraw.")
+        : null,
+      !toSelf && !sameDestination && normParty(dest) !== ""
         ? h("p", { className: "u-note u-note-w", style: { margin: 0 } },
             "Sending to another party. This is final.")
         : null,

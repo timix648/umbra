@@ -2345,7 +2345,7 @@ const WalletLink = (() => {
       signature,
       signedBy: party.split("::")[1],
     });
-    return { committed: !!(out && out.ok), updateId: null, commandId: prep.commandId };
+    return { committed: !!(out && out.committed === true), updateId: out && out.updateId || null, commandId: prep.commandId };
   }
 
   // The connected wallet's primary account and its key, from wherever this wallet
@@ -2437,6 +2437,9 @@ const WalletLink = (() => {
   }
   async function consoleDeposit(p) {
     const { cw, account } = await consoleFundingContext();
+    if (p.recipient && String(p.recipient).trim() === String(account.partyId).trim()) {
+      throw new Error("Your wallet and Umbra use the same party. No deposit is needed between them.");
+    }
     if (!p.recipient || !Number.isFinite(Number(p.amount)) || Number(p.amount) <= 0) {
       throw new Error("Enter a valid deposit amount and recipient.");
     }
@@ -4391,7 +4394,7 @@ function WalletPicker({ busy, onPick, onClose }) {
       React.createElement("button", {
         className: "wpk-primary", disabled: busy, onClick: () => onPick("partylayer", "console")
       },
-        React.createElement("span", { className: "wpk-mark", "aria-hidden": true }, "C"),
+        React.createElement("span", { className: "wpk-mark", "aria-hidden": true }, React.createElement("img", { src: "/console-wallet.ico", alt: "", width: 24, height: 24 })),
         React.createElement("span", { className: "wpk-p-t" },
           React.createElement("span", { className: "wpk-p-n" }, "Continue with Console"),
           React.createElement("span", { className: "wpk-p-s" }, "Signing and withdrawals verified · Full trade pending")),
@@ -5945,6 +5948,33 @@ function walletBalancesOf(res) {
   return Object.keys(out).length ? out : null;
 }
 
+function fundingSameParty(a, b) {
+  return !!a && !!b && String(a).trim() === String(b).trim();
+}
+function fundingUnits(value) {
+  const s = typeof value === "number" && Number.isFinite(value) ? value.toFixed(10) : String(value).trim();
+  const m = /^(\d+)(?:\.(\d{1,10}))?$/.exec(s);
+  if (!m) throw new Error("Enter a valid amount with at most 10 decimal places.");
+  return BigInt(m[1]) * 10000000000n + BigInt((m[2] || "").padEnd(10, "0"));
+}
+function fundingInputs(raw, admin, id, amount) {
+  const want = fundingUnits(amount);
+  if (want <= 0n) throw new Error("Enter an amount greater than zero.");
+  const seen = new Set();
+  const free = raw.filter(h => h.admin === admin && h.id === id && !h.lock && h.contractId)
+    .filter(h => { if (seen.has(h.contractId)) return false; seen.add(h.contractId); return true; })
+    .map(h => ({ holding: h, units: fundingUnits(h.amount) }))
+    .filter(h => h.units > 0n);
+  const covering = free.filter(h => h.units >= want).sort((a, b) => a.units < b.units ? -1 : a.units > b.units ? 1 : 0);
+  if (covering.length) return [covering[0].holding];
+  const selected = []; let total = 0n;
+  for (const h of free.sort((a, b) => a.units > b.units ? -1 : a.units < b.units ? 1 : 0)) {
+    selected.push(h.holding); total += h.units;
+    if (total >= want) return selected;
+  }
+  throw new Error("Not enough unlocked funds for this asset. Refresh your balances and try a smaller amount.");
+}
+
 function Funding({ party, say, onChanged }) {
   const [pending, setPending] = useState([]);
   const [raw, setRaw] = useState([]);
@@ -5995,8 +6025,9 @@ function Funding({ party, say, onChanged }) {
     try {
       const b = await post("/api/real/pending/" + t.id + "/accept?build=1",
                            { role: party, build: true });
-      await WalletLink.submit({ commands: b.commands, disclosedContracts: b.disclosedContracts });
-      say("Received " + fmtAmtStr(t.amount) + " " + t.asset + ".");
+      const result = await WalletLink.submit({ commands: b.commands, disclosedContracts: b.disclosedContracts });
+      say(result.committed ? "Received " + fmtAmtStr(t.amount) + " " + t.asset + "."
+        : "Acceptance submitted; ledger confirmation is still pending. Check balances before retrying.");
       await load(); onChanged && onChanged();
     } catch (e) { say(e.message || "could not accept that transfer", true); }
     setBusy("");
@@ -6006,26 +6037,22 @@ function Funding({ party, say, onChanged }) {
     if (busy) return;
     const asset = w.asset, amount = w.amount, dest = w.dest;
     const id = ledgerSym(asset);
-    // A transfer spends its inputs whole, so one holding has to cover the amount on
-    // its own. Balances shown are totals, matching the Holdings panel -- so when the
-    // total is enough but no single lot is, name the number that actually binds
-    // rather than failing deep inside the registry with nothing a user can act on.
-    const free = raw.filter(x => x.id === id && !x.lock);
-    const pick = free.filter(x => Number(x.amount) >= Number(amount))
-                     .sort((a, b) => Number(a.amount) - Number(b.amount))[0];
-    if (!pick) {
-      const biggest = free.reduce((m, x) => Math.max(m, Number(x.amount)), 0);
-      return say("Your " + asset + " sits in separate lots and one transfer cannot span " +
-                 "them. The most you can send at once is " + fmtAmtStr(biggest) + ".", true);
-    }
+    if (fundingSameParty(party, dest)) return say("This is your Umbra trading party, not a withdrawal destination. Use the receiving party ID from your wallet.", true);
+    const inst = regAssets.find(a => a.symbol === id);
+    if (!inst) return say("The asset registry is not ready. Refresh and try again.", true);
+    let picks;
+    try { picks = fundingInputs(raw, inst.admin, id, amount); }
+    catch (e) { return say(e.message, true); }
     setBusy("w");
     try {
       const b = await post("/api/real/send", {
-        sender: party, senderRole: party, receiver: dest, admin: pick.admin,
-        id: id, amount: String(amount), holdingCids: [pick.contractId], build: true });
-      await WalletLink.submit({ commands: b.commands, disclosedContracts: b.disclosedContracts,
+        sender: party, senderRole: party, receiver: dest, admin: inst.admin,
+        id: id, amount: String(amount), holdingCids: picks.map(h => h.contractId), build: true });
+      const result = await WalletLink.submit({ commands: b.commands, disclosedContracts: b.disclosedContracts,
         expect: { "transfer.amount": String(amount), "transfer.receiver": dest } });
-      say("Sent. Accept it in your wallet to finish the transfer.");
+      say(result.committed
+        ? "Transfer confirmed on the ledger. Check the receiving account for receipt or acceptance."
+        : "Submitted; ledger confirmation is still pending. Check balances and transfers before retrying.");
       await load(); onChanged && onChanged();
     } catch (e) { say(e.message || "could not send", true); }
     setBusy("");
@@ -6042,7 +6069,7 @@ function Funding({ party, say, onChanged }) {
     try {
       say("Approve the transfer in your wallet…");
       await WalletLink.deposit({ recipient: party, amount: w.amount, admin: inst.admin, id });
-      say("Sent from your wallet. It shows under Incoming in a few seconds. Press Accept to finish.");
+      say("Wallet submitted the deposit. Check Incoming and balances for confirmation.");
       setTimeout(load, 3000); setTimeout(load, 8000); setTimeout(loadWallet, 5000);
     } catch (e) { say((e && e.message) || "the deposit did not go through", true); }
     setBusy("");
@@ -6076,8 +6103,8 @@ function Funding({ party, say, onChanged }) {
             "umbra-redesign.js did not load. Your party is " + party))));
   }
 
-  // Totals, so this agrees with the Holdings panel beside it. The single-lot
-  // constraint is enforced at send time, where it can explain itself.
+  // Totals match the Holdings panel. Transfers may combine unlocked holdings
+  // from the same instrument and issuer.
   const balances = {};
   raw.filter(x => !x.lock).forEach(x => {
     const s = dispSym(x.id);
