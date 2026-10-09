@@ -13,9 +13,9 @@ real token registries.
 | | Evidence |
 |---|---|
 | Atomic settlement of real CBTC and Canton Coin | Settlement receipts on-ledger; one transaction moves the payment, the offer and the venue fee, or none of them |
-| One signature per side per trade (firm quotes, umbra-v9 0.12) | The dealer's quote locks its payment and fee in the same signature; the requester's award locks its side in one; the venue settles |
+| One signature per side per trade (firm quotes, umbra-v9 0.13.0) | The dealer's quote locks its payment and fee in the same signature; the requester's award locks its side in one; the venue settles |
 | The venue cannot see losing quotes | Queried on the ledger as the venue's party: 0 firm quotes, 0 of their locks. The fee receiver is not shown the fee lock either |
-| Non-custodial | Every lock sits in its owner's wallet at the registry and can only execute as the signed deal or go back to its owner (100 Daml tests) |
+| Non-custodial | Every lock sits in its owner's wallet at the registry and can only execute as the signed deal or go back to its owner (102 Daml tests) |
 | Transactions checked before a wallet signs | The page recomputes each hash with Canton's own code and checks the acting party, the actions and the user's numbers. Tested on real quote, request, transfer and cancel transactions and in a browser |
 | The venue's keys isolated | A separate signer process, as its own OS user, holds the keys and passphrase and signs only settlement, cancel, resize and listing actions. The app runs unprivileged and holds neither |
 | The venue signer refuses by default | Enforce mode: it will not sign a bare hash, recomputes the prepared transaction's hash itself, requires the transaction to act for its own role, and refuses any root choice outside that role's allowlist. The demo dealer roles hold keys but have no policy entry, so they are refused everything |
@@ -46,6 +46,7 @@ claim it does.
 | Node A cut off the synchronizer: Umbra switches to node B, a user trade and a venue signature both commit, Umbra switches back | `multihost-demo.js down/up` with `umbra-flow.js trade`, and the admin route |
 | A forged signature and a topology naming an unlisted node are refused | `umbra-flow.js backup`; `verifyTopology` |
 | Governance: propose, confirm, execute across three DecMan instances | The DecMan sandbox, three members on one box (see [GOVERNANCE.md](GOVERNANCE.md)) |
+| The whole hosting sequence, recorded end to end | `multihost-demo.js all` on 8 Oct: onboard to two hosts, add a host to a live party, node A off the synchronizer and back. [Recording](https://youtu.be/NH2iw9qtmfM); reproduce with [DECENTRALIZATION.md](DECENTRALIZATION.md) Part 1 |
 
 ## Simulated or test-only
 

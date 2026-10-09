@@ -15,7 +15,7 @@ feature was worth.
 
 ```bash
 daml build && daml test          # 102 scripts; a green run is beat 0
-cd backend && node --test test/*.test.js   # 56 tests
+cd backend && node --test test/*.test.js   # 58 tests
 ```
 
 Running stack, all on the one host, reached by SSH port-forward:
