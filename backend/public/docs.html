@@ -273,6 +273,7 @@ const PAGES = [
 </table>
 <h2>How it is enforced</h2>
 <p>On Canton, a contract is only sent to its stakeholders. A rival dealer is never a stakeholder on your quote, so the ledger never sends it to them. It is not a matter of the screen hiding it.</p>
+<div class="note warn"><b class="t">What is not private</b><p>A dealer invited to a request can see <b>who else was invited</b>, because the invitation list is part of the request they are a party to. Prices stay private; the guest list does not.</p></div>
 <div class="note warn"><b class="t">The node operator</b><p>Your trading party is hosted on a validator node, today Umbra's. Whoever runs that node can read the contracts of the parties it hosts. Contract-level privacy between dealers holds; node-level privacy needs parties hosted on nodes their owners trust. See <a href="/docs/decentralization">Decentralization</a>.</p></div>`},
 
 { slug: "fees", group: "How it works", title: "Fees",
@@ -308,7 +309,7 @@ const PAGES = [
   lead: "A party lives on the nodes that host it. Umbra hosts parties on more than one node so that one node going down does not stop the venue.",
   body: `
 <h2>Why it matters</h2>
-<p>If every party were hosted on one node, that node going down would stop trading. Umbra uses <b>BitSafe's Decentralization Manager</b> to host each party on several independent nodes and fails over between them.</p>
+<p>If every party were hosted on one node, that node going down would stop trading. Umbra uses <b>BitSafe's Decentralization Manager</b> to host a party on two participants at once, and fails over between them.</p>
 <h2>What happens</h2>
 <ul>
   <li><b>New wallets</b> are hosted on every configured node from the start, with one signature.</li>
@@ -316,7 +317,8 @@ const PAGES = [
   <li><b>Failover.</b> The server checks each node's connection to the network and sends requests to a healthy one.</li>
 </ul>
 <h2>Status</h2>
-<p>Multi-node hosting and failover are proven on BitSafe's LocalNet sandbox. On DevNet, Umbra runs on its own node while a second operator's node is being connected. Two hosts give failover; requiring two nodes to confirm every transaction needs three.</p>
+<p>Proven on DevNet, not only in a sandbox. On 6 October 2026 Umbra's participant was stopped for 1 hour 52 minutes and a full three-leg trade settled anyway, executed by BitSafe's node for parties whose only other host was offline. Every balance reconciled exactly afterwards, with no locked holdings left behind.</p>
+<p>Two caveats. That run was a <b>manual relay</b> with one counterparty, not automatic failover: each step was prepared with BitSafe and signed in our own wallets. And two hosts at a threshold of one give <b>failover, not co-validation</b> - requiring both nodes to confirm every transaction needs a third host. Co-hosting at onboarding is built and runs, but stays off until a second DecMan tenant endpoint is configured, so today each party is co-hosted by a manual signature.</p>
 `},
 
 { slug: "market-reference", group: "Reference", title: "Market reference",
@@ -373,7 +375,8 @@ const PAGES = [
 <h2>Not yet</h2>
 <ul>
   <li><b>Mainnet.</b> Umbra runs on DevNet only.</li>
-  <li><b>A second node on DevNet.</b> Multi-node hosting is proven on a sandbox; the second DevNet operator is being connected.</li>
+  <li><b>Automatic co-hosting at onboarding.</b> A second DevNet operator is connected and proven - a trade settled through BitSafe's node on 6 October with ours stopped. What is not yet on is co-hosting every new party automatically: that needs a second DecMan tenant endpoint, so each party is co-hosted by a manual signature today.</li>
+  <li><b>Co-validation.</b> Two hosts give failover. Requiring both nodes to confirm every transaction needs a third host.</li>
   <li><b>cETH liquidity.</b> cETH is listed, but test cETH is only available from onRails on request.</li>
   <li><b>External audit.</b> Not done yet.</li>
 </ul>
