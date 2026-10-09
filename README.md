@@ -42,8 +42,8 @@ BitSafe Decentralization Manager tracks
 
 | | |
 |---|---|
-| **Current release** | Runs privately on our own Canton DevNet validator; access on request |
-| **Previous release** | https://um-bra.app/ (branch [`v2`](https://github.com/timix648/umbra/tree/v2)) |
+| **Current release** | Live on Canton DevNet at https://um-bra.app/ — test assets and unaudited contracts; do not connect a wallet holding anything you care about |
+| **Previous release** | Branch `v2`, no longer deployed — https://um-bra.app/ now serves the current release |
 | **User docs** | Served by the app at `/docs`: getting started, trading, settlement, privacy, fees, security |
 | **Contact** | https://x.com/UmbraOnCanton |
 | **Demo (earlier release)** | https://youtu.be/bclZUlSeiE0?si=w7SfAyIYbb5juLzF |
