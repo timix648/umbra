@@ -438,7 +438,7 @@ settled without a flagged request.
 
 ## Roadmap
 
-- A second operator's node hosting Umbra's parties on DevNet, then a third for co-validation
+- A third Devnet node for co-validation
   and governance with independent members.
 - A reference dealer bot and a dealer API, so quotes arrive at any hour.
 - Readable approvals inside wallets, not only in Umbra's page.
