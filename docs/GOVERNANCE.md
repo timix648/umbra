@@ -295,7 +295,7 @@ them.
 
 ### Proofs
 
-`daml/UmbraTrustBoundaryTest.daml`, 7 scripts:
+`daml/UmbraTrustBoundaryTest.daml`, 7 scripts — a shared fixture and the six proofs below:
 
 | Script | Proves |
 |---|---|
