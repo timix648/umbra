@@ -46,7 +46,9 @@ BitSafe Decentralization Manager tracks
 | **Previous release** | Branch `v2`, no longer deployed — https://um-bra.app/ now serves the current release |
 | **User docs** | Served by the app at `/docs`: getting started, trading, settlement, privacy, fees, security |
 | **Contact** | https://x.com/UmbraOnCanton |
-| **Demo (earlier release)** | https://youtu.be/bclZUlSeiE0?si=w7SfAyIYbb5juLzF |
+| **Demo — the venue end to end** | https://youtu.be/HsiuJq6uWdA — DevNet: blind quotes, atomic settlement, a block split across two dealers, withdrawal, and a trade that settled with our node switched off (4:42) |
+| **Demo — co-hosting and node failover** | https://youtu.be/NH2iw9qtmfM — LocalNet: one party on two participants through BitSafe's Decentralization Manager, then one node taken off the synchronizer (3:00) |
+| **Demo — earlier release** | https://youtu.be/bclZUlSeiE0?si=w7SfAyIYbb5juLzF |
 | **Deck** | [Presentation](https://docs.google.com/presentation/d/1WoZ2BQWhdrjZlP-PPh5HQ4Jc2g2BCceG/edit?usp=sharing&ouid=111114609282721158539&rtpof=true&sd=true) |
 | **Multi-node guide** | [docs/DECENTRALIZATION.md](docs/DECENTRALIZATION.md) |
 | **Governed actions** | [docs/GOVERNANCE.md](docs/GOVERNANCE.md) |
@@ -207,7 +209,7 @@ configuration until a second DecMan tenant endpoint is available. Reproduce it w
 
 | Track | Delivered |
 |---|---|
-| **Open source** | This repository: the Daml package, the venue server, the UI, the multi-node scripts and a step-by-step guide that reproduces the multi-node flow on the LocalNet sandbox ([docs/DECENTRALIZATION.md](docs/DECENTRALIZATION.md) Part 1), plus a recorded run |
+| **Open source** | This repository: the Daml package, the venue server, the UI, the multi-node scripts and a step-by-step guide that reproduces the multi-node flow on the LocalNet sandbox ([docs/DECENTRALIZATION.md](docs/DECENTRALIZATION.md) Part 1), plus a recorded run ([video](https://youtu.be/NH2iw9qtmfM)) |
 | **Node** | DecMan v1.12 on our DevNet validator; Umbra's server drives each node's DecMan through its tenant API, with the wallet-signed add-hosts path for external parties. Joining a second operator is configuration: `DECMAN_HOSTS`, `LEDGER_NODES`, `UMBRA_SIGNER_HOSTS` ([Part 2](docs/DECENTRALIZATION.md)) |
 | **Governance** | Privileged venue actions as BitSafe `GovernableAction` proposals decided by a threshold of operators ([docs/GOVERNANCE.md](docs/GOVERNANCE.md)) |
 
